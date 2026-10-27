@@ -1,0 +1,24 @@
+{
+  "freed_bytes": 1153433600,
+  "handled": [
+    "Windows 音频设备图形隔离"
+  ],
+  "failed": [
+    "Example"
+  ],
+  "deferred": 1,
+  "advisories": [
+    {
+      "kind": "heavy_app",
+      "name": "微信",
+      "private_bytes": 2147483648
+    },
+    {
+      "kind": "restart_recommended"
+    },
+    {
+      "kind": "manual_pending",
+      "count": 2
+    }
+  ]
+}

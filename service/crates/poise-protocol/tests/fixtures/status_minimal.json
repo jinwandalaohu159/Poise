@@ -1,0 +1,43 @@
+{
+  "health": {
+    "code": "smooth",
+    "level": "good",
+    "game": null,
+    "cleanable": 0,
+    "freeable_bytes": 0
+  },
+  "mode": "quiet",
+  "effective_mode": "full",
+  "auto_full_for_games": true,
+  "auto_clean": false,
+  "metrics": {
+    "cpu_pct": 12.5,
+    "cpu_temp": null,
+    "gpu_temp": null,
+    "gpu_pct": null,
+    "mem_used_pct": 63.0,
+    "mem_used_bytes": 21474836480,
+    "mem_total_bytes": 34359738368,
+    "cpu_mhz": 2300,
+    "on_battery": true
+  },
+  "hardware": {
+    "profile": "Generic",
+    "thermal_control": false,
+    "fans": [],
+    "disks": [
+      {
+        "name": "Disk",
+        "temp_c": null,
+        "health": "unknown",
+        "wear_pct": null
+      }
+    ],
+    "system_drive": null,
+    "memory": null
+  },
+  "adjusted_processes": 7,
+  "deferred_cleanup": 1,
+  "dry_run": true,
+  "last_cleanup": null
+}

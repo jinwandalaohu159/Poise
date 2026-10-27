@@ -1,0 +1,83 @@
+<Page
+    x:Class="Poise.App.UI.Pages.AppsPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:c="using:Poise.App.UI.Controls"
+    xmlns:l="using:Poise.App.UI.Localization"
+    xmlns:vm="using:Poise.App.UI.ViewModels"
+    Background="Transparent">
+
+    <Page.Resources>
+        <DataTemplate x:Key="AppRowTemplate" x:DataType="vm:AppItem">
+            <Grid Style="{StaticResource SettingsRowStyle}" Margin="0,0,0,4">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <Image Source="{x:Bind Icon, Mode=OneWay}" Width="24" Height="24" VerticalAlignment="Center" />
+                <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                    <TextBlock Text="{x:Bind Name}" TextTrimming="CharacterEllipsis" />
+                    <TextBlock Text="{x:Bind Path}" Style="{StaticResource CaptionSecondaryTextStyle}"
+                               TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" />
+                </StackPanel>
+                <!-- 选项顺序与 AppPreference 一致；写在 XAML 里，保证先有选项再绑定选中项。 -->
+                <ComboBox Grid.Column="2" MinWidth="148" VerticalAlignment="Center"
+                          SelectedIndex="{x:Bind PreferenceIndex, Mode=TwoWay}">
+                    <ComboBoxItem Content="{l:L Key=pref.auto}" />
+                    <ComboBoxItem Content="{l:L Key=pref.always_fast}" />
+                    <ComboBoxItem Content="{l:L Key=pref.background}" />
+                    <ComboBoxItem Content="{l:L Key=pref.game}" />
+                </ComboBox>
+            </Grid>
+        </DataTemplate>
+    </Page.Resources>
+
+    <Grid MaxWidth="960" Padding="{StaticResource PagePadding}">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <c:PageHeader x:Name="Header" />
+        <TextBox Grid.Row="1" Margin="0,0,0,12"
+                 PlaceholderText="{l:L Key=apps.search}"
+                 Text="{x:Bind Vm.Query, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+        <InfoBar x:Name="ErrorBar" Grid.Row="2" Severity="Error" IsOpen="False" Margin="0,0,0,12" />
+
+        <ScrollViewer Grid.Row="3" Margin="0,0,-24,0" Padding="0,0,24,0">
+            <StackPanel Spacing="{StaticResource SectionGap}">
+                <ProgressRing x:Name="LoadingRing" IsActive="True" HorizontalAlignment="Left" Width="24" Height="24" />
+
+                <StackPanel x:Name="RunningSection" Visibility="Collapsed">
+                    <TextBlock Text="{l:L Key=apps.running}" Style="{StaticResource SectionTextStyle}" />
+                    <ItemsControl ItemsSource="{x:Bind Vm.Running}" ItemTemplate="{StaticResource AppRowTemplate}">
+                        <ItemsControl.ItemContainerTransitions>
+                            <TransitionCollection>
+                                <EntranceThemeTransition IsStaggeringEnabled="True" FromVerticalOffset="16" />
+                            </TransitionCollection>
+                        </ItemsControl.ItemContainerTransitions>
+                    </ItemsControl>
+                </StackPanel>
+
+                <StackPanel x:Name="ConfiguredSection" Visibility="Collapsed">
+                    <TextBlock Text="{l:L Key=apps.configured}" Style="{StaticResource SectionTextStyle}" />
+                    <ItemsControl ItemsSource="{x:Bind Vm.Configured}" ItemTemplate="{StaticResource AppRowTemplate}">
+                        <ItemsControl.ItemContainerTransitions>
+                            <TransitionCollection>
+                                <EntranceThemeTransition IsStaggeringEnabled="True" FromVerticalOffset="16" />
+                            </TransitionCollection>
+                        </ItemsControl.ItemContainerTransitions>
+                    </ItemsControl>
+                </StackPanel>
+
+                <TextBlock x:Name="EmptyText" Text="{l:L Key=apps.empty}"
+                           Style="{StaticResource BodyTextStyle}"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                           Visibility="Collapsed" />
+            </StackPanel>
+        </ScrollViewer>
+    </Grid>
+</Page>

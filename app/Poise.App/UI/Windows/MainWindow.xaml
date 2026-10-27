@@ -1,0 +1,31 @@
+<Window
+    x:Class="Poise.App.UI.Windows.MainWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:c="using:Poise.App.UI.Controls">
+
+    <Grid x:Name="Root">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="48" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <!-- 与内容融为一体的标题栏 -->
+        <Grid x:Name="TitleBar" Padding="16,0,0,0">
+            <StackPanel Orientation="Horizontal" Spacing="12" VerticalAlignment="Center">
+                <c:LogoMark />
+                <TextBlock Text="Poise" VerticalAlignment="Center" Style="{StaticResource CaptionSecondaryTextStyle}" FontSize="13" />
+            </StackPanel>
+        </Grid>
+        <Button x:Name="SettingsButton"
+                Width="40" Height="32" Padding="0"
+                HorizontalAlignment="Right" VerticalAlignment="Center"
+                Margin="0,0,148,0"
+                Background="Transparent" BorderThickness="0"
+                Click="OnSettingsClick">
+            <FontIcon FontFamily="{StaticResource IconFont}" FontSize="16" Glyph="&#xE713;" />
+        </Button>
+
+        <Frame x:Name="ContentFrame" Grid.Row="1" />
+    </Grid>
+</Window>

@@ -1,0 +1,108 @@
+<Page
+    x:Class="Poise.App.UI.Pages.OptimizePage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:c="using:Poise.App.UI.Controls"
+    xmlns:l="using:Poise.App.UI.Localization"
+    xmlns:p="using:Poise.App.UI.Pages"
+    xmlns:vm="using:Poise.App.UI.ViewModels"
+    Background="Transparent">
+
+    <Page.Resources>
+        <!-- 固定项：状态 + 优化/还原按钮 -->
+        <DataTemplate x:Key="StaticRowTemplate" x:DataType="vm:OptimizationRow">
+            <Grid Style="{StaticResource SettingsRowStyle}" Margin="0,0,0,4" Padding="16,12">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <StackPanel VerticalAlignment="Center" Spacing="2">
+                    <TextBlock Text="{x:Bind Title}" TextWrapping="Wrap" />
+                    <TextBlock Text="{x:Bind Description}" Style="{StaticResource CaptionSecondaryTextStyle}" />
+                    <TextBlock Text="{x:Bind EffectHint}" Style="{StaticResource CaptionSecondaryTextStyle}"
+                               Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"
+                               Visibility="{x:Bind HasEffectHint}" />
+                </StackPanel>
+                <TextBlock Grid.Column="1" Text="{x:Bind StateText, Mode=OneWay}" VerticalAlignment="Center"
+                           Style="{StaticResource CaptionSecondaryTextStyle}" />
+                <Button Grid.Column="2" MinWidth="72" VerticalAlignment="Center"
+                        Content="{x:Bind ActionText, Mode=OneWay}"
+                        Visibility="{x:Bind HasAction, Mode=OneWay}"
+                        IsEnabled="{x:Bind CanChange, Mode=OneWay}"
+                        Click="{x:Bind Invoke}" />
+            </Grid>
+        </DataTemplate>
+
+        <!-- 逐个开关的项：开 = 保持原样，关 = 禁用 -->
+        <DataTemplate x:Key="ToggleRowTemplate" x:DataType="vm:OptimizationRow">
+            <Grid Style="{StaticResource SettingsRowStyle}" Margin="0,0,0,4" Padding="16,8">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <StackPanel VerticalAlignment="Center" Spacing="2">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <TextBlock Text="{x:Bind Title}" TextTrimming="CharacterEllipsis" />
+                        <Border Padding="6,1" CornerRadius="4" VerticalAlignment="Center"
+                                Background="{ThemeResource SystemFillColorCautionBackgroundBrush}"
+                                Visibility="{x:Bind SlowHint}">
+                            <TextBlock Text="{l:L Key=optimize.slow}" FontSize="11"
+                                       Foreground="{ThemeResource SystemFillColorCautionBrush}" />
+                        </Border>
+                    </StackPanel>
+                    <TextBlock Text="{x:Bind Description}" Style="{StaticResource CaptionSecondaryTextStyle}"
+                               TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" />
+                </StackPanel>
+                <ToggleSwitch Grid.Column="1" MinWidth="0"
+                              OnContent="{l:L Key=common.on}" OffContent="{l:L Key=common.off}"
+                              IsOn="{x:Bind IsOn, Mode=TwoWay}"
+                              IsEnabled="{x:Bind CanChange, Mode=OneWay}" />
+            </Grid>
+        </DataTemplate>
+
+        <p:OptimizationRowTemplateSelector x:Key="RowSelector"
+                                           Static="{StaticResource StaticRowTemplate}"
+                                           Toggle="{StaticResource ToggleRowTemplate}" />
+    </Page.Resources>
+
+    <Grid MaxWidth="960" Padding="{StaticResource PagePadding}">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <Grid>
+            <c:PageHeader x:Name="Header" />
+            <Button x:Name="RevertAllButton" HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,2,0,0"
+                    Content="{l:L Key=common.revert_all}" Click="OnRevertAll" />
+        </Grid>
+        <InfoBar x:Name="ErrorBar" Grid.Row="1" Severity="Error" IsOpen="False" Margin="0,0,0,12" />
+
+        <ScrollViewer Grid.Row="2" Margin="0,0,-24,0" Padding="0,0,24,0">
+            <StackPanel>
+                <ProgressRing IsActive="{x:Bind Vm.IsLoading, Mode=OneWay}" Visibility="{x:Bind Vm.IsLoading, Mode=OneWay}"
+                              HorizontalAlignment="Left" Width="24" Height="24" />
+                <ItemsControl ItemsSource="{x:Bind Vm.Sections}">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="vm:OptimizationSection">
+                            <StackPanel Margin="0,0,0,24">
+                                <TextBlock Text="{x:Bind Title}" Style="{StaticResource SectionTextStyle}" />
+                                <TextBlock Text="{x:Bind Hint}" Style="{StaticResource CaptionSecondaryTextStyle}"
+                                           Margin="2,-4,0,8"
+                                           Visibility="{x:Bind p:OptimizePage.VisibleIf(Hint)}" />
+                                <ItemsControl ItemsSource="{x:Bind Rows}" ItemTemplateSelector="{StaticResource RowSelector}" />
+                            </StackPanel>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                    <ItemsControl.ItemContainerTransitions>
+                        <TransitionCollection>
+                            <EntranceThemeTransition IsStaggeringEnabled="True" FromVerticalOffset="16" />
+                        </TransitionCollection>
+                    </ItemsControl.ItemContainerTransitions>
+                </ItemsControl>
+            </StackPanel>
+        </ScrollViewer>
+    </Grid>
+</Page>

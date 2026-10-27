@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Poise.Core 的单元测试：文案表、格式、状态换算，以及与服务（Rust）之间的数据契约。 -->
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Poise.Core\Poise.Core.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- 服务端测试生成的契约样本（service/crates/poise-protocol/tests/fixtures）。 -->
+    <None Include="..\..\service\crates\poise-protocol\tests\fixtures\*.json" Link="Fixtures\%(Filename)%(Extension)"
+          CopyToOutputDirectory="PreserveNewest" />
+    <!-- 文案表原文件，用于检查两种语言一致。 -->
+    <None Include="..\Poise.Core\Localization\Strings\*.json" Link="Strings\%(Filename)%(Extension)"
+          CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+</Project>

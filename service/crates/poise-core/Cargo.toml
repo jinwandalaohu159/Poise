@@ -1,0 +1,11 @@
+[package]
+name = "poise-core"
+description = "Poise 的纯业务逻辑：不依赖任何系统 API，全部可单元测试"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+serde.workspace = true
+thiserror.workspace = true

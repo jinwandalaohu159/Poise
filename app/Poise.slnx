@@ -1,0 +1,5 @@
+<Solution>
+  <Project Path="Poise.App/Poise.App.csproj" />
+  <Project Path="Poise.Core.Tests/Poise.Core.Tests.csproj" />
+  <Project Path="Poise.Core/Poise.Core.csproj" />
+</Solution>

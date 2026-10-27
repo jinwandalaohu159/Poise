@@ -1,0 +1,97 @@
+<Page
+    x:Class="Poise.App.UI.Pages.SettingsPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:c="using:Poise.App.UI.Controls"
+    xmlns:l="using:Poise.App.UI.Localization"
+    xmlns:p="using:Poise.Core.Presentation"
+    Background="Transparent">
+
+    <ScrollViewer>
+        <StackPanel MaxWidth="960" Padding="{StaticResource PagePadding}" Spacing="{StaticResource CardGap}">
+            <c:PageHeader x:Name="Header" />
+
+            <Grid Style="{StaticResource SettingsRowStyle}">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <FontIcon FontFamily="{StaticResource IconFont}" Glyph="&#xF2B7;" FontSize="20" />
+                <TextBlock Grid.Column="1" Text="{l:L Key=settings.language}" VerticalAlignment="Center" />
+                <ComboBox Grid.Column="2" MinWidth="148" VerticalAlignment="Center"
+                          ItemsSource="{x:Bind Vm.LanguageOptions}"
+                          SelectedIndex="{x:Bind Vm.LanguageIndex, Mode=TwoWay}" />
+            </Grid>
+
+            <Grid Style="{StaticResource SettingsRowStyle}">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <FontIcon FontFamily="{StaticResource IconFont}" Glyph="&#xE790;" FontSize="20" />
+                <TextBlock Grid.Column="1" Text="{l:L Key=settings.theme}" VerticalAlignment="Center" />
+                <ComboBox Grid.Column="2" MinWidth="148" VerticalAlignment="Center"
+                          ItemsSource="{x:Bind Vm.ThemeOptions}"
+                          SelectedIndex="{x:Bind Vm.ThemeIndex, Mode=TwoWay}" />
+            </Grid>
+
+            <Grid Style="{StaticResource SettingsRowStyle}">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <FontIcon FontFamily="{StaticResource IconFont}" Glyph="&#xE7E8;" FontSize="20" />
+                <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                    <TextBlock Text="{l:L Key=settings.autostart}" />
+                    <TextBlock Text="{l:L Key=settings.autostart.desc}" Style="{StaticResource CaptionSecondaryTextStyle}" />
+                </StackPanel>
+                <ToggleSwitch Grid.Column="2" MinWidth="0"
+                              OnContent="{l:L Key=common.on}" OffContent="{l:L Key=common.off}"
+                              IsEnabled="{x:Bind Vm.AutostartAvailable}"
+                              IsOn="{x:Bind Vm.AutostartEnabled, Mode=TwoWay}" />
+            </Grid>
+
+            <TextBlock Text="{l:L Key=settings.hardware}" Style="{StaticResource SectionTextStyle}" Margin="2,16,0,8" />
+            <Border Style="{StaticResource CardStyle}">
+                <ItemsControl ItemsSource="{x:Bind Vm.Hardware}">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="p:HardwareRow">
+                            <Grid ColumnSpacing="24" Padding="0,4">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="160" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Text="{x:Bind Label}" Style="{StaticResource CaptionSecondaryTextStyle}"
+                                           VerticalAlignment="Center" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" />
+                                <TextBlock Grid.Column="1" Text="{x:Bind Value}" Style="{StaticResource BodyTextStyle}" />
+                            </Grid>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </Border>
+
+            <TextBlock Text="{l:L Key=settings.about}" Style="{StaticResource SectionTextStyle}" Margin="2,16,0,8" />
+            <Border Style="{StaticResource CardStyle}">
+                <Grid ColumnSpacing="24" RowSpacing="8">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="160" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <Grid.RowDefinitions>
+                        <RowDefinition />
+                        <RowDefinition />
+                    </Grid.RowDefinitions>
+                    <StackPanel Grid.ColumnSpan="2" Orientation="Horizontal" Spacing="12" Margin="0,0,0,8">
+                        <c:LogoMark />
+                        <TextBlock x:Name="AppVersion" Style="{StaticResource BodyTextStyle}" VerticalAlignment="Center" />
+                    </StackPanel>
+                    <TextBlock Grid.Row="1" Text="{l:L Key=settings.service}" Style="{StaticResource CaptionSecondaryTextStyle}" />
+                    <TextBlock Grid.Row="1" Grid.Column="1" Text="{x:Bind Vm.ServiceText, Mode=OneWay}" Style="{StaticResource BodyTextStyle}" />
+                </Grid>
+            </Border>
+        </StackPanel>
+    </ScrollViewer>
+</Page>

@@ -1,0 +1,5 @@
+/service/target/
+/dist/
+# .NET 构建输出（所有项目）
+/app/*/bin/
+/app/*/obj/

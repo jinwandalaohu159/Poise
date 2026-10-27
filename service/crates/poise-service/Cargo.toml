@@ -1,0 +1,27 @@
+[package]
+name = "poise-service"
+description = "Poise 后台服务：组装各层、调度循环、命名管道服务端、Windows 服务宿主"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "poise-service"
+path = "src/main.rs"
+
+[dependencies]
+poise-core.workspace = true
+poise-protocol.workspace = true
+poise-platform.workspace = true
+poise-hardware.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+log.workspace = true
+anyhow.workspace = true
+simplelog = "0.12"
+windows-service = "0.8"
+
+[dependencies.windows]
+version = "0.62"
+features = ["Win32_System_Threading"]

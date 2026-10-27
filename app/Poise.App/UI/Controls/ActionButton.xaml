@@ -1,0 +1,24 @@
+<UserControl
+    x:Class="Poise.App.UI.Controls.ActionButton"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <Button x:Name="Button" Click="OnClick" Style="{StaticResource ActionButtonStyle}" HorizontalAlignment="Stretch">
+        <Grid>
+            <StackPanel x:Name="IdleContent" Orientation="Horizontal" Spacing="8">
+                <FontIcon x:Name="Icon" FontFamily="{StaticResource IconFont}" FontSize="16" />
+                <TextBlock x:Name="LabelText" VerticalAlignment="Center" />
+            </StackPanel>
+            <StackPanel x:Name="BusyContent" Orientation="Horizontal" Spacing="8" Opacity="0" HorizontalAlignment="Center">
+                <ProgressRing x:Name="BusyRing" Width="16" Height="16" IsActive="False" />
+                <TextBlock x:Name="BusyText" VerticalAlignment="Center" />
+            </StackPanel>
+            <FontIcon x:Name="DoneIcon"
+                      HorizontalAlignment="Center"
+                      FontFamily="{StaticResource IconFont}"
+                      FontSize="16"
+                      Glyph="&#xE73E;"
+                      Opacity="0" />
+        </Grid>
+    </Button>
+</UserControl>

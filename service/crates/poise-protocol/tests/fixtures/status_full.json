@@ -1,0 +1,64 @@
+{
+  "health": {
+    "code": "storage_low",
+    "level": "notice",
+    "game": "League of Legends",
+    "cleanable": 2,
+    "freeable_bytes": 1073741824
+  },
+  "mode": "quiet",
+  "effective_mode": "full",
+  "auto_full_for_games": true,
+  "auto_clean": false,
+  "metrics": {
+    "cpu_pct": 12.5,
+    "cpu_temp": 71.0,
+    "gpu_temp": 58.0,
+    "gpu_pct": 33.0,
+    "mem_used_pct": 63.0,
+    "mem_used_bytes": 21474836480,
+    "mem_total_bytes": 34359738368,
+    "cpu_mhz": 2300,
+    "on_battery": true
+  },
+  "hardware": {
+    "profile": "Dell G15 5520",
+    "thermal_control": true,
+    "fans": [
+      {
+        "rpm": 2400,
+        "max_rpm": 4800
+      },
+      {
+        "rpm": 2600,
+        "max_rpm": 4800
+      }
+    ],
+    "disks": [
+      {
+        "name": "WD SN750 2TB",
+        "temp_c": 45,
+        "health": "warning",
+        "wear_pct": 3
+      }
+    ],
+    "system_drive": {
+      "free_bytes": 12884901888,
+      "total_bytes": 536870912000
+    },
+    "memory": {
+      "total_bytes": 34359738368,
+      "speed_mhz": 4800,
+      "modules": 2
+    }
+  },
+  "adjusted_processes": 7,
+  "deferred_cleanup": 1,
+  "dry_run": true,
+  "last_cleanup": {
+    "at_unix_ms": 1800000000000,
+    "trigger": "deferred",
+    "freed_bytes": 2147483648,
+    "handled": 3
+  }
+}
