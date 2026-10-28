@@ -134,10 +134,10 @@ public sealed class ContractTests
         Assert.Equal(new AppSchedule(ScheduleState.Scheduled, true, false, PriorityLevel.Higher), apps[1].Schedule);
         Assert.Null(apps[2].Schedule!.SmallCores);
         Assert.Equal(PriorityLevel.High, apps[2].Schedule!.Priority);
-        Assert.Equal([ScheduleState.Excluded, ScheduleState.Scheduled, ScheduleState.SelfManaged, ScheduleState.Off], apps.Skip(3).Take(4).Select(a => a.Schedule!.State));
-        Assert.Equal([AppKind.App, AppKind.App, AppKind.App, AppKind.Excluded, AppKind.Chore], apps.Take(5).Select(a => a.Kind));
-        Assert.Null(apps[7].Schedule);
-        Assert.False(apps[7].Running);
+        Assert.Equal([ScheduleState.Excluded, ScheduleState.SelfManaged, ScheduleState.Off], apps.Skip(3).Take(3).Select(a => a.Schedule!.State));
+        Assert.Equal([AppKind.App, AppKind.App, AppKind.App, AppKind.Excluded], apps.Take(4).Select(a => a.Kind));
+        Assert.Null(apps[6].Schedule);
+        Assert.False(apps[6].Running);
     }
 
     [Fact]

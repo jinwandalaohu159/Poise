@@ -56,7 +56,7 @@ impl Engine {
                     self.on_session_changed(state.session_id);
                 }
                 let now = self.now();
-                if self.session.report(state, now) {
+                if self.session.report(state, client, now) {
                     self.reschedule_now();
                 }
                 ok(id, &())
@@ -92,7 +92,10 @@ impl Engine {
             Request::SetFanBoost { percent } => {
                 self.settings.fan_boost = percent.min(100);
                 self.save_settings();
-                self.apply_fan_boost();
+                // Poise 暂停时只保存，恢复时再落到硬件。
+                if !self.paused {
+                    self.apply_fan_boost();
+                }
                 ok(id, &())
             }
             Request::SetGameMode { mode } => {

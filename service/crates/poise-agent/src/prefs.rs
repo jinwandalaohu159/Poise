@@ -119,6 +119,9 @@ mod tests {
                 "tray.boost",
                 "tray.boost_none",
                 "tray.tooltip",
+                "tray.update",
+                "tray.update.title",
+                "tray.update.body",
                 "status.disconnected",
             ] {
                 assert!(map.contains_key(key), "缺少 {key}");

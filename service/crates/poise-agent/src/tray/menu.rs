@@ -1,4 +1,5 @@
-//! 托盘右键菜单：模式（自动、安静、均衡、全力，机型支持时加极限模式）、一键清理、让某程序全速、打开、退出。
+//! 托盘右键菜单：有新版本时的"更新"、模式（自动、安静、均衡、全力，机型支持时加极限模式）、一键清理、
+//! 让某程序全速、打开、退出。
 
 use poise_core::prefs::Mode;
 use windows::Win32::Foundation::{HWND, LPARAM, POINT, WPARAM};
@@ -16,6 +17,7 @@ pub enum Command {
     SetMode(Mode),
     Clean,
     Boost,
+    Update,
     Open,
     Exit,
 }
@@ -24,6 +26,7 @@ pub enum Command {
 const MODES: [Mode; 4] = [Mode::Auto, Mode::Quiet, Mode::Balanced, Mode::Full];
 const ID_CLEAN: u32 = 10;
 const ID_BOOST: u32 = 11;
+const ID_UPDATE: u32 = 12;
 const ID_OPEN: u32 = 20;
 const ID_EXIT: u32 = 21;
 
@@ -37,6 +40,8 @@ pub struct MenuState<'a> {
     pub vendor_mode: Option<String>,
     /// 可以"临时全速"的程序名。
     pub boost_target: Option<String>,
+    /// 发现的新版本号。
+    pub update: Option<String>,
 }
 
 /// 在鼠标位置弹出菜单，返回用户选择的命令。
@@ -88,6 +93,7 @@ fn command_of(id: u32, modes: &[Mode]) -> Option<Command> {
         1..=9 => modes.get(id as usize - 1).map(|&m| Command::SetMode(m)),
         ID_CLEAN => Some(Command::Clean),
         ID_BOOST => Some(Command::Boost),
+        ID_UPDATE => Some(Command::Update),
         ID_OPEN => Some(Command::Open),
         ID_EXIT => Some(Command::Exit),
         _ => None,
@@ -97,6 +103,17 @@ fn command_of(id: u32, modes: &[Mode]) -> Option<Command> {
 unsafe fn build(menu: HMENU, s: &MenuState, modes: &[Mode]) {
     let p = s.prefs;
     let enabled = |on: bool| if on { MF_STRING } else { MF_STRING | MF_GRAYED };
+    if let Some(version) = &s.update {
+        unsafe {
+            append(
+                menu,
+                MF_STRING,
+                ID_UPDATE,
+                &p.format("tray.update", version),
+            );
+            append(menu, MF_SEPARATOR, 0, "");
+        }
+    }
     for (i, &mode) in modes.iter().enumerate() {
         let mut flags = enabled(s.connected);
         if s.mode == Some(mode) {

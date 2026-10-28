@@ -98,24 +98,6 @@
   },
   {
     "pid": 100,
-    "name": "indexer",
-    "path": "c:/apps/indexer.exe",
-    "preference": "auto",
-    "running": true,
-    "is_game": false,
-    "schedule": {
-      "state": "scheduled",
-      "foreground": false,
-      "small_cores": true,
-      "priority": "normal"
-    },
-    "kind": "chore",
-    "cpu_pct": 0.0,
-    "memory_bytes": 0,
-    "processes": []
-  },
-  {
-    "pid": 100,
     "name": "tool",
     "path": "c:/apps/tool.exe",
     "preference": "auto",

@@ -271,14 +271,6 @@ fn apps() -> Vec<AppEntry> {
             kind: AppKind::Excluded,
             ..app("ime", AppPreference::Auto, other(ScheduleState::Excluded))
         },
-        AppEntry {
-            kind: AppKind::Chore,
-            ..app(
-                "indexer",
-                AppPreference::Auto,
-                scheduled(false, Some(true), PriorityLevel::Normal),
-            )
-        },
         app(
             "tool",
             AppPreference::Auto,

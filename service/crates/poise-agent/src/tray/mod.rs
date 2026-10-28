@@ -1,4 +1,4 @@
-//! 托盘图标：添加、更新状态（图标与提示文字）、资源管理器重启后重新添加、移除。
+//! 托盘图标：添加、更新状态（图标与提示文字）、弹出通知、资源管理器重启后重新添加、移除。
 
 mod icon;
 pub mod menu;
@@ -7,8 +7,8 @@ pub mod theme;
 
 use windows::Win32::Foundation::HWND;
 use windows::Win32::UI::Shell::{
-    NIF_ICON, NIF_MESSAGE, NIF_SHOWTIP, NIF_TIP, NIM_ADD, NIM_DELETE, NIM_MODIFY, NIM_SETVERSION,
-    NOTIFYICON_VERSION_4, NOTIFYICONDATAW, Shell_NotifyIconW,
+    NIF_ICON, NIF_INFO, NIF_MESSAGE, NIF_SHOWTIP, NIF_TIP, NIIF_INFO, NIM_ADD, NIM_DELETE,
+    NIM_MODIFY, NIM_SETVERSION, NOTIFYICON_VERSION_4, NOTIFYICONDATAW, Shell_NotifyIconW,
 };
 
 use icon::Icons;
@@ -60,6 +60,18 @@ impl Tray {
         let _ = unsafe { Shell_NotifyIconW(NIM_MODIFY, &data) };
     }
 
+    /// 弹出一条系统通知（点击时托盘消息是 NIN_BALLOONUSERCLICK）。
+    /// 弹出系统通知，返回是否成功。
+    pub fn notify(&self, title: &str, body: &str) -> bool {
+        let mut data = self.data();
+        data.uFlags |= NIF_INFO;
+        data.dwInfoFlags = NIIF_INFO;
+        copy_text(&mut data.szInfoTitle, title);
+        copy_text(&mut data.szInfo, body);
+        // SAFETY: 同上。
+        unsafe { Shell_NotifyIconW(NIM_MODIFY, &data) }.as_bool()
+    }
+
     fn data(&self) -> NOTIFYICONDATAW {
         let mut data = NOTIFYICONDATAW {
             cbSize: size_of::<NOTIFYICONDATAW>() as u32,
@@ -74,15 +86,16 @@ impl Tray {
             },
             ..Default::default()
         };
-        let max = data.szTip.len() - 1;
-        for (dst, src) in data
-            .szTip
-            .iter_mut()
-            .zip(self.tooltip.encode_utf16().take(max))
-        {
-            *dst = src;
-        }
+        copy_text(&mut data.szTip, &self.tooltip);
         data
+    }
+}
+
+/// 把文字放进定长缓冲区，超长时截断，保留结尾的 NUL。
+fn copy_text(dst: &mut [u16], text: &str) {
+    let max = dst.len() - 1;
+    for (d, s) in dst.iter_mut().zip(text.encode_utf16().take(max)) {
+        *d = s;
     }
 }
 

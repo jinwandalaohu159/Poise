@@ -1,4 +1,4 @@
-//! 托盘代理的主线程：一个不显示的窗口接收托盘、前台切换、状态更新的消息，把它们分派给各部分。
+//! 托盘代理的主线程：一个不显示的窗口接收托盘、前台切换、状态更新、发现新版本的消息，把它们分派给各部分。
 
 use std::sync::atomic::{AtomicIsize, Ordering};
 
@@ -7,7 +7,7 @@ use poise_protocol::Status;
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Accessibility::{HWINEVENTHOOK, SetWinEventHook, UnhookWinEvent};
-use windows::Win32::UI::Shell::NIN_SELECT;
+use windows::Win32::UI::Shell::{NIN_BALLOONUSERCLICK, NIN_SELECT};
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, EVENT_SYSTEM_FOREGROUND,
     EVENT_SYSTEM_MINIMIZEEND, GWLP_USERDATA, GetMessageW, GetWindowLongPtrW, KillTimer, MSG,
@@ -24,10 +24,12 @@ use crate::tray::menu::{self, Command, MenuState};
 use crate::tray::promote::{self, Outcome};
 use crate::tray::{Tray, theme};
 use crate::ui_app;
+use crate::update::UpdateChecker;
 
 const WM_TRAY: u32 = WM_APP + 1;
 const WM_STATUS: u32 = WM_APP + 2;
 const WM_FOREGROUND: u32 = WM_APP + 3;
+const WM_UPDATE: u32 = WM_APP + 4;
 /// 用键盘选中托盘图标（NIN_SELECT | NINF_KEY），windows crate 没有导出。
 const NIN_KEYSELECT: u32 = NIN_SELECT | 0x1;
 const TIMER_PROMOTE: usize = 1;
@@ -47,6 +49,9 @@ struct App {
     foreground: LastForeground,
     taskbar_created: u32,
     promote_tries: u32,
+    updates: UpdateChecker,
+    /// 已经弹过通知的新版本（每个版本只提示一次）。
+    notified: Option<String>,
 }
 
 pub fn run() {
@@ -97,10 +102,12 @@ impl App {
         let prefs = UiPrefs::load();
         theme::apply(prefs.theme);
         let raw = hwnd.0 as isize;
-        let link = Link::start(move || {
+        let post = move |msg| {
             // SAFETY: 投递消息到本进程的窗口；窗口销毁后投递失败也无妨。
-            let _ = unsafe { PostMessageW(Some(HWND(raw as _)), WM_STATUS, WPARAM(0), LPARAM(0)) };
-        });
+            let _ = unsafe { PostMessageW(Some(HWND(raw as _)), msg, WPARAM(0), LPARAM(0)) };
+        };
+        let link = Link::start(move || post(WM_STATUS));
+        let updates = UpdateChecker::start(move || post(WM_UPDATE));
         // SAFETY: 注册全局广播消息名；设置一次性检查定时器。
         let taskbar_created = unsafe { RegisterWindowMessageW(w!("TaskbarCreated")) };
         unsafe { SetTimer(Some(hwnd), TIMER_PROMOTE, PROMOTE_EVERY_MS, None) };
@@ -115,6 +122,8 @@ impl App {
             foreground: LastForeground::default(),
             taskbar_created,
             promote_tries: 0,
+            updates,
+            notified: None,
         };
         app.foreground.observe();
         app
@@ -127,11 +136,13 @@ impl App {
                 // NIN_SELECT，只响应 NIN_SELECT，否则面板刚打开就被第二次"开关"关上。
                 match (lparam.0 & 0xFFFF) as u32 {
                     NIN_SELECT | NIN_KEYSELECT => ui_app::toggle_flyout(),
+                    NIN_BALLOONUSERCLICK if self.notified.is_some() => ui_app::open_update(),
                     WM_CONTEXTMENU => self.show_menu(),
                     _ => {}
                 }
             }
             WM_STATUS => self.refresh_icon(),
+            WM_UPDATE => self.announce_update(),
             WM_FOREGROUND => {
                 self.foreground.observe();
                 self.link.send(Job::ForegroundChanged);
@@ -155,6 +166,7 @@ impl App {
             mode: status.as_ref().map(|s| s.mode),
             vendor_mode: status.as_ref().and_then(|s| s.hardware.vendor_mode.clone()),
             boost_target: target.as_ref().map(|(_, name)| name.clone()),
+            update: self.updates.available(),
         };
         match menu::show(self.hwnd, &state) {
             Some(Command::SetMode(mode)) => self.link.send(Job::SetMode(mode)),
@@ -167,6 +179,7 @@ impl App {
                     });
                 }
             }
+            Some(Command::Update) => ui_app::open_update(),
             Some(Command::Open) => ui_app::open_window(),
             Some(Command::Exit) => {
                 ui_app::exit();
@@ -184,6 +197,25 @@ impl App {
             attention && prefs.tray_alert,
             &prefs.format("tray.tooltip", &prefs.get(title)),
         );
+    }
+
+    /// 发现新版本：弹一次通知（同一版本只提示一次），菜单里随后出现"更新"。
+    fn announce_update(&mut self) {
+        let Some(version) = self.updates.available() else {
+            return;
+        };
+        if self.notified.as_deref() == Some(version.as_str()) {
+            return;
+        }
+        let prefs = UiPrefs::load();
+        let shown = self.tray.notify(
+            &prefs.get("tray.update.title"),
+            &prefs.format("tray.update.body", &format!("Poise {version}")),
+        );
+        // 没弹出来（例如任务栏还没准备好）时，下次发现新版本再试。
+        if shown {
+            self.notified = Some(version);
+        }
     }
 
     fn promote(&mut self) {

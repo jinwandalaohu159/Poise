@@ -32,3 +32,40 @@ public sealed class AutostartTests
         Assert.Equal("\"D:\\R&D\\<x>\\poise-agent.exe\"", xml.Descendants(Task + "Command").Single().Value);
     }
 }
+
+/// <summary>在真实的任务计划程序里走一遍注册、查询、删除（任务没有触发器，不会运行），结束后删除测试文件夹。</summary>
+public sealed class ScheduledTasksTests : IDisposable
+{
+    private const string Folder = "PoiseSelfTest";
+
+    private const string Xml = """
+        <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+          <Settings><Enabled>false</Enabled></Settings>
+          <Actions><Exec><Command>cmd.exe</Command></Exec></Actions>
+        </Task>
+        """;
+
+    [Fact]
+    public void Register_query_and_delete_without_admin_rights()
+    {
+        Assert.False(ScheduledTasks.Exists(Folder, "t"));
+        ScheduledTasks.Register(Folder, "t", Xml);
+        Assert.True(ScheduledTasks.Exists(Folder, "t"));
+        ScheduledTasks.Delete(Folder, "t");
+        Assert.False(ScheduledTasks.Exists(Folder, "t"));
+        ScheduledTasks.Delete(Folder, "t");
+    }
+
+    public void Dispose()
+    {
+        dynamic service = Activator.CreateInstance(Type.GetTypeFromProgID("Schedule.Service")!)!;
+        service.Connect();
+        try
+        {
+            service.GetFolder(@"\").DeleteFolder(Folder, 0);
+        }
+        catch (FileNotFoundException)
+        {
+        }
+    }
+}

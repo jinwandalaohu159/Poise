@@ -89,6 +89,33 @@
                 </ItemsControl>
             </Border>
 
+            <TextBlock Text="{l:L Key=settings.update}" Style="{StaticResource SectionTextStyle}" Margin="1,20,0,0" />
+            <Border Style="{StaticResource CardStyle}">
+                <!-- 状态与说明在左，操作在右 -->
+                <Grid ColumnSpacing="16">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <StackPanel Spacing="6" VerticalAlignment="Center">
+                        <TextBlock Text="{x:Bind Vm.UpdateStatus, Mode=OneWay}" Style="{StaticResource BodyTextStyle}" TextWrapping="Wrap" />
+                        <ProgressBar Maximum="100" Value="{x:Bind Vm.DownloadPercent, Mode=OneWay}"
+                                     Visibility="{x:Bind Vm.IsDownloading, Mode=OneWay}" />
+                        <TextBlock Text="{x:Bind Vm.UpdateNotes, Mode=OneWay}" Style="{StaticResource CaptionSecondaryTextStyle}"
+                                   TextWrapping="Wrap" Visibility="{x:Bind Vm.HasUpdateNotes, Mode=OneWay}" />
+                        <HyperlinkButton Content="{l:L Key=settings.update.notes}" Style="{StaticResource DetailsLinkStyle}" Padding="0,2"
+                                         NavigateUri="{x:Bind Vm.ReleasePage, Mode=OneWay}"
+                                         Visibility="{x:Bind Vm.HasReleasePage, Mode=OneWay}" />
+                    </StackPanel>
+                    <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                        <Button Content="{l:L Key=update.check}" Style="{StaticResource ActionButtonStyle}"
+                                IsEnabled="{x:Bind Vm.CanCheckUpdate, Mode=OneWay}" Click="{x:Bind Vm.CheckForUpdates}" />
+                        <Button Content="{l:L Key=update.install}" Style="{StaticResource AccentActionButtonStyle}"
+                                IsEnabled="{x:Bind Vm.CanInstallUpdate, Mode=OneWay}" Click="{x:Bind Vm.InstallUpdate}" />
+                    </StackPanel>
+                </Grid>
+            </Border>
+
             <TextBlock Text="{l:L Key=settings.about}" Style="{StaticResource SectionTextStyle}" Margin="1,20,0,0" />
             <Border Style="{StaticResource CardStyle}">
                 <Grid ColumnSpacing="24" RowSpacing="8">
@@ -102,7 +129,7 @@
                     </Grid.RowDefinitions>
                     <StackPanel Grid.ColumnSpan="2" Orientation="Horizontal" Spacing="12" Margin="0,0,0,8">
                         <c:LogoMark Width="32" Height="32" />
-                        <TextBlock x:Name="AppVersion" Style="{StaticResource BodyTextStyle}" VerticalAlignment="Center" />
+                        <TextBlock Text="{x:Bind Vm.VersionText}" Style="{StaticResource BodyTextStyle}" VerticalAlignment="Center" />
                     </StackPanel>
                     <TextBlock Grid.Row="1" Text="{l:L Key=settings.service}" Style="{StaticResource CaptionSecondaryTextStyle}" VerticalAlignment="Center" />
                     <TextBlock Grid.Row="1" Grid.Column="1" Text="{x:Bind Vm.ServiceText, Mode=OneWay}" Style="{StaticResource BodyTextStyle}"

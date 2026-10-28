@@ -1,7 +1,6 @@
 //! 硬件模式：把"实际生效的模式"落到电源计划与散热上，并在过热时自动退出全力和极限模式；风扇加速按用户设置。
 //! 观察模式下不写入，只在将要变化时记一条日志。
 
-use poise_core::diagnose::{Health, HealthCode, Level};
 use poise_core::journal::{Journal, JournalError};
 use poise_core::model::Millis;
 use poise_core::optimize::SettingStore;
@@ -12,11 +11,14 @@ use poise_platform::observe::system;
 use super::Engine;
 use super::changes::ChangeError;
 
+/// 过热退出性能模式后，至少保持这么久（并且温度降回正常）才恢复。
+const OVERHEAT_HOLD_MS: Millis = 5 * 60_000;
+
 impl Engine {
     /// 应用电源/散热模式，返回实际落到硬件上的模式（界面显示它）。
-    /// 温度过高时自动退出全力和极限模式。观察模式下不写入。
-    fn apply_hardware_mode(&mut self, effective: Mode, health: &Health, now: Millis) -> Mode {
-        let overheating = health.code == HealthCode::Hot && health.level == Level::Bad;
+    /// 温度危险时自动退出全力和极限模式（见 [`poise_core::diagnose::OverheatGuard`]）。观察模式下不写入。
+    fn apply_hardware_mode(&mut self, effective: Mode, now: Millis) -> Mode {
+        let overheating = self.overheat.update(self.last_heat, now, OVERHEAT_HOLD_MS);
         let mode = if overheating && effective.is_performance() {
             Mode::Balanced
         } else {
@@ -63,8 +65,8 @@ impl Engine {
     }
 
     /// 把实际模式和风扇加速落到硬件，返回落到硬件上的模式（过热时可能被降级）。
-    pub(super) fn apply_modes(&mut self, effective: Mode, health: &Health, now: Millis) -> Mode {
-        let mode = self.apply_hardware_mode(effective, health, now);
+    pub(super) fn apply_modes(&mut self, effective: Mode, now: Millis) -> Mode {
+        let mode = self.apply_hardware_mode(effective, now);
         self.apply_fan_boost();
         mode
     }

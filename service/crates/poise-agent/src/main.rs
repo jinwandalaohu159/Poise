@@ -1,7 +1,8 @@
 //! Poise 托盘代理：常驻用户会话（开机自启的就是它），占用极小。
 //!
 //! - 托盘图标与右键菜单；左键开关托盘面板（界面按需启动）；
-//! - 感知前台窗口、全屏、可见窗口、音频，上报给服务（服务在会话 0 看不到用户桌面）。
+//! - 感知前台窗口、全屏、可见窗口、音频，上报给服务（服务在会话 0 看不到用户桌面）；
+//! - 定期检查 GitHub 上有没有新版本，有就提示。
 
 #![windows_subsystem = "windows"]
 
@@ -13,6 +14,7 @@ mod prefs;
 mod session;
 mod tray;
 mod ui_app;
+mod update;
 
 use poise_platform::win::wide::WideString;
 use windows::Win32::Foundation::{ERROR_ALREADY_EXISTS, GetLastError};

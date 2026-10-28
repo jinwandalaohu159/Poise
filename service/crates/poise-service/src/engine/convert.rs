@@ -73,7 +73,6 @@ pub(super) fn cpu(t: &CpuTopology) -> Option<CpuDto> {
 pub(super) fn app_kind(kind: GroupKind) -> AppKind {
     match kind {
         GroupKind::App => AppKind::App,
-        GroupKind::Chore => AppKind::Chore,
         GroupKind::Excluded => AppKind::Excluded,
     }
 }

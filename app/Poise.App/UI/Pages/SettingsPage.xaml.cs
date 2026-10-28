@@ -1,4 +1,3 @@
-using System.Reflection;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Navigation;
 using Poise.Core.Localization;
@@ -13,8 +12,6 @@ public sealed partial class SettingsPage : Page
     {
         InitializeComponent();
         Header.Title = Loc.Get("settings.title");
-        var version = Assembly.GetExecutingAssembly().GetName().Version;
-        AppVersion.Text = $"Poise {version?.ToString(3)}";
     }
 
     public SettingsViewModel Vm { get; } = new(AppHost.Current);

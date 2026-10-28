@@ -11,6 +11,8 @@ public enum Activation
     Exit,
     /// 收起托盘面板并交出前台（托盘代理弹出右键菜单前）。
     Dismiss,
+    /// 打开主窗口的设置页并检查更新（托盘代理发现新版本后，用户点了通知或菜单）。
+    Update,
 }
 
 /// <summary>
@@ -27,6 +29,7 @@ public sealed class SingleInstance : IDisposable
         [Activation.Flyout] = @"Local\Poise.App.Flyout",
         [Activation.Exit] = @"Local\Poise.App.Exit",
         [Activation.Dismiss] = @"Local\Poise.App.Dismiss",
+        [Activation.Update] = @"Local\Poise.App.Update",
     };
 
     private readonly Mutex _mutex;

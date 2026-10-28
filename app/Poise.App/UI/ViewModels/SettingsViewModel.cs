@@ -3,10 +3,11 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using Poise.Core.Localization;
 using Poise.Core.Presentation;
 using Poise.Core.Settings;
+using Poise.Core.Updates;
 
 namespace Poise.App.UI.ViewModels;
 
-/// <summary>设置页：语言、外观、开机启动、托盘图标提醒；这台电脑的硬件读数；服务信息。</summary>
+/// <summary>设置页：语言、外观、开机启动、托盘图标提醒；这台电脑的硬件读数；更新；服务信息。</summary>
 public sealed partial class SettingsViewModel : ObservableObject, IDisposable
 {
     private readonly AppHost _host;
@@ -21,6 +22,7 @@ public sealed partial class SettingsViewModel : ObservableObject, IDisposable
         TrayAlertEnabled = host.Settings.TrayAlert;
         RefreshHardware();
         host.Status.Changed += RefreshHardware;
+        host.Updates.Changed += RefreshUpdate;
         _ready = true;
     }
 
@@ -47,6 +49,46 @@ public sealed partial class SettingsViewModel : ObservableObject, IDisposable
 
     /// <summary>这台电脑的硬件读数（每次状态刷新时更新）。</summary>
     public ObservableCollection<HardwareRow> Hardware { get; } = [];
+
+    /// <summary>"Poise 0.2.1"，开发版本另有说明。</summary>
+    public string VersionText => UpdateText.VersionLine(AppVersion.Installed);
+
+    private UpdateState Update => _host.Updates.State;
+
+    public string UpdateStatus => UpdateText.Status(Update);
+
+    public string UpdateNotes => UpdateText.Notes(Update);
+
+    public bool HasUpdateNotes => UpdateNotes.Length > 0;
+
+    public Uri? ReleasePage => Update.Release?.PageUrl;
+
+    public bool HasReleasePage => ReleasePage is not null && Update.Phase != UpdatePhase.Checking;
+
+    public bool IsDownloading => Update.Phase == UpdatePhase.Downloading;
+
+    public double DownloadPercent => Update.Progress * 100;
+
+    public bool CanCheckUpdate => Update.CanCheck;
+
+    public bool CanInstallUpdate => Update.CanInstall;
+
+    public void CheckForUpdates() => _ = _host.Updates.CheckAsync();
+
+    public void InstallUpdate() => _ = _host.Updates.DownloadAndInstallAsync();
+
+    private void RefreshUpdate()
+    {
+        foreach (var name in new[]
+                 {
+                     nameof(UpdateStatus), nameof(UpdateNotes), nameof(HasUpdateNotes), nameof(ReleasePage),
+                     nameof(HasReleasePage), nameof(IsDownloading), nameof(DownloadPercent),
+                     nameof(CanCheckUpdate), nameof(CanInstallUpdate),
+                 })
+        {
+            OnPropertyChanged(name);
+        }
+    }
 
     public string ServiceText => _host.Client.IsConnected
         ? Loc.Format("settings.service.connected", _host.Client.ServiceVersion ?? "?")
@@ -119,5 +161,9 @@ public sealed partial class SettingsViewModel : ObservableObject, IDisposable
         }
     }
 
-    public void Dispose() => _host.Status.Changed -= RefreshHardware;
+    public void Dispose()
+    {
+        _host.Status.Changed -= RefreshHardware;
+        _host.Updates.Changed -= RefreshUpdate;
+    }
 }

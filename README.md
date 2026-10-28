@@ -62,7 +62,8 @@ dotnet test app\Poise.Core.Tests    # 界面逻辑与契约测试
 - 安装后桌面和开始菜单里有 Poise 快捷方式；在"设置 → 应用"里登记为 Poise，可以从那里卸载（效果同 `uninstall.ps1`）。
 - 首次安装会为当前用户开启开机启动，之后由设置页控制。开机启动是任务计划程序里 `\Poise\` 文件夹下的登录任务（定义见 `app/Poise.Core/Settings/AutostartTask.xml`，界面和安装脚本共用），登录后立即启动托盘代理；不用 Run 键，因为 Windows 会把 Run 键里的程序推迟一两分钟。
 - 再次运行 `install.ps1` 即为升级：只替换文件、重启服务，保留设置、开机启动选择与优化记录；旧版本写在 Run 键里的开机启动会迁移成登录任务。
-- 发布：在 `service/Cargo.toml` 里改版本号，运行 `package.ps1`，再用 Project Hub 把安装程序发布到 GitHub Releases。
+- 发布：在 `service/Cargo.toml` 里改版本号，运行 `package.ps1`，再用 Project Hub 把安装程序发布到 GitHub Releases（标签 `v<版本>`，附件 `Poise-Setup-<版本>.exe`）。
+- 自动更新：界面运行时启动后检查一次、之后每小时一次，托盘代理在后台定时检查；有新版本时托盘提醒，设置页"更新"里可以检查更新、立即更新。更新时把安装程序下载到 `%LOCALAPPDATA%\Poise\updates`，核对大小和 GitHub 提供的 SHA-256 后运行（会请求管理员权限），由安装程序替换正在运行的 Poise。开发版本（没有 `version.txt`）不检查更新。
 - 卸载时如有修改没能还原，程序和修改记录都会保留，可重启后再运行一次 `uninstall.ps1`。
 - 安装包未签名（没有代码签名证书），首次运行可能出现 SmartScreen 提示。
 - 图标的原图是 `icon/foam.png`。更换后运行 `python scripts/make-icons.py`（需要 Pillow），重新生成 `app/Poise.App/Assets` 下的程序图标、托盘提醒图标和界面标志，再构建即可。
@@ -70,6 +71,7 @@ dotnet test app\Poise.Core.Tests    # 界面逻辑与契约测试
 ## 安全边界
 
 - 对游戏只做任务管理器同等级别的操作（优先级、CPU 核心、效率模式）；不注入、不读写游戏内存、不 Hook、不修改游戏文件、不模拟输入；反作弊程序及其服务永不触碰。
-- 不安装驱动；不关闭 Defender、防火墙、UAC、Windows 更新、内存完整性；不联网。
+- 不安装驱动；不关闭 Defender、防火墙、UAC、Windows 更新、内存完整性。
+- 联网只为更新：界面和托盘代理访问 GitHub 查询最新版本、下载安装程序（校验 SHA-256），不上传任何数据；服务（SYSTEM）从不联网。
 - 服务只执行固定的操作集合；管道有访问控制并拒绝远程连接；配置与日志只有管理员可写；重启用户程序时使用用户自己的身份。
 - 戴尔 G15 的散热模式只使用 BIOS 自己列出的模式：安静 → 0xA3，全力（接通电源时）→ 0xA1，均衡 → 恢复启动时的原模式；服务停止或卸载时恢复原模式。

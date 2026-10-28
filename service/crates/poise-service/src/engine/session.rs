@@ -1,7 +1,7 @@
 //! 用户会话：托盘代理上报的会话状态，以及它是否还"新鲜"；界面窗口是否正显示着；
 //! 交互用户变化时更新"当前用户"的注册表位置。
 
-use poise_core::model::{Millis, SessionState};
+use poise_core::model::{Millis, Pid, SessionState};
 use poise_platform::settings::user::UserContext;
 
 use super::Engine;
@@ -16,6 +16,8 @@ const UI_VISIBLE_FOR_MS: Millis = 30_000;
 pub struct SessionTracker {
     state: SessionState,
     reported_at: Option<Millis>,
+    /// 上报会话状态的进程（托盘代理）。
+    reporter: Option<Pid>,
     ui_visible_until: Option<Millis>,
 }
 
@@ -28,17 +30,29 @@ impl SessionTracker {
                 ..Default::default()
             },
             reported_at: None,
+            reporter: None,
             ui_visible_until: None,
         }
     }
 
     /// 记录一次上报，返回前台进程是否发生了变化。
-    pub fn report(&mut self, state: SessionState, now: Millis) -> bool {
+    pub fn report(&mut self, state: SessionState, reporter: Pid, now: Millis) -> bool {
         let changed = state.foreground_pid != self.state.foreground_pid
             || state.fullscreen != self.state.fullscreen;
         self.state = state;
         self.reported_at = Some(now);
+        self.reporter = Some(reporter);
         changed
+    }
+
+    /// 某个客户端断开。是上报者（托盘代理）时立即视为过期，返回 true。
+    pub fn forget_reporter(&mut self, pid: Pid) -> bool {
+        if self.reporter != Some(pid) {
+            return false;
+        }
+        self.reporter = None;
+        self.reported_at = None;
+        true
     }
 
     pub fn is_fresh(&self, now: Millis) -> bool {
@@ -101,10 +115,20 @@ mod tests {
             foreground_pid: Some(5),
             ..Default::default()
         };
-        assert!(t.report(s, 0));
+        assert!(t.report(s, 7, 0));
         assert_eq!(t.current(5_000).foreground_pid, Some(5));
         assert_eq!(t.current(20_000).foreground_pid, None);
         assert_eq!(t.current(20_000).session_id, 1);
+    }
+
+    #[test]
+    fn the_reporter_disconnecting_makes_the_session_stale_at_once() {
+        let mut t = SessionTracker::default();
+        t.report(SessionState::default(), 7, 0);
+        assert!(!t.forget_reporter(8));
+        assert!(t.is_fresh(1_000));
+        assert!(t.forget_reporter(7));
+        assert!(!t.is_fresh(1_000));
     }
 
     #[test]

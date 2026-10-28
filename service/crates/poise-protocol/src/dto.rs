@@ -202,8 +202,6 @@ pub struct AppProcess {
 pub enum AppKind {
     /// 用户程序：按类别调度，可以修改类别。
     App,
-    /// 系统的后台杂活（搜索索引、系统更新等）：只移到能效核并节能。
-    Chore,
     /// 系统与驱动相关的程序（输入法、显卡与声卡助手、安全软件、WSL 等）：不参与调度。
     Excluded,
 }

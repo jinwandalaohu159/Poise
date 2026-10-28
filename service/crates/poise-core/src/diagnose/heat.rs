@@ -59,6 +59,34 @@ impl HeatWatch {
     }
 }
 
+/// 过热保护：温度危险时退出全力和极限模式。
+///
+/// 退出后要同时满足"距最后一次危险已过保持时间"和"温度降回正常（低于退出'温度过高'的阈值）"才恢复。
+/// 否则一恢复高性能模式又迅速升温，模式在危险线附近每几秒切换一次，每次切换都会短暂卡顿。
+#[derive(Debug, Default)]
+pub struct OverheatGuard {
+    /// 最近一次处于危险温度的时间；None 表示没有在保护中。
+    last_critical_ms: Option<u64>,
+}
+
+impl OverheatGuard {
+    /// 每个周期调用，返回现在是否应该限制性能模式。
+    pub fn update(&mut self, heat: Heat, now_ms: u64, hold_ms: u64) -> bool {
+        if heat == Heat::Critical {
+            self.last_critical_ms = Some(now_ms);
+            return true;
+        }
+        let Some(last) = self.last_critical_ms else {
+            return false;
+        };
+        if heat == Heat::Normal && now_ms.saturating_sub(last) >= hold_ms {
+            self.last_critical_ms = None;
+            return false;
+        }
+        true
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -133,5 +161,20 @@ mod tests {
         assert_eq!(w.observe(&cfg, Thermals::default(), 2_000), Heat::Normal);
         // 重新开始：第一次读数直接作为平滑值。
         assert_eq!(w.observe(&cfg, cpu(70.0), 4_000), Heat::Normal);
+    }
+
+    #[test]
+    fn overheat_protection_holds_until_cooled_and_time_passed() {
+        const HOLD: u64 = 300_000;
+        let mut g = OverheatGuard::default();
+        assert!(!g.update(Heat::Normal, 0, HOLD));
+        assert!(g.update(Heat::Critical, 1_000, HOLD));
+        // 刚降到危险线以下：仍然限制（不在危险线附近来回切换）。
+        assert!(g.update(Heat::Hot, 3_000, HOLD));
+        assert!(g.update(Heat::Normal, 60_000, HOLD));
+        // 时间到了但仍是"温度过高"：继续限制。
+        assert!(g.update(Heat::Hot, 400_000, HOLD));
+        // 降回正常且过了保持时间：恢复。
+        assert!(!g.update(Heat::Normal, 401_000, HOLD));
     }
 }

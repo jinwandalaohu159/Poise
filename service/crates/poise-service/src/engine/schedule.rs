@@ -22,8 +22,25 @@ pub(super) struct ScheduleOutcome {
 }
 
 impl Engine {
+    /// 起作用时调度；暂停时什么都不做，模式按用户设置显示（不落到硬件）。
+    pub(super) fn schedule_if(
+        &mut self,
+        active: bool,
+        snapshot: &Snapshot,
+        classes: &HashMap<Pid, Classification>,
+    ) -> ScheduleOutcome {
+        if active {
+            self.schedule(snapshot, classes)
+        } else {
+            ScheduleOutcome {
+                effective_mode: self.settings.mode,
+                game: None,
+            }
+        }
+    }
+
     /// 生成调度计划并执行其中的进程调整，返回实际模式和当前游戏。
-    pub(super) fn schedule(
+    fn schedule(
         &mut self,
         snapshot: &Snapshot,
         classes: &HashMap<Pid, Classification>,
@@ -33,11 +50,21 @@ impl Engine {
         let plan = self.scheduler.plan(&ScheduleInput {
             snapshot,
             classes,
+            activity: &self.activity,
             enabled: self.settings.smart_schedule,
             user_mode,
             game_mode: self.game_target(),
         });
-        for planned in &plan.actions {
+        self.execute_plan(&plan.actions, classes);
+        ScheduleOutcome {
+            effective_mode: plan.effective_mode,
+            game: plan.game,
+        }
+    }
+
+    /// 执行调度动作（经过安全守卫），并把结果回报给调度器。
+    fn execute_plan(&mut self, actions: &[PlannedAction], classes: &HashMap<Pid, Classification>) {
+        for planned in actions {
             let Some(result) = execute(&self.executor, planned, classes) else {
                 continue;
             };
@@ -48,19 +75,26 @@ impl Engine {
             }
             self.scheduler.report(planned, &result);
         }
-        ScheduleOutcome {
-            effective_mode: plan.effective_mode,
-            game: plan.game,
-        }
     }
 
-    /// 撤销所有进程调整（服务停止时）。
+    /// 撤销所有进程调整（服务停止、Poise 退出时）。按最新的进程快照撤销两遍：
+    /// 第二遍兜住撤销期间新建、从父进程继承了"低于正常"的子进程。没能撤销的调整仍记着，之后再撤销。
     pub(super) fn release_processes(&mut self) {
-        let actions = self.scheduler.release_all();
-        if let Some(view) = &self.view {
-            for planned in &actions {
-                let _ = execute(&self.executor, planned, &view.classes);
-            }
+        for _ in 0..2 {
+            let now = self.now();
+            let Ok(snapshot) = self.snapshotter.take(now) else {
+                return;
+            };
+            let classes = self.classify(&snapshot, now);
+            let plan = self.scheduler.plan(&ScheduleInput {
+                snapshot: &snapshot,
+                classes: &classes,
+                activity: &self.activity,
+                enabled: false,
+                user_mode: self.settings.mode,
+                game_mode: None,
+            });
+            self.execute_plan(&plan.actions, &classes);
         }
     }
 
@@ -80,7 +114,7 @@ impl Engine {
         let schedule = self.scheduler.state(&p.facts.key);
         let state = if !self.settings.smart_schedule {
             ScheduleState::Off
-        } else if !(c.is_schedulable() || c.is_chore()) {
+        } else if !c.is_schedulable() {
             ScheduleState::Excluded
         } else {
             match schedule {

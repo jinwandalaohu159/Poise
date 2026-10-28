@@ -1,13 +1,16 @@
-//! 调度策略：根据一个进程的类别和前台/后台状态，决定它"应该"处于什么状态。纯函数，不记状态。
+//! 调度策略：根据一个进程的情况，决定它"应该"处于什么状态。纯函数，不记状态。
 //!
-//! | 类别 | 在后台 | 在前台 |
-//! |---|---|---|
-//! | 低优先级 | 小核 · 低于正常 · 节能 | 小核 · 低于正常 · 不节能 |
-//! | 自动 | 小核 · 低于正常 · 节能 | 不限核心 · 高于正常 · 不节能 |
-//! | 始终优先（含临时全速） | 不限核心 · 高于正常 · 不节能 | 同左 |
-//! | 游戏 | 不限核心 · 高 · 不节能 | 同左 |
+//! 原则是**只让路，不提速**：Poise 从不调高任何程序的优先级（提速会和声音、输入、系统组件抢资源，
+//! 反而卡顿），只把在后台持续占用处理器的程序挪开，让正在用的程序自然拿到资源。
 //!
-//! 正在发声的程序在后台只挪到小核；白名单里的后台杂活只挪到小核并节能，不改优先级。
+//! | 情况 | 状态 |
+//! |---|---|
+//! | 正在用（前台、刚用过、游戏、始终优先、临时全速）或正在发声（整个进程树） | 不调整 |
+//! | 低优先级（用户指定） | 小核 · 低于正常 · 在后台节能 |
+//! | 自动，在后台持续占用处理器 | 小核 · 低于正常 · 节能（保持到它回到前台、发声或退出） |
+//! | 自动，在后台闲着 | 不调整（闲着的程序不和谁抢资源，不值得动它） |
+//!
+//! 系统进程不在调度范围内。
 
 use crate::action::{CoreSet, EcoQos};
 use crate::classify::Classification;
@@ -29,43 +32,17 @@ impl Desired {
         cores: CoreSet::All,
     };
 
-    const GAME: Self = Self {
-        priority: Some(PriorityClass::High),
-        eco: EcoQos::Off,
-        cores: CoreSet::All,
-    };
-
-    /// 前台程序、始终优先、临时全速。
-    const RAISED: Self = Self {
-        priority: Some(PriorityClass::AboveNormal),
-        eco: EcoQos::Off,
-        cores: CoreSet::All,
-    };
-
-    /// 在后台时让出性能（自动、低优先级）。
-    const YIELDED: Self = Self {
+    /// 在后台让出性能。
+    pub const YIELDED: Self = Self {
         priority: Some(PriorityClass::BelowNormal),
         eco: EcoQos::On,
         cores: CoreSet::Efficiency,
     };
 
     /// 低优先级程序到了前台：仍在小核，但不节能，界面照样能点。
-    const LOW_IN_FOREGROUND: Self = Self {
+    pub const LOW_IN_FOREGROUND: Self = Self {
         priority: Some(PriorityClass::BelowNormal),
         eco: EcoQos::Off,
-        cores: CoreSet::Efficiency,
-    };
-
-    /// 在后台发声的程序：只挪到小核，不节能、不降优先级。
-    const AUDIO_IN_BACKGROUND: Self = Self {
-        priority: None,
-        eco: EcoQos::Default,
-        cores: CoreSet::Efficiency,
-    };
-
-    const CHORE: Self = Self {
-        priority: None,
-        eco: EcoQos::On,
         cores: CoreSet::Efficiency,
     };
 
@@ -80,36 +57,46 @@ pub struct ProcessView<'a> {
     pub class: &'a Classification,
     /// 游戏正在运行（包括切到后台的游戏）。
     pub active_game: bool,
-    /// 刚失去前台不久（防抖期内）。
+    /// 刚失去前台不久（保持期内）。
     pub recently_foreground: bool,
     /// 用户临时全速。
     pub boosted: bool,
+    /// 在后台持续占用处理器（由调度器跨周期判断）。
+    pub busy: bool,
 }
 
-/// 安全守卫（`safety::SafetyGuard::check_demote`）按同样的规则再把关一次：改这里时那边一起改。
+/// 正在被用户使用、绝不让路的程序。安全守卫（`safety::SafetyGuard::check_demote`）
+/// 按同样的规则再把关一次：改这里时那边一起改。
+pub fn in_use(v: &ProcessView) -> bool {
+    let c = v.class;
+    c.in_foreground_tree
+        || v.recently_foreground
+        || v.active_game
+        || v.boosted
+        || c.plays_audio
+        || matches!(
+            c.preference,
+            AppPreference::AlwaysFast | AppPreference::Game
+        )
+}
+
 pub fn decide(v: &ProcessView) -> Desired {
     let c = v.class;
-    if c.is_chore() {
-        return Desired::CHORE;
-    }
-    if !c.is_schedulable() {
+    // 发声的程序、正在玩的游戏连用户指定的"低优先级"也不调整。
+    if !c.is_schedulable() || c.plays_audio || v.boosted || v.active_game {
         return Desired::NEUTRAL;
     }
-    if v.active_game {
-        return Desired::GAME;
+    if c.preference == AppPreference::Background {
+        return if c.in_foreground_tree {
+            Desired::LOW_IN_FOREGROUND
+        } else {
+            Desired::YIELDED
+        };
     }
-    let category = if v.boosted {
-        AppPreference::AlwaysFast
+    if v.busy && !in_use(v) {
+        Desired::YIELDED
     } else {
-        c.preference
-    };
-    let foreground = c.in_foreground_tree || v.recently_foreground;
-    match category {
-        AppPreference::AlwaysFast => Desired::RAISED,
-        AppPreference::Background if foreground => Desired::LOW_IN_FOREGROUND,
-        AppPreference::Auto | AppPreference::Game if foreground => Desired::RAISED,
-        _ if c.plays_audio => Desired::AUDIO_IN_BACKGROUND,
-        _ => Desired::YIELDED,
+        Desired::NEUTRAL
     }
 }
 
@@ -135,82 +122,96 @@ mod tests {
         }
     }
 
-    fn view(c: &Classification) -> ProcessView<'_> {
+    fn view(c: &Classification, busy: bool) -> ProcessView<'_> {
         ProcessView {
             class: c,
             active_game: false,
             recently_foreground: false,
             boosted: false,
+            busy,
         }
     }
 
-    fn d(c: &Classification) -> Desired {
-        decide(&view(c))
-    }
-
     #[test]
-    fn each_category_in_background_and_foreground() {
+    fn nothing_is_ever_raised() {
         use AppPreference::*;
-        let cases = [
-            (Background, false, Desired::YIELDED),
-            (Background, true, Desired::LOW_IN_FOREGROUND),
-            (Auto, false, Desired::YIELDED),
-            (Auto, true, Desired::RAISED),
-            (AlwaysFast, false, Desired::RAISED),
-            (AlwaysFast, true, Desired::RAISED),
-        ];
-        for (pref, fg, want) in cases {
-            assert_eq!(d(&class(pref, fg)), want, "{pref:?} 前台={fg}");
+        for pref in [Auto, AlwaysFast, Game, Background] {
+            for fg in [false, true] {
+                for busy in [false, true] {
+                    let c = class(pref, fg);
+                    let d = decide(&view(&c, busy));
+                    assert!(
+                        d.priority
+                            .is_none_or(|p| p.rank() < PriorityClass::Normal.rank()),
+                        "{pref:?} 前台={fg} 忙={busy}：{d:?}"
+                    );
+                }
+            }
         }
     }
 
     #[test]
-    fn games_get_high_even_in_background() {
-        let c = class(AppPreference::Game, false);
-        let mut v = view(&c);
-        v.active_game = true;
-        assert_eq!(decide(&v), Desired::GAME);
+    fn only_busy_background_programs_yield() {
+        let idle = class(AppPreference::Auto, false);
+        assert_eq!(decide(&view(&idle, false)), Desired::NEUTRAL);
+        assert_eq!(decide(&view(&idle, true)), Desired::YIELDED);
+        let fg = class(AppPreference::Auto, true);
+        assert_eq!(decide(&view(&fg, true)), Desired::NEUTRAL);
     }
 
     #[test]
-    fn debounce_keeps_the_foreground_state() {
+    fn programs_in_use_never_yield() {
         let c = class(AppPreference::Auto, false);
-        let mut v = view(&c);
-        v.recently_foreground = true;
-        assert_eq!(decide(&v), Desired::RAISED);
+        let recent = ProcessView {
+            recently_foreground: true,
+            ..view(&c, true)
+        };
+        let game = ProcessView {
+            active_game: true,
+            ..view(&c, true)
+        };
+        let boosted = ProcessView {
+            boosted: true,
+            ..view(&c, true)
+        };
+        for v in [recent, game, boosted] {
+            assert_eq!(decide(&v), Desired::NEUTRAL);
+        }
+        for pref in [AppPreference::AlwaysFast, AppPreference::Game] {
+            assert_eq!(decide(&view(&class(pref, false), true)), Desired::NEUTRAL);
+        }
     }
 
     #[test]
-    fn boost_overrides_the_category() {
+    fn low_priority_programs_stay_low_unless_they_play_audio() {
+        let bg = class(AppPreference::Background, false);
+        assert_eq!(decide(&view(&bg, false)), Desired::YIELDED);
+        let fg = class(AppPreference::Background, true);
+        assert_eq!(decide(&view(&fg, false)), Desired::LOW_IN_FOREGROUND);
+        let audio = Classification {
+            plays_audio: true,
+            ..bg
+        };
+        assert_eq!(decide(&view(&audio, true)), Desired::NEUTRAL);
+    }
+
+    #[test]
+    fn a_game_inheriting_low_priority_from_its_launcher_is_not_lowered() {
         let c = class(AppPreference::Background, false);
-        let mut v = view(&c);
-        v.boosted = true;
-        assert_eq!(decide(&v), Desired::RAISED);
+        let game = ProcessView {
+            active_game: true,
+            ..view(&c, false)
+        };
+        assert_eq!(decide(&game), Desired::NEUTRAL);
     }
 
     #[test]
-    fn audio_in_background_only_moves_cores() {
+    fn audio_is_left_to_the_system() {
         let c = Classification {
             plays_audio: true,
             ..class(AppPreference::Auto, false)
         };
-        assert_eq!(d(&c), Desired::AUDIO_IN_BACKGROUND);
-        let fg = Classification {
-            plays_audio: true,
-            ..class(AppPreference::Auto, true)
-        };
-        assert_eq!(d(&fg), Desired::RAISED);
-    }
-
-    #[test]
-    fn chores_move_to_small_cores_without_priority() {
-        let c = Classification {
-            role: Role::ServiceHost,
-            schedule: ScheduleScope::Chore,
-            ..class(AppPreference::Auto, false)
-        };
-        assert_eq!(d(&c), Desired::CHORE);
-        assert_eq!(Desired::CHORE.priority, None);
+        assert_eq!(decide(&view(&c, true)), Desired::NEUTRAL);
     }
 
     #[test]
@@ -218,8 +219,8 @@ mod tests {
         let c = Classification {
             role: Role::SystemOther,
             schedule: ScheduleScope::Excluded,
-            ..class(AppPreference::Auto, true)
+            ..class(AppPreference::Background, false)
         };
-        assert_eq!(d(&c), Desired::NEUTRAL);
+        assert_eq!(decide(&view(&c, true)), Desired::NEUTRAL);
     }
 }

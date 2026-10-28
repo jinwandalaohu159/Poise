@@ -25,10 +25,8 @@ pub enum DenyReason {
     Untouchable,
     /// 存在反作弊时，游戏只允许任务管理器等价的操作。
     AntiCheatGame,
-    /// 只调度用户会话里的普通程序和白名单里的后台杂活。
+    /// 只调度用户会话里的普通程序。
     NotUserApp,
-    /// 后台杂活只挪到小核、开启节能，不改优先级。
-    ChoreKeepsPriority,
     /// 正在被使用（前台、可见窗口、正在发声、用户要求保持快）。
     InUse,
     /// 最近几分钟在干活。
@@ -47,7 +45,6 @@ impl fmt::Display for DenyReason {
             Self::Untouchable => "受保护进程，永不触碰",
             Self::AntiCheatGame => "反作弊游戏只允许任务管理器等价的操作",
             Self::NotUserApp => "不是用户程序",
-            Self::ChoreKeepsPriority => "后台杂活不调整优先级",
             Self::InUse => "正在使用中",
             Self::RecentlyActive => "最近在干活",
             Self::NeedsManual => "会短暂打扰，只能手动触发",
@@ -82,28 +79,30 @@ impl SafetyGuard {
                     Err(DenyReason::NotUserApp)
                 }
             }
-            ActionKind::Demote => Self::check_demote(action, c),
+            ActionKind::Demote => Self::check_demote(c),
             ActionKind::Restart => Self::check_restart(action, c, trigger),
         }
     }
 
     /// 与调度策略（`schedule::policy`）的规则对应、互为把关：改其中一边时两边一起改。
-    fn check_demote(action: &Action, c: &Classification) -> Result<(), DenyReason> {
-        if c.is_chore() {
-            return if matches!(action, Action::SetPriority { .. }) {
-                Err(DenyReason::ChoreKeepsPriority)
-            } else {
-                Ok(())
-            };
-        }
+    fn check_demote(c: &Classification) -> Result<(), DenyReason> {
         if !c.is_schedulable() {
             return Err(DenyReason::NotUserApp);
         }
-        // 用户设为"低优先级"的程序在前台也留在小核；其他程序在前台不降级。
-        let foreground = c.in_foreground_tree && c.preference != AppPreference::Background;
-        // 正在发声的程序只允许挪到小核，不降优先级、不节能，避免爆音和通话卡顿。
-        let audio = c.plays_audio && !matches!(action, Action::SetCoreSet { .. });
-        if foreground || audio || c.is_game || c.preference == AppPreference::AlwaysFast {
+        // 正在发声的程序（整个进程树）、游戏完全不降级，连"低优先级"也让步。
+        if c.plays_audio || c.is_game {
+            return Err(DenyReason::InUse);
+        }
+        // 用户设为"低优先级"的程序在前台也留在小核。
+        if c.preference == AppPreference::Background {
+            return Ok(());
+        }
+        let in_use = c.in_foreground_tree
+            || matches!(
+                c.preference,
+                AppPreference::AlwaysFast | AppPreference::Game
+            );
+        if in_use {
             return Err(DenyReason::InUse);
         }
         Ok(())
@@ -322,12 +321,15 @@ mod tests {
     };
 
     #[test]
-    fn audio_apps_may_only_move_to_small_cores() {
+    fn audio_apps_are_not_demoted_at_all() {
         let c = Classification {
             plays_audio: true,
             ..user_app()
         };
-        assert_eq!(check(TO_SMALL_CORES, &c, Trigger::Auto), Ok(()));
+        assert_eq!(
+            check(TO_SMALL_CORES, &c, Trigger::Auto),
+            Err(DenyReason::InUse)
+        );
         assert_eq!(check(LOWER, &c, Trigger::Auto), Err(DenyReason::InUse));
     }
 
@@ -340,22 +342,6 @@ mod tests {
         };
         assert_eq!(check(TO_SMALL_CORES, &c, Trigger::Auto), Ok(()));
         assert_eq!(check(LOWER, &c, Trigger::Auto), Ok(()));
-    }
-
-    #[test]
-    fn chores_move_to_small_cores_but_keep_priority() {
-        let c = Classification {
-            role: Role::ServiceHost,
-            schedule: ScheduleScope::Chore,
-            ..user_app()
-        };
-        assert_eq!(check(TO_SMALL_CORES, &c, Trigger::Auto), Ok(()));
-        assert_eq!(check(DEMOTE, &c, Trigger::Auto), Ok(()));
-        assert_eq!(
-            check(LOWER, &c, Trigger::Auto),
-            Err(DenyReason::ChoreKeepsPriority)
-        );
-        assert_eq!(check(BOOST, &c, Trigger::Auto), Err(DenyReason::NotUserApp));
     }
 
     #[test]

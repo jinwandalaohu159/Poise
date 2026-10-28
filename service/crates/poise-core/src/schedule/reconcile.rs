@@ -12,6 +12,8 @@ use super::policy::Desired;
 
 /// 程序连续几次自行改回优先级后放弃调整它。
 const MAX_FIGHTS: u8 = 3;
+/// 父进程恢复后这么久内新出现的子进程，仍可能是在恢复前继承了"低于正常"。
+const INHERIT_GRACE_MS: Millis = 10_000;
 
 /// 一个进程当前的调度状态（给界面看）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -51,6 +53,8 @@ pub struct Reconciler {
     fights: HashMap<ProcessKey, u8>,
     /// 已经退让、本次运行期间不再调整的进程。
     self_managed: HashSet<ProcessKey>,
+    /// 刚从"低于正常"恢复的进程及恢复时刻（见 [`INHERIT_GRACE_MS`]）。
+    restored_low: HashMap<ProcessKey, Millis>,
     /// 本轮计划所依据的采样时刻。
     plan_at: Millis,
 }
@@ -78,17 +82,23 @@ impl Reconciler {
     }
 
     /// 这个进程的优先级是否被 Poise 降低了（它新建的子进程会继承"低于正常"）。
+    /// 刚恢复不久的也算：恢复之前新建的子进程已经继承了"低于正常"。
     pub fn lowered(&self, key: &ProcessKey) -> bool {
-        self.applied.get(key).is_some_and(|a| {
+        let now_low = self.applied.get(key).is_some_and(|a| {
             a.current
                 .priority
                 .is_some_and(|p| p.rank() < PriorityClass::Normal.rank())
-        })
+        });
+        let recently_low = self
+            .restored_low
+            .get(key)
+            .is_some_and(|t| self.plan_at.saturating_sub(*t) <= INHERIT_GRACE_MS);
+        now_low || recently_low
     }
 
     /// 计算让进程达到期望状态所需的动作。读不到原始优先级时不调整优先级。
     /// `inherited_low` 表示它的"低于正常"是从被 Poise 降低的父进程继承来的：原始优先级按"正常"记，
-    /// 撤销时恢复为正常。
+    /// 不需要让路或撤销时恢复为正常。
     pub fn diff(
         &mut self,
         key: ProcessKey,
@@ -102,12 +112,22 @@ impl Reconciler {
         if self.priority_reverted(key, observed_priority) {
             return self.give_up(key);
         }
-        let original = if inherited_low && !self.applied.contains_key(&key) {
-            Some(PriorityClass::Normal)
-        } else {
-            observed_priority
-        };
-        self.diff_to(key, original, desired)
+        if inherited_low && !self.applied.contains_key(&key) {
+            // 继承来的"低于正常"是 Poise 间接造成的：记为 Poise 的调整（原本是正常），
+            // 不需要让路时恢复，Poise 退出时一并还原。
+            self.applied.insert(
+                key,
+                Applied {
+                    original_priority: PriorityClass::Normal,
+                    current: Desired {
+                        priority: Some(PriorityClass::BelowNormal),
+                        ..Desired::NEUTRAL
+                    },
+                    priority_set_at: self.plan_at,
+                },
+            );
+        }
+        self.diff_to(key, observed_priority, desired)
     }
 
     /// 程序是否又一次自己改回了优先级，并且已经达到放弃的次数。没达到时按实际优先级记录，
@@ -216,6 +236,13 @@ impl Reconciler {
         });
         match &planned.action {
             Action::SetPriority { class, .. } => {
+                let was_low = entry
+                    .current
+                    .priority
+                    .is_some_and(|p| p.rank() < PriorityClass::Normal.rank());
+                if was_low && class.rank() >= PriorityClass::Normal.rank() {
+                    self.restored_low.insert(planned.key, self.plan_at);
+                }
                 entry.current.priority = (*class != entry.original_priority).then_some(*class);
                 entry.priority_set_at = self.plan_at;
             }
@@ -234,6 +261,7 @@ impl Reconciler {
         self.blocked.retain(|k| alive.contains(k));
         self.fights.retain(|k, _| alive.contains(k));
         self.self_managed.retain(|k| alive.contains(k));
+        self.restored_low.retain(|k, _| alive.contains(k));
     }
 
     /// 恢复所有已调整的进程（服务停止时调用）。
@@ -246,14 +274,12 @@ impl Reconciler {
     }
 }
 
-/// 提速时不会把原本更高的优先级降下来；降速和恢复则按目标值执行。
+/// 只会降、不会升：目标比程序原来的优先级高时保持原样（例如用户自己设为"低"的程序，
+/// 不会因为"让路"反而被调到"低于正常"）。
 fn effective_priority(desired: Option<PriorityClass>, original: PriorityClass) -> PriorityClass {
     match desired {
-        None => original,
-        Some(p) if p.rank() > PriorityClass::Normal.rank() && original.rank() > p.rank() => {
-            original
-        }
-        Some(p) => p,
+        Some(p) if p.rank() < original.rank() => p,
+        _ => original,
     }
 }
 
@@ -274,15 +300,14 @@ mod tests {
     fn emits_only_needed_actions_and_converges() {
         let mut r = Reconciler::default();
         let want = Desired {
-            priority: Some(PriorityClass::AboveNormal),
-            eco: EcoQos::Off,
-            cores: CoreSet::All,
+            eco: EcoQos::On,
+            ..LOW
         };
         let actions = r.diff(KEY, Some(PriorityClass::Normal), false, want);
-        assert_eq!(actions.len(), 2);
+        assert_eq!(actions.len(), 3);
         apply_all(&mut r, &actions);
         assert!(
-            r.diff(KEY, Some(PriorityClass::AboveNormal), false, want)
+            r.diff(KEY, Some(PriorityClass::BelowNormal), false, want)
                 .is_empty()
         );
     }
@@ -316,16 +341,20 @@ mod tests {
     }
 
     #[test]
-    fn boost_never_lowers_an_already_higher_priority() {
+    fn priorities_above_the_original_are_never_applied() {
         let mut r = Reconciler::default();
         let want = Desired {
             priority: Some(PriorityClass::AboveNormal),
             ..Desired::NEUTRAL
         };
-        assert!(
-            r.diff(KEY, Some(PriorityClass::High), false, want)
-                .is_empty()
-        );
+        for original in [
+            PriorityClass::Idle,
+            PriorityClass::BelowNormal,
+            PriorityClass::Normal,
+        ] {
+            let a = r.diff(KEY, Some(original), false, want);
+            assert!(a.is_empty(), "{original:?}: {a:?}");
+        }
     }
 
     #[test]
@@ -414,5 +443,23 @@ mod tests {
             );
         }
         assert_eq!(r.state(&KEY), ProcessSchedule::Adjusted(LOW));
+    }
+
+    #[test]
+    fn yielding_never_raises_a_program_that_was_already_lower() {
+        let mut r = Reconciler::default();
+        let actions = r.diff(KEY, Some(PriorityClass::Idle), false, LOW);
+        assert!(
+            !actions
+                .iter()
+                .any(|a| matches!(a.action, Action::SetPriority { .. })),
+            "{actions:?}"
+        );
+        apply_all(&mut r, &actions);
+        assert!(
+            r.restore_all()
+                .iter()
+                .all(|a| !matches!(a.action, Action::SetPriority { .. }))
+        );
     }
 }

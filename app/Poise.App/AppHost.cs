@@ -3,6 +3,7 @@ using Poise.Core.Ipc;
 using Poise.Core.Localization;
 using Poise.Core.Monitoring;
 using Poise.Core.Settings;
+using Poise.Core.Updates;
 using Poise.App.UI.Services;
 using Poise.App.UI.Theme;
 
@@ -22,6 +23,8 @@ public sealed class AppHost : IDisposable
         Status = new StatusMonitor(Api);
         Presence = new UiPresence(Status, Api, dispatcher);
         Trend = new TrendFeed(Api, Presence, dispatcher);
+        Updates = new Updater(AppVersion.Installed, InstallerFiles.Default);
+        UpdateSchedule = new UpdateSchedule(Updates, dispatcher);
     }
 
     public static AppHost Current { get; private set; } = null!;
@@ -43,6 +46,11 @@ public sealed class AppHost : IDisposable
     /// <summary>走势图的数据（主页与卡顿诊断共用）。</summary>
     public TrendFeed Trend { get; }
 
+    /// <summary>检查和安装新版本（设置页显示状态）。</summary>
+    public Updater Updates { get; }
+
+    private UpdateSchedule UpdateSchedule { get; }
+
     /// <summary>在界面线程上调用。</summary>
     public static AppHost Start(DispatcherQueue dispatcher) => Current = new AppHost(dispatcher);
 
@@ -55,6 +63,8 @@ public sealed class AppHost : IDisposable
 
     public void Dispose()
     {
+        UpdateSchedule.Dispose();
+        Updates.Dispose();
         Trend.Dispose();
         Presence.Dispose();
         Status.Dispose();

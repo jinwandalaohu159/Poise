@@ -13,8 +13,6 @@ use crate::model::{Pid, ProcessSample, Snapshot};
 pub enum GroupKind {
     /// 用户程序：可以选择类别。
     App,
-    /// 白名单里的后台杂活。
-    Chore,
     /// 用户会话里不参与调度的程序（输入法、驱动助手、安全软件等）。
     Excluded,
 }
@@ -65,21 +63,6 @@ pub fn running_groups<'a>(
         let Some(c) = classes.get(&p.facts.key.pid) else {
             continue;
         };
-        if c.is_chore() {
-            if let Some(path) = &p.facts.image_path {
-                // 服务进程（svchost）路径相同，按服务分开列出。
-                let key = match p.facts.services.as_slice() {
-                    [only] => format!("{path}|{}", only.name),
-                    _ => path.clone(),
-                };
-                groups
-                    .entry(key)
-                    .or_insert_with(|| group(path, p, c, GroupKind::Chore))
-                    .members
-                    .push((p, c));
-            }
-            continue;
-        }
         let Some(app) = owner(p, c) else {
             continue;
         };
@@ -105,9 +88,6 @@ pub fn running_groups<'a>(
         let Some(c) = classes.get(&p.facts.key.pid) else {
             continue;
         };
-        if c.is_chore() {
-            continue;
-        }
         let Some(path) = owner(p, c).and_then(|app| app.facts.image_path.as_ref()) else {
             continue;
         };
@@ -148,7 +128,7 @@ fn group<'a>(
 mod tests {
     use super::*;
     use crate::classify::ScheduleScope;
-    use crate::model::{ProcessFacts, ProcessKey, ServiceFacts};
+    use crate::model::{ProcessFacts, ProcessKey};
     use crate::prefs::AppPreference;
 
     fn proc(pid: Pid, name: &str, path: Option<&str>) -> ProcessSample {
@@ -270,27 +250,6 @@ mod tests {
         assert!(w.groups().is_empty());
         let remembered = running_groups(&w.snapshot, &w.classes, &|p| p == r"c:\tool\tool.exe");
         assert_eq!(remembered.len(), 1);
-    }
-
-    #[test]
-    fn chores_are_split_by_service() {
-        let svchost = r"c:\windows\system32\svchost.exe";
-        let mut w = World::new();
-        for (pid, service) in [(30, "wuauserv"), (31, "BITS")] {
-            let mut p = proc(pid, "svchost.exe", Some(svchost));
-            p.facts.services = vec![ServiceFacts {
-                name: service.into(),
-                ..Default::default()
-            }];
-            let mut c = class(pid, false);
-            c.role = Role::ServiceHost;
-            c.schedule = ScheduleScope::Chore;
-            w.add(p, c);
-        }
-        let groups = w.groups();
-        assert_eq!(groups.len(), 2);
-        assert_eq!(groups[&format!("{svchost}|BITS")].kind, GroupKind::Chore);
-        assert_eq!(pids(&groups[&format!("{svchost}|wuauserv")]), vec![30]);
     }
 
     #[test]

@@ -120,7 +120,7 @@ public sealed record AppEntry(
 public sealed record AppProcess(uint Pid, string Name, float CpuPct, ulong MemoryBytes, AppSchedule Schedule);
 
 /// <summary>app：用户程序（可选择类别）；chore：系统后台杂活（移到能效核）；excluded：系统与驱动相关、不参与调度。</summary>
-public enum AppKind { App, Chore, Excluded }
+public enum AppKind { App, Excluded }
 
 /// <summary>scheduled：按类别调整；excluded：不参与调度；self_managed：程序自行管理；off：智能调度已关闭。</summary>
 public enum ScheduleState { Scheduled, Excluded, SelfManaged, Off }

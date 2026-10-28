@@ -50,7 +50,7 @@ impl Engine {
                     path: g.path.to_string(),
                     preference: match kind {
                         AppKind::App => self.settings.preferences.lookup(&g.main.facts),
-                        AppKind::Chore | AppKind::Excluded => AppPreference::Auto,
+                        AppKind::Excluded => AppPreference::Auto,
                     },
                     running: true,
                     is_game: g.is_game,

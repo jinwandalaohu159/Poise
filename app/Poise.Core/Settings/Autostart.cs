@@ -1,9 +1,5 @@
-using System.ComponentModel;
-using System.Diagnostics;
 using System.Security;
 using System.Security.Principal;
-using System.Text;
-using Microsoft.Win32;
 using Poise.Core.Diagnostics;
 
 namespace Poise.Core.Settings;
@@ -15,6 +11,7 @@ namespace Poise.Core.Settings;
 /// 登录触发的任务则立即启动。任务定义是安装目录里的 AutostartTask.xml（安装脚本也用它），
 /// 每个用户一个任务，以普通权限运行，创建和删除都不需要管理员权限。
 /// </para>
+/// 这里的方法都不抛异常：失败时记日志，返回"未开启"或"没有成功"。
 /// </summary>
 public static class Autostart
 {
@@ -22,9 +19,6 @@ public static class Autostart
 
     /// <summary>任务计划程序里的文件夹，卸载时整个删除。</summary>
     private const string TaskFolder = "Poise";
-
-    /// <summary>已注册任务的索引（普通用户可读），比启动 schtasks 查询快得多。</summary>
-    private const string TaskCacheKey = @"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Schedule\TaskCache\Tree";
 
     /// <summary>托盘代理与界面放在同一目录。</summary>
     public static string AgentPath => Path.Combine(AppContext.BaseDirectory, "poise-agent.exe");
@@ -35,7 +29,7 @@ public static class Autostart
     public static bool IsAvailable => File.Exists(AgentPath) && File.Exists(TemplatePath);
 
     /// <summary>与 install.ps1 使用同一个名字。</summary>
-    private static string TaskName => $@"{TaskFolder}\Agent {UserSid}";
+    private static string TaskName => $"Agent {UserSid}";
 
     private static string UserSid => WindowsIdentity.GetCurrent().User?.Value ?? "";
 
@@ -43,42 +37,43 @@ public static class Autostart
     {
         get
         {
-            using var key = Registry.LocalMachine.OpenSubKey($@"{TaskCacheKey}\{TaskName}");
-            return key is not null;
+            try
+            {
+                return ScheduledTasks.Exists(TaskFolder, TaskName);
+            }
+            catch (ScheduledTaskException e)
+            {
+                AppLog.Warn(e.Message);
+                return false;
+            }
         }
     }
 
-    /// <summary>开启或关闭开机启动，返回是否成功（失败原因记在日志里）。</summary>
-    public static async Task<bool> SetAsync(bool enabled)
+    /// <summary>开启或关闭开机启动，返回是否成功。在后台线程上执行，不卡界面。</summary>
+    public static Task<bool> SetAsync(bool enabled) => Task.Run(() => Set(enabled));
+
+    private static bool Set(bool enabled)
     {
-        if (enabled == IsEnabled)
-        {
-            return true;
-        }
-        if (!enabled)
-        {
-            return await SchtasksAsync("/Delete", "/TN", TaskName, "/F");
-        }
-        if (!IsAvailable)
+        if (enabled && !IsAvailable)
         {
             return false;
         }
-        var file = Path.Combine(Path.GetTempPath(), $"poise-autostart-{Environment.ProcessId}.xml");
         try
         {
-            var xml = Fill(await File.ReadAllTextAsync(TemplatePath), UserSid, AgentPath);
-            // schtasks 只接受 UTF-16 的任务定义文件。
-            await File.WriteAllTextAsync(file, xml, Encoding.Unicode);
-            return await SchtasksAsync("/Create", "/TN", TaskName, "/XML", file, "/F");
+            if (enabled)
+            {
+                ScheduledTasks.Register(TaskFolder, TaskName, Fill(File.ReadAllText(TemplatePath), UserSid, AgentPath));
+            }
+            else
+            {
+                ScheduledTasks.Delete(TaskFolder, TaskName);
+            }
+            return true;
         }
-        catch (IOException e)
+        catch (Exception e) when (e is ScheduledTaskException or IOException)
         {
-            AppLog.Warn($"准备开机启动任务失败：{e.Message}");
+            AppLog.Warn($"{(enabled ? "开启" : "关闭")}开机启动失败：{e.Message}");
             return false;
-        }
-        finally
-        {
-            File.Delete(file);
         }
     }
 
@@ -87,37 +82,4 @@ public static class Autostart
         template
             .Replace("{UserSid}", SecurityElement.Escape(userSid))
             .Replace("{AgentPath}", SecurityElement.Escape(agentPath));
-
-    private static async Task<bool> SchtasksAsync(params string[] args)
-    {
-        var info = new ProcessStartInfo("schtasks.exe")
-        {
-            CreateNoWindow = true,
-            UseShellExecute = false,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-        };
-        foreach (var arg in args)
-        {
-            info.ArgumentList.Add(arg);
-        }
-        try
-        {
-            using var process = Process.Start(info)!;
-            var output = process.StandardOutput.ReadToEndAsync();
-            var error = process.StandardError.ReadToEndAsync();
-            await process.WaitForExitAsync();
-            if (process.ExitCode == 0)
-            {
-                return true;
-            }
-            AppLog.Warn($"schtasks {args[0]} 失败（{process.ExitCode}）：{(await error).Trim()}{(await output).Trim()}");
-            return false;
-        }
-        catch (Win32Exception e)
-        {
-            AppLog.Warn($"无法运行 schtasks：{e.Message}");
-            return false;
-        }
-    }
 }

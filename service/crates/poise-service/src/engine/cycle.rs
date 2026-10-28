@@ -1,4 +1,5 @@
 //! 采样周期：采集 → 观察趋势 → 分类 → 调度 → 读取传感器 → 健康评估 → 硬件模式 → 自动清理。
+//! 托盘代理不在时（Poise 已退出）只采样，不调度、不切换模式、不清理（见 `presence`）。
 
 use std::collections::HashMap;
 use std::time::Duration;
@@ -26,12 +27,17 @@ impl Engine {
             }
         };
         self.observe(&snapshot, now);
+        let active = self.ensure_presence(now);
         let classes = self.classify(&snapshot, now);
-        let outcome = self.schedule(&snapshot, &classes);
+        let outcome = self.schedule_if(active, &snapshot, &classes);
         let reading = self.read_sensors(outcome.game.is_some(), now);
         let health = self.assess(&snapshot, &classes, &outcome, &reading, now);
         self.record_history(&snapshot, &reading, now);
-        let effective_mode = self.apply_modes(outcome.effective_mode, &health, now);
+        let effective_mode = if active {
+            self.apply_modes(outcome.effective_mode, now)
+        } else {
+            outcome.effective_mode
+        };
         self.view = Some(View {
             snapshot,
             classes,
@@ -41,8 +47,10 @@ impl Engine {
             health,
         });
         self.remember_running_apps();
-        self.run_deferred_cleanup();
-        self.auto_clean(now);
+        if active {
+            self.run_deferred_cleanup();
+            self.auto_clean(now);
+        }
     }
 
     /// 前台切换、用户改模式时立即重新调度并落到硬件，不等下一次采样。
@@ -50,13 +58,16 @@ impl Engine {
     /// 这样紧接着的状态查询就是最终结果（包括过热降级后的实际模式），界面不会先显示一个中间状态。
     pub fn reschedule_now(&mut self) {
         let now = self.now();
+        if !self.ensure_presence(now) {
+            return;
+        }
         let Some(view) = self.view.take() else {
             return;
         };
         let snapshot = self.snapshotter.take(now).unwrap_or(view.snapshot);
         let classes = self.classify(&snapshot, now);
-        let outcome = self.schedule(&snapshot, &classes);
-        let effective_mode = self.apply_modes(outcome.effective_mode, &view.health, now);
+        let outcome = self.schedule_if(true, &snapshot, &classes);
+        let effective_mode = self.apply_modes(outcome.effective_mode, now);
         self.view = Some(View {
             snapshot,
             classes,
@@ -70,6 +81,7 @@ impl Engine {
     /// 只在采样周期里做的观察：CPU 占用、泄漏与增长趋势。
     fn observe(&mut self, snapshot: &Snapshot, now: Millis) {
         self.activity.update(snapshot);
+        self.measure_foreground_gpu(now);
         self.leaks.observe(snapshot);
         self.kernel_pool
             .observe(now, snapshot.system.kernel_nonpaged);
@@ -77,8 +89,26 @@ impl Engine {
         self.refresh_suspects(snapshot, now);
     }
 
-    fn classify(&self, snapshot: &Snapshot, now: Millis) -> HashMap<Pid, Classification> {
+    /// 前台全屏时测量它的显卡 3D 占用（识别游戏用）；不全屏时停止测量。
+    /// 立即重新调度时沿用上次的结果，不额外测量。
+    fn measure_foreground_gpu(&mut self, now: Millis) {
+        let session = self.session.current(now);
+        self.foreground_gpu = match session.foreground_pid.filter(|_| session.fullscreen) {
+            Some(pid) => self.gpu.usage_3d(pid).map(|pct| (pid, pct)),
+            None => {
+                self.gpu.stop();
+                None
+            }
+        };
+    }
+
+    pub(super) fn classify(
+        &self,
+        snapshot: &Snapshot,
+        now: Millis,
+    ) -> HashMap<Pid, Classification> {
         let own: Vec<Pid> = self.own_pids.iter().copied().collect();
+        let games = self.scheduler.active_games();
         self.classifier.classify_all(&ClassifyInput {
             snapshot,
             session: &self.session.current(now),
@@ -86,6 +116,8 @@ impl Engine {
             preferences: &self.settings.preferences,
             own_pids: &own,
             session_fresh: self.session.is_fresh(now),
+            foreground_gpu: self.foreground_gpu,
+            active_games: &games,
         })
     }
 

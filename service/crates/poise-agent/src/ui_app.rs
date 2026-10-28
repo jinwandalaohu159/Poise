@@ -18,6 +18,7 @@ const EVENT_FLYOUT: &str = r"Local\Poise.App.Flyout";
 const EVENT_ACTIVATE: &str = r"Local\Poise.App.Activate";
 const EVENT_EXIT: &str = r"Local\Poise.App.Exit";
 const EVENT_DISMISS: &str = r"Local\Poise.App.Dismiss";
+const EVENT_UPDATE: &str = r"Local\Poise.App.Update";
 
 /// 等界面交出前台的最长时间。
 const YIELD_TIMEOUT: Duration = Duration::from_millis(300);
@@ -49,6 +50,13 @@ pub fn toggle_flyout() {
 pub fn open_window() {
     if !signal(EVENT_ACTIVATE) {
         launch(&[]);
+    }
+}
+
+/// 打开主窗口的更新页面（发现新版本时，从托盘通知或菜单进入）。
+pub fn open_update() {
+    if !signal(EVENT_UPDATE) {
+        launch(&["--update"]);
     }
 }
 

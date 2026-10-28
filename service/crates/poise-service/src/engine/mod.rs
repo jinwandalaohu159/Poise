@@ -19,9 +19,11 @@ mod cleanup;
 mod convert;
 mod cycle;
 mod error;
+mod game_prefs;
 mod growth;
 mod mode;
 mod optimizer;
+mod presence;
 mod requests;
 mod schedule;
 mod session;
@@ -39,7 +41,7 @@ use poise_core::cleanup::{
     BootBaseline, CleanupStep, Grown, GrowthConfig, GrowthWatch, KernelPoolConfig, KernelPoolWatch,
     LeakConfig, LeakDetector, LeakSuspect,
 };
-use poise_core::diagnose::{Health, Heat, HeatWatch, MetricHistory};
+use poise_core::diagnose::{Health, Heat, HeatWatch, MetricHistory, OverheatGuard};
 use poise_core::model::{Millis, Pid, Snapshot};
 use poise_core::prefs::{Mode, Settings};
 use poise_core::safety::GuardedExecutor;
@@ -50,6 +52,7 @@ use poise_platform::act::executor::WinExecutor;
 use poise_platform::act::launcher::{DirectLauncher, Launcher, UserSessionLauncher};
 use poise_platform::act::self_tune;
 use poise_platform::observe::core_load::CoreLoadMeter;
+use poise_platform::observe::gpu::GpuMeter;
 use poise_platform::observe::process::snapshot::Snapshotter;
 use poise_platform::observe::system;
 use poise_platform::observe::topology::CpuTopology;
@@ -89,6 +92,12 @@ pub struct Engine {
     cfg: RunConfig,
     started: Instant,
     snapshotter: Snapshotter,
+    /// 托盘代理不在（Poise 已退出）：不调度、不切换模式，影响已全部撤销。
+    paused: bool,
+    /// 前台全屏程序的显卡占用（识别游戏用）。
+    gpu: GpuMeter,
+    /// 最近一次测到的前台全屏程序及其 3D 占用。
+    foreground_gpu: Option<(Pid, f32)>,
     activity: ActivityTracker,
     classifier: Classifier,
     scheduler: Scheduler,
@@ -97,8 +106,9 @@ pub struct Engine {
     growth: GrowthWatch,
     baseline_file: JsonFile<BootBaseline>,
     heat: HeatWatch,
-    /// 上一个周期的温度状态（"自动"模式的温度墙用）。
+    /// 上一个周期的温度状态（"自动"模式的温度墙、过热保护用）。
     last_heat: Heat,
+    overheat: OverheatGuard,
     auto_mode: AutoMode,
     /// 最近几分钟的整机指标（主页与卡顿诊断的走势图）。
     history: MetricHistory,
@@ -164,6 +174,9 @@ impl Engine {
         let mut engine = Self {
             started: Instant::now(),
             snapshotter: Snapshotter::default(),
+            paused: true,
+            gpu: GpuMeter::default(),
+            foreground_gpu: None,
             activity: ActivityTracker::new(ActivityConfig::default()),
             classifier: Classifier::new(ClassifyConfig::default()),
             scheduler: Scheduler::new(ScheduleConfig {
@@ -176,6 +189,7 @@ impl Engine {
             baseline_file,
             heat: HeatWatch::default(),
             last_heat: Heat::Normal,
+            overheat: OverheatGuard::default(),
             auto_mode: AutoMode::default(),
             history: MetricHistory::default(),
             core_load_meter: CoreLoadMeter::new(&topology),
@@ -199,6 +213,7 @@ impl Engine {
             cfg,
         };
         engine.prune_seen_apps();
+        engine.resync_game_settings();
         Ok(engine)
     }
 
@@ -217,6 +232,7 @@ impl Engine {
         if pid != std::process::id() {
             self.own_pids.remove(&pid);
         }
+        self.on_client_gone(pid);
     }
 
     /// 服务停止：撤销所有进程调整，还原硬件模式。系统优化项保留（它们是用户选择的）。
