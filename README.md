@@ -52,11 +52,14 @@ dotnet test app\Poise.Core.Tests    # 界面逻辑与契约测试
 ## 构建与安装
 
 ```powershell
+.\scripts\package.ps1      # 构建并生成安装程序 dist\Poise-Setup-<版本>.exe（加 -SkipBuild 只打包），不改动系统
 .\scripts\build.ps1        # 运行测试，发布版输出到 dist\Poise，不改动系统
 .\scripts\install.ps1      # 管理员 PowerShell：复制到 Program Files\Poise，安装并启动服务，启动托盘代理
 .\scripts\uninstall.ps1    # 管理员 PowerShell：卸载服务并还原所有修改，然后删除程序、记录与日志
 ```
 
+- 安装程序是单个 exe，用 Windows 自带的 IExpress 打包（不需要额外工具）：双击后请求管理员权限，自动安装或升级，结束时提示结果。
+- 安装后在"设置 → 应用"里登记为 Poise，可以从那里卸载（效果同 `uninstall.ps1`）。
 - 首次安装会为当前用户开启开机启动（托盘代理），之后由设置页控制。
 - 再次运行 `install.ps1` 即为升级：只替换文件、重启服务，保留设置、开机启动选择与优化记录。
 - 卸载时如有修改没能还原，程序和修改记录都会保留，可重启后再运行一次 `uninstall.ps1`。
