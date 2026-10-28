@@ -202,16 +202,16 @@ public sealed partial class AppsViewModel(AppHost host) : ObservableObject
         await LoadAsync();
     });
 
-    internal async Task SetPreferenceAsync(AppItem item, AppPreference value, AppPreference previous)
+    /// <summary>设置一个程序（按路径）的类别。立即生效，顺便刷新列表；失败时调用 <paramref name="revert"/> 回到原来的选项。</summary>
+    internal async Task SetPreferenceAsync(string path, AppPreference value, Action revert)
     {
-        // 偏好立即生效，顺便更新这一行的调度状态；失败时回到原来的选项。
         if (!await TryAsync(async () =>
             {
-                await host.Api.SetAppPreferenceAsync(item.Path, value);
+                await host.Api.SetAppPreferenceAsync(path, value);
                 await LoadAsync();
             }))
         {
-            item.Restore(previous);
+            revert();
         }
     }
 

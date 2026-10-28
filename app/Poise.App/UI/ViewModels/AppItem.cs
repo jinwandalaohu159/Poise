@@ -107,7 +107,7 @@ public sealed partial class AppItem : ObservableObject
         {
             return;
         }
-        _ = _owner.SetPreferenceAsync(this, (AppPreference)newValue, (AppPreference)oldValue);
+        _ = _owner.SetPreferenceAsync(Path, (AppPreference)newValue, () => Restore((AppPreference)oldValue));
     }
 
     partial void OnCanExpandChanged(bool value) => OnPropertyChanged(nameof(ChevronVisibility));
@@ -142,7 +142,7 @@ public sealed partial class AppItem : ObservableObject
     }
 
     /// <summary>设置显示的偏好但不发请求（服务拒绝时回到原来的选项）。</summary>
-    internal void Restore(AppPreference value)
+    private void Restore(AppPreference value)
     {
         _syncing = true;
         PreferenceIndex = (int)value;
@@ -164,7 +164,7 @@ public sealed partial class AppItem : ObservableObject
                 row.Update(p);
                 return row;
             }
-            return new ProcessItem(p);
+            return new ProcessItem(_owner, p);
         }).ToList();
         CollectionSync.Sync(Processes, rows, p => p.Key);
     }

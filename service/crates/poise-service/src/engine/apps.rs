@@ -39,10 +39,16 @@ impl Engine {
             .into_values()
             .map(|g| {
                 let kind = convert::app_kind(g.kind);
+                let separable = g.separable_members();
                 let processes: Vec<AppProcess> = g
                     .members
                     .iter()
-                    .map(|&(p, c)| self.app_process(view, p, c))
+                    .map(|&(p, c)| {
+                        let preference = separable
+                            .contains(&p.facts.key.pid)
+                            .then(|| self.settings.preferences.lookup(&p.facts));
+                        self.app_process(view, p, c, preference)
+                    })
                     .collect();
                 AppEntry {
                     pid: Some(g.main.facts.key.pid),
@@ -64,11 +70,19 @@ impl Engine {
             .collect()
     }
 
-    fn app_process(&self, view: &View, p: &ProcessSample, c: &Classification) -> AppProcess {
+    fn app_process(
+        &self,
+        view: &View,
+        p: &ProcessSample,
+        c: &Classification,
+        preference: Option<AppPreference>,
+    ) -> AppProcess {
         let cpus = view.snapshot.system.logical_cpus;
         AppProcess {
             pid: p.facts.key.pid,
             name: p.facts.name.clone(),
+            path: p.facts.image_path.clone().unwrap_or_default(),
+            preference,
             cpu_pct: self.activity.usage(&p.facts.key).share_pct(cpus),
             memory_bytes: p.metrics.memory_bytes,
             schedule: self.app_schedule(p, c),

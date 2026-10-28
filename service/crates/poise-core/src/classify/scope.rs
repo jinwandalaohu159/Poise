@@ -3,7 +3,6 @@
 use std::collections::HashMap;
 
 use super::{Role, ScheduleScope};
-use crate::known;
 use crate::model::{Pid, ProcessSample};
 use crate::prefs::{AppPreference, Preferences};
 
@@ -24,21 +23,10 @@ pub(super) fn preference_of(
 }
 
 /// 只调度用户会话里的普通程序。系统的东西交给系统：服务、会话 0 的进程、Windows 目录下的程序
-/// （桌面外壳、输入法、系统界面）一律不碰；名单里的程序（输入、驱动、安全软件）也不碰。
-pub(super) fn schedule_scope(p: &ProcessSample, role: &Role) -> ScheduleScope {
-    let name = p.facts.name.as_str();
+/// （桌面外壳、输入法、系统界面）一律不碰；名单里的程序（输入、驱动、安全软件，`listed`）也不碰。
+pub(super) fn schedule_scope(p: &ProcessSample, role: &Role, listed: bool) -> ScheduleScope {
     match role {
-        Role::UserApp
-            if !p.facts.in_windows_dir
-                && !known::is_never_scheduled(name)
-                && !p
-                    .facts
-                    .image_path
-                    .as_deref()
-                    .is_some_and(known::is_never_scheduled_path) =>
-        {
-            ScheduleScope::App
-        }
+        Role::UserApp if !p.facts.in_windows_dir && !listed => ScheduleScope::App,
         _ => ScheduleScope::Excluded,
     }
 }

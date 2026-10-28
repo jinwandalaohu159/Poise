@@ -274,11 +274,21 @@ impl Reconciler {
     }
 }
 
-/// 只会降、不会升：目标比程序原来的优先级高时保持原样（例如用户自己设为"低"的程序，
-/// 不会因为"让路"反而被调到"低于正常"）。
+/// 能提到的最高优先级（只给用户标记的游戏）。再高会和声音、输入、系统组件抢资源。
+const RAISE_CAP: PriorityClass = PriorityClass::AboveNormal;
+
+/// 实际要设置的优先级：
+/// - 让路：目标比原来低时才降（例如用户自己设为"低"的程序，不会因为"让路"反而被调到"低于正常"）；
+/// - 提速：最多到"高于正常"；原来已经更高（程序或用户自己设的）就保持原样，不会反而被降下来。
 fn effective_priority(desired: Option<PriorityClass>, original: PriorityClass) -> PriorityClass {
+    let normal = PriorityClass::Normal.rank();
     match desired {
-        Some(p) if p.rank() < original.rank() => p,
+        Some(p) if p.rank() < normal && p.rank() < original.rank() => p,
+        Some(p)
+            if p.rank() > normal && p.rank() <= RAISE_CAP.rank() && p.rank() > original.rank() =>
+        {
+            p
+        }
         _ => original,
     }
 }
@@ -341,20 +351,45 @@ mod tests {
     }
 
     #[test]
-    fn priorities_above_the_original_are_never_applied() {
-        let mut r = Reconciler::default();
-        let want = Desired {
-            priority: Some(PriorityClass::AboveNormal),
+    fn raising_stops_at_above_normal_and_never_lowers_a_higher_original() {
+        let raise = |to| Desired {
+            priority: Some(to),
             ..Desired::NEUTRAL
         };
-        for original in [
-            PriorityClass::Idle,
-            PriorityClass::BelowNormal,
-            PriorityClass::Normal,
-        ] {
-            let a = r.diff(KEY, Some(original), false, want);
-            assert!(a.is_empty(), "{original:?}: {a:?}");
-        }
+        let mut r = Reconciler::default();
+        let a = r.diff(
+            KEY,
+            Some(PriorityClass::Normal),
+            false,
+            raise(PriorityClass::AboveNormal),
+        );
+        assert_eq!(
+            a[0].action,
+            Action::SetPriority {
+                pid: KEY.pid,
+                class: PriorityClass::AboveNormal
+            }
+        );
+        let mut r = Reconciler::default();
+        assert!(
+            r.diff(
+                KEY,
+                Some(PriorityClass::Normal),
+                false,
+                raise(PriorityClass::High)
+            )
+            .is_empty()
+        );
+        let mut r = Reconciler::default();
+        assert!(
+            r.diff(
+                KEY,
+                Some(PriorityClass::High),
+                false,
+                raise(PriorityClass::AboveNormal)
+            )
+            .is_empty()
+        );
     }
 
     #[test]

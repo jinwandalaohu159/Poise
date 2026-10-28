@@ -12,10 +12,10 @@ use poise_core::cleanup::{
 use poise_core::diagnose::{Health, HealthCode, HistoryPoint, Level, StutterCause, StutterReport};
 use poise_core::prefs::{AppPreference, GameMode, Mode};
 use poise_protocol::{
-    AdvisoryDto, AppEntry, AppKind, AppProcess, AppSchedule, CleanupOverview, CleanupResult,
-    CleanupTrigger, CpuDto, Diagnosis, DiskDto, DiskHealthDto, DriveSpace, ErrorCode, FanDto,
-    HardwareInfo, LastCleanup, MemoryDto, Metrics, PriorityLevel, ResponseEnvelope, ScheduleState,
-    SinceBoot, Status, Trend, VolumeDto,
+    Adjustment, AdvisoryDto, AppEntry, AppKind, AppProcess, AppSchedule, CleanupOverview,
+    CleanupResult, CleanupTrigger, CpuDto, Diagnosis, DiskDto, DiskHealthDto, DriveSpace,
+    ErrorCode, FanDto, HardwareInfo, LastCleanup, MemoryDto, Metrics, PriorityLevel,
+    ResponseEnvelope, ScheduleState, SinceBoot, Status, Trend, VolumeDto,
 };
 use serde::Serialize;
 
@@ -221,6 +221,11 @@ fn apps() -> Vec<AppEntry> {
             foreground,
             small_cores,
             priority,
+            adjustment: match (small_cores, priority) {
+                (Some(true), _) => Adjustment::Yielded,
+                (_, PriorityLevel::Higher | PriorityLevel::High) => Adjustment::Raised,
+                _ => Adjustment::Protected,
+            },
         })
     };
     let other = |state| {
@@ -229,6 +234,7 @@ fn apps() -> Vec<AppEntry> {
             foreground: false,
             small_cores: None,
             priority: PriorityLevel::Normal,
+            adjustment: Adjustment::None,
         })
     };
     vec![
@@ -244,6 +250,8 @@ fn apps() -> Vec<AppEntry> {
                 AppProcess {
                     pid: 100,
                     name: "browser.exe".into(),
+                    path: r"c:\apps\browser.exe".into(),
+                    preference: None,
                     cpu_pct: 4.0,
                     memory_bytes: 2 * GB,
                     schedule: scheduled(true, Some(false), PriorityLevel::Higher).unwrap(),
@@ -251,6 +259,8 @@ fn apps() -> Vec<AppEntry> {
                 AppProcess {
                     pid: 101,
                     name: "gpu-helper.exe".into(),
+                    path: r"c:\apps\helper\gpu-helper.exe".into(),
+                    preference: Some(AppPreference::Game),
                     cpu_pct: 2.5,
                     memory_bytes: GB,
                     schedule: other(ScheduleState::SelfManaged).unwrap(),

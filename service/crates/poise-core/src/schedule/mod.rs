@@ -1,5 +1,5 @@
-//! 智能调度：只让路、不提速——在后台持续占用处理器的程序挪到小核并节能，正在用的程序不动；
-//! 游戏模式；临时全速。规则见 [`policy`]。
+//! 智能调度：让路为主——在后台持续占用处理器的程序挪到小核并节能，正在用的程序不动；
+//! 正在玩、正在发声的程序不让系统自动限速；标记的游戏提高一级；游戏模式；临时全速。规则见 [`policy`]。
 //!
 //! 对外只有 [`Scheduler`]：每个采样周期调用一次 [`Scheduler::plan`]，
 //! 把动作交给安全执行器后用 [`Scheduler::report`] 回报结果。
@@ -21,8 +21,8 @@ pub use reconcile::{PlannedAction, ProcessSchedule};
 
 use policy::ProcessView;
 use reconcile::Reconciler;
+use trackers::{AudioTracker, BusyTracker, ForegroundTracker, GameTracker, TempBoosts};
 pub use trackers::{BusyRule, ForegroundHold};
-use trackers::{BusyTracker, ForegroundTracker, GameTracker, TempBoosts};
 
 #[derive(Debug, Clone, Copy)]
 pub struct ScheduleConfig {
@@ -30,6 +30,8 @@ pub struct ScheduleConfig {
     pub foreground_hold: ForegroundHold,
     /// 后台程序怎样算"在忙"、要让路。
     pub busy: BusyRule,
+    /// 停声后多久内仍算"在发声"。
+    pub audio_hold_ms: Millis,
     /// 自动识别的游戏（全屏且在渲染）要持续多久才确认为"正在玩"。
     pub game_confirm_ms: Millis,
     /// 是否是大小核处理器。不是时不限制核心，只用优先级和节能区分前后台。
@@ -47,6 +49,7 @@ impl Default for ScheduleConfig {
                 core_pct: 10.0,
                 after_ms: 10_000,
             },
+            audio_hold_ms: 30_000,
             game_confirm_ms: 6_000,
             hybrid: true,
         }
@@ -86,6 +89,7 @@ pub struct Scheduler {
     cfg: ScheduleConfig,
     foreground: ForegroundTracker,
     games: GameTracker,
+    audio: AudioTracker,
     busy: BusyTracker,
     boosts: TempBoosts,
     reconciler: Reconciler,
@@ -106,6 +110,8 @@ impl Scheduler {
             .update(now, input.classes, self.cfg.foreground_hold);
         self.games
             .update(snap, input.classes, now, self.cfg.game_confirm_ms);
+        self.audio
+            .update(input.classes, now, self.cfg.audio_hold_ms);
         self.boosts.expire(now);
         let alive: HashSet<ProcessKey> = snap.processes.iter().map(|p| p.facts.key).collect();
         self.reconciler.retain_alive(&alive);
@@ -213,6 +219,7 @@ impl Scheduler {
             active_game: self.games.is_active(&key),
             recently_foreground: self.foreground.recently_foreground(class.root_pid),
             boosted: self.boosts.is_boosted(&key, class.root_pid),
+            audible: class.plays_audio || self.audio.audible(class.root_pid),
             busy: false,
         };
         view.busy = self

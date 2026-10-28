@@ -1,10 +1,12 @@
-//! 调度需要跨时间记住的四件事，各在一个文件里：前台保持、正在玩的游戏、后台忙碌、临时全速。
+//! 调度需要跨时间记住的五件事，各在一个文件里：前台保持、正在玩的游戏、发声保持、后台忙碌、临时全速。
 
+mod audio;
 mod boosts;
 mod busy;
 mod foreground;
 mod games;
 
+pub use audio::AudioTracker;
 pub use boosts::TempBoosts;
 pub use busy::{BusyRule, BusyTracker};
 pub use foreground::{ForegroundHold, ForegroundTracker};

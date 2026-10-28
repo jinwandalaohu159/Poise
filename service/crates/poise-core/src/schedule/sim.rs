@@ -1,5 +1,6 @@
 //! 模拟复盘：按 2 秒一轮推进时间，模拟真实使用场景（玩游戏、来回切换、后台下载、播放声音），
-//! 检查调度器"轻"和"稳"——闲着的程序从不被碰、正在用的程序从不被降级、同一个程序不会被来回调整。
+//! 检查调度器"轻"和"稳"——闲着的程序从不被碰、正在用的程序从不被降级、同一个程序不会被来回调整；
+//! 正在玩、正在发声的程序只被保护一次（不让系统自动节能限速），之后不再动。
 
 use std::collections::HashMap;
 
@@ -204,6 +205,26 @@ impl Sim {
         )
     }
 
+    fn is_protected(&self, pid: Pid) -> bool {
+        matches!(
+            self.scheduler.state(&ProcessKey { pid, created: 1 }),
+            ProcessSchedule::Adjusted(d) if d == Desired::PROTECTED
+        )
+    }
+
+    /// 对这个进程只做过"不让系统节能限速"，没有改优先级、没有限核心。
+    fn only_protected(&self, pid: Pid) -> bool {
+        self.actions_on(pid).iter().all(|a| {
+            matches!(
+                a,
+                Action::SetEcoQos {
+                    state: EcoQos::Off,
+                    ..
+                }
+            )
+        })
+    }
+
     fn never_lowered(&self, pid: Pid) -> bool {
         self.actions_on(pid).iter().all(|a| match a {
             Action::SetPriority { class, .. } => class.rank() >= PriorityClass::Normal.rank(),
@@ -252,8 +273,13 @@ fn replay_gaming_with_an_idle_background() {
     sim.run_for(5 * 60_000);
 
     assert_eq!(sim.mode(), Mode::Full);
-    // 后台什么都没干，调度就什么都不做：没有任何一个进程被调整过。
-    assert!(sim.log.is_empty(), "{:?}", sim.log);
+    // 后台什么都没干：闲着的程序一个都没碰。游戏和放歌的浏览器各只被保护一次，切来切去也不再动。
+    let expected: HashMap<Pid, usize> = [GAME, BROWSER, RENDERER, 4].map(|p| (p, 1)).into();
+    assert_eq!(sim.adjustments_per_process(), expected);
+    for pid in [GAME, BROWSER, RENDERER, 4] {
+        assert!(sim.only_protected(pid));
+        assert!(sim.is_protected(pid));
+    }
 }
 
 /// 复盘"不玩游戏，在几个程序之间来回切换"：调度不应该跟着来回折腾。
@@ -340,7 +366,73 @@ fn programs_playing_audio_are_never_touched_even_when_busy() {
     ]);
     sim.foreground = Some(1);
     sim.run_for(10 * 60_000);
-    assert!(sim.log.is_empty(), "{:?}", sim.log);
+    // 发声的整个进程树只被保护一次，忙也不让路。
+    let expected: HashMap<Pid, usize> = [2, 3].map(|p| (p, 1)).into();
+    assert_eq!(sim.adjustments_per_process(), expected);
+    assert!(sim.only_protected(2) && sim.only_protected(3));
+}
+
+/// 切歌、暂停、语音里的短暂安静：保持一会儿，不来回切换；停得久了才回到普通程序的规则。
+#[test]
+fn short_audio_pauses_do_not_flip_the_state() {
+    let mut sim = Sim::new(vec![
+        app(1),
+        Proc {
+            cpu_pct: 80.0,
+            audio: true,
+            ..app(2)
+        },
+    ]);
+    sim.foreground = Some(1);
+    sim.run_for(60_000);
+    for _ in 0..10 {
+        sim.proc_mut(2).audio = false;
+        sim.run_for(16_000);
+        sim.proc_mut(2).audio = true;
+        sim.run_for(30_000);
+    }
+    assert!(sim.is_protected(2));
+    assert_eq!(sim.adjustments_per_process(), HashMap::from([(2, 1)]));
+    // 停了很久，又一直在后台占处理器：按普通程序的规则让路。
+    sim.proc_mut(2).audio = false;
+    sim.run_for(60_000);
+    assert!(sim.is_yielded(2));
+}
+
+/// 用户标记的游戏、始终优先的程序：在后台也不让系统限速（窗口化、没被自动识别的游戏靠标记）；
+/// 标记的游戏另外提高一级优先级。
+#[test]
+fn marked_programs_are_protected_in_the_background() {
+    let mut sim = Sim::new(vec![
+        app(1),
+        Proc {
+            cpu_pct: 200.0,
+            preference: AppPreference::Game,
+            ..app(2)
+        },
+        Proc {
+            cpu_pct: 50.0,
+            preference: AppPreference::AlwaysFast,
+            ..app(3)
+        },
+    ]);
+    sim.foreground = Some(1);
+    sim.run_for(5 * 60_000);
+    assert_eq!(sim.mode(), Mode::Full);
+    assert!(sim.is_protected(3) && sim.only_protected(3));
+    assert!(matches!(
+        sim.scheduler.state(&ProcessKey { pid: 2, created: 1 }),
+        ProcessSchedule::Adjusted(d) if d == Desired::GAME
+    ));
+    assert!(sim.actions_on(2).contains(&&Action::SetPriority {
+        pid: 2,
+        class: PriorityClass::AboveNormal
+    }));
+    assert_eq!(
+        sim.adjustments_per_process(),
+        HashMap::from([(2, 1), (3, 1)])
+    );
+    assert!(sim.actions_on(1).is_empty());
 }
 
 #[test]
@@ -366,8 +458,10 @@ fn games_switch_the_mode_and_stay_active_when_alt_tabbed() {
     sim.foreground = Some(2);
     sim.run_for(10 * 60_000);
     assert_eq!(sim.mode(), Mode::Full);
-    // 游戏从不被降级，也从不被提速。
-    assert!(sim.actions_on(1).is_empty());
+    // 游戏从不被降级，也从不被提速，只是不让系统在它切到后台时限速。
+    assert!(sim.is_protected(1));
+    assert!(sim.only_protected(1));
+    assert_eq!(sim.adjustments_per_process().get(&1), Some(&1));
 }
 
 #[test]

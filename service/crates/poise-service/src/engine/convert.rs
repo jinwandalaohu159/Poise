@@ -1,15 +1,17 @@
 //! 内部数据 → 协议数据（给界面）。只做字段对应，不做判断。
 
+use poise_core::action::{CoreSet, EcoQos};
 use poise_core::app_groups::GroupKind;
 use poise_core::cleanup::Advisory;
 use poise_core::model::PriorityClass;
+use poise_core::schedule::Desired;
 use poise_hardware::memory::MemoryInfo;
 use poise_hardware::profiles::FanReading;
 use poise_hardware::storage::{DiskHealth, DiskReading};
 use poise_platform::observe::topology::CpuTopology;
 use poise_protocol::{
-    AdvisoryDto, AppKind, CpuDto, DiskDto, DiskHealthDto, DriveSpace, FanDto, MemoryDto,
-    PriorityLevel, VolumeDto,
+    Adjustment, AdvisoryDto, AppKind, CpuDto, DiskDto, DiskHealthDto, DriveSpace, FanDto,
+    MemoryDto, PriorityLevel, VolumeDto,
 };
 
 pub(super) fn fan(f: &FanReading) -> FanDto {
@@ -83,6 +85,21 @@ pub(super) fn priority_level(p: PriorityClass) -> PriorityLevel {
         PriorityClass::Normal => PriorityLevel::Normal,
         PriorityClass::AboveNormal => PriorityLevel::Higher,
         PriorityClass::High | PriorityClass::Realtime => PriorityLevel::High,
+    }
+}
+
+/// 已应用的调度状态 → Poise 对它做了什么。
+pub(super) fn adjustment(d: Desired) -> Adjustment {
+    if d.priority
+        .is_some_and(|p| p.rank() > PriorityClass::Normal.rank())
+    {
+        Adjustment::Raised
+    } else if d.priority.is_some() || d.cores == CoreSet::Efficiency || d.eco == EcoQos::On {
+        Adjustment::Yielded
+    } else if d.eco == EcoQos::Off {
+        Adjustment::Protected
+    } else {
+        Adjustment::None
     }
 }
 

@@ -122,6 +122,10 @@ public sealed class ContractTests
         Assert.Equal((6.5f, 3UL << 30), (browser.CpuPct, browser.MemoryBytes));
         Assert.Equal(["browser.exe", "gpu-helper.exe"], browser.Processes.Select(p => p.Name));
         Assert.Equal(ScheduleState.SelfManaged, browser.Processes[1].Schedule.State);
+        // 主进程跟随程序；有自己窗口的另一个程序可以单独设置类别。
+        Assert.Null(browser.Processes[0].Preference);
+        Assert.Equal(AppPreference.Game, browser.Processes[1].Preference);
+        Assert.Equal(@"c:\apps\helper\gpu-helper.exe", browser.Processes[1].Path);
         Assert.Equal(1UL << 30, browser.Processes[1].MemoryBytes);
     }
 
@@ -130,8 +134,8 @@ public sealed class ContractTests
     {
         var apps = TestSupport.Fixture<List<AppEntry>>("apps.json");
 
-        Assert.Equal(new AppSchedule(ScheduleState.Scheduled, false, true, PriorityLevel.Lower), apps[0].Schedule);
-        Assert.Equal(new AppSchedule(ScheduleState.Scheduled, true, false, PriorityLevel.Higher), apps[1].Schedule);
+        Assert.Equal(new AppSchedule(ScheduleState.Scheduled, false, true, PriorityLevel.Lower, Adjustment.Yielded), apps[0].Schedule);
+        Assert.Equal(new AppSchedule(ScheduleState.Scheduled, true, false, PriorityLevel.Higher, Adjustment.Raised), apps[1].Schedule);
         Assert.Null(apps[2].Schedule!.SmallCores);
         Assert.Equal(PriorityLevel.High, apps[2].Schedule!.Priority);
         Assert.Equal([ScheduleState.Excluded, ScheduleState.SelfManaged, ScheduleState.Off], apps.Skip(3).Take(3).Select(a => a.Schedule!.State));

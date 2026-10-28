@@ -3,7 +3,7 @@
 //! 分组沿用分类时的进程树（[`Classification::root_pid`]）：辅助进程归到主程序，独立程序单独成组。
 //! 同一路径的多棵进程树（同一程序开了两次）合并为一组。
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use crate::classify::{Classification, Role};
 use crate::model::{Pid, ProcessSample, Snapshot};
@@ -108,6 +108,26 @@ pub fn running_groups<'a>(
     groups
 }
 
+impl AppGroup<'_> {
+    /// 组里可以单独设置类别的进程：有自己窗口（或在玩）的另一个程序文件，例如客户端里的游戏本体。
+    /// 主程序跟随这一组的类别；同一个程序文件只取第一个进程。
+    pub fn separable_members(&self) -> HashSet<Pid> {
+        let mut seen: HashSet<&str> = HashSet::from([self.path]);
+        self.members
+            .iter()
+            .filter(|(p, c)| {
+                c.is_schedulable()
+                    && (c.has_visible_window || c.is_game)
+                    && p.facts
+                        .image_path
+                        .as_deref()
+                        .is_some_and(|path| seen.insert(path))
+            })
+            .map(|(p, _)| p.facts.key.pid)
+            .collect()
+    }
+}
+
 fn group<'a>(
     path: &'a str,
     main: &'a ProcessSample,
@@ -187,6 +207,34 @@ mod tests {
 
     fn pids(g: &AppGroup) -> Vec<Pid> {
         g.members.iter().map(|(p, _)| p.facts.key.pid).collect()
+    }
+
+    #[test]
+    fn other_programs_with_their_own_window_can_be_set_separately() {
+        let mut w = World::new();
+        w.add(
+            proc(10, "client.exe", Some(r"c:\riot\client.exe")),
+            class(10, true),
+        )
+        .add(
+            proc(11, "client.exe", Some(r"c:\riot\client.exe")),
+            class(10, true),
+        )
+        .add(
+            proc(12, "game.exe", Some(r"c:\riot\game\game.exe")),
+            class(10, true),
+        )
+        .add(
+            proc(13, "game.exe", Some(r"c:\riot\game\game.exe")),
+            class(10, true),
+        )
+        .add(
+            proc(14, "helper.exe", Some(r"c:\riot\helper.exe")),
+            class(10, false),
+        );
+        let groups = w.groups();
+        let g = &groups[r"c:\riot\client.exe"];
+        assert_eq!(g.separable_members(), HashSet::from([12]));
     }
 
     #[test]

@@ -5,6 +5,7 @@ namespace Poise.Core.Presentation;
 
 /// <summary>
 /// 调度相关的显示：程序偏好页每个程序、每个进程的当前状态（"后台 · 能效核 · 优先级较低"）。
+/// 只描述 Poise 做了什么：没调整过的进程显示"未调整"，不把程序自己设的优先级当成 Poise 的调整。
 /// </summary>
 public static class ScheduleText
 {
@@ -27,16 +28,31 @@ public static class ScheduleText
     private static IEnumerable<string> Parts(AppSchedule s)
     {
         yield return Loc.Get(s.Foreground ? "sched.foreground" : "sched.background");
+        switch (s.Adjustment)
+        {
+            case Adjustment.None:
+                yield return Loc.Get("sched.unadjusted");
+                yield break;
+            case Adjustment.Protected:
+                yield return Loc.Get("sched.protected");
+                yield break;
+            case Adjustment.Raised:
+                yield return Loc.Get(Priority(s.Priority));
+                yield return Loc.Get("sched.protected");
+                yield break;
+        }
         if (s.SmallCores is { } small)
         {
             yield return Loc.Get(small ? "sched.small_cores" : "sched.any_cores");
         }
-        yield return Loc.Get(s.Priority switch
-        {
-            PriorityLevel.Lower => "sched.priority.lower",
-            PriorityLevel.Higher => "sched.priority.higher",
-            PriorityLevel.High => "sched.priority.high",
-            _ => "sched.priority.normal",
-        });
+        yield return Loc.Get(Priority(s.Priority));
     }
+
+    private static string Priority(PriorityLevel p) => p switch
+    {
+        PriorityLevel.Lower => "sched.priority.lower",
+        PriorityLevel.Higher => "sched.priority.higher",
+        PriorityLevel.High => "sched.priority.high",
+        _ => "sched.priority.normal",
+    };
 }

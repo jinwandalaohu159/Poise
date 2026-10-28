@@ -159,7 +159,9 @@ pub fn is_anti_cheat_process(name: &str) -> bool {
 }
 
 pub fn is_anti_cheat_service(name: &str) -> bool {
-    ANTI_CHEAT_SERVICES.contains(&name.to_lowercase().as_str())
+    ANTI_CHEAT_SERVICES
+        .iter()
+        .any(|s| s.eq_ignore_ascii_case(name))
 }
 
 pub fn is_vm_process(name: &str) -> bool {
@@ -167,13 +169,18 @@ pub fn is_vm_process(name: &str) -> bool {
 }
 
 pub fn is_protected_service(name: &str) -> bool {
-    PROTECTED_SERVICES.contains(&name.to_lowercase().as_str())
+    PROTECTED_SERVICES
+        .iter()
+        .any(|s| s.eq_ignore_ascii_case(name))
 }
 
+/// 名单里不参与调度的程序（按文件名前缀）。
 pub fn is_never_scheduled(name: &str) -> bool {
     NEVER_SCHEDULED_PREFIXES.iter().any(|p| name.starts_with(p))
 }
 
+/// 名单里不参与调度的程序（按安装目录）。要逐个目录查找路径，分类时每个路径只算一次
+/// （见 `classify::tree::Marks`）。
 pub fn is_never_scheduled_path(path: &str) -> bool {
     NEVER_SCHEDULED_DIRS.iter().any(|d| path.contains(d))
 }

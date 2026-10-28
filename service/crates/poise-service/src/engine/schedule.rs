@@ -137,6 +137,7 @@ impl Engine {
             priority: convert::priority_level(
                 applied.priority.or(p.facts.priority).unwrap_or_default(),
             ),
+            adjustment: convert::adjustment(applied),
         }
     }
 

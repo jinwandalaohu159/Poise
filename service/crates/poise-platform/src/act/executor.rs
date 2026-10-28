@@ -13,9 +13,10 @@ use windows::Win32::System::Threading::{
     ABOVE_NORMAL_PRIORITY_CLASS, BELOW_NORMAL_PRIORITY_CLASS, HIGH_PRIORITY_CLASS,
     IDLE_PRIORITY_CLASS, NORMAL_PRIORITY_CLASS, PROCESS_CREATION_FLAGS,
     PROCESS_POWER_THROTTLING_CURRENT_VERSION, PROCESS_POWER_THROTTLING_EXECUTION_SPEED,
-    PROCESS_POWER_THROTTLING_STATE, PROCESS_SET_INFORMATION, PROCESS_SET_LIMITED_INFORMATION,
-    PROCESS_SYNCHRONIZE, PROCESS_TERMINATE, ProcessPowerThrottling, SetPriorityClass,
-    SetProcessDefaultCpuSets, SetProcessInformation, TerminateProcess, WaitForSingleObject,
+    PROCESS_POWER_THROTTLING_IGNORE_TIMER_RESOLUTION, PROCESS_POWER_THROTTLING_STATE,
+    PROCESS_SET_INFORMATION, PROCESS_SET_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE,
+    PROCESS_TERMINATE, ProcessPowerThrottling, SetPriorityClass, SetProcessDefaultCpuSets,
+    SetProcessInformation, TerminateProcess, WaitForSingleObject,
 };
 
 use crate::act::launcher::Launcher;
@@ -72,9 +73,11 @@ fn set_priority(pid: Pid, class: PriorityClass) -> Result<ExecOutcome, ExecError
 
 fn set_eco_qos(pid: Pid, state: EcoQos) -> Result<ExecOutcome, ExecError> {
     let speed = PROCESS_POWER_THROTTLING_EXECUTION_SPEED;
+    let timer = PROCESS_POWER_THROTTLING_IGNORE_TIMER_RESOLUTION;
     let (control, on) = match state {
         EcoQos::Default => (0, 0),
-        EcoQos::Off => (speed, 0),
+        // 两项都明确"不限制"：系统不会自动给它降频，也不会放宽它请求的计时器精度。
+        EcoQos::Off => (speed | timer, 0),
         EcoQos::On => (speed, speed),
     };
     let info = PROCESS_POWER_THROTTLING_STATE {

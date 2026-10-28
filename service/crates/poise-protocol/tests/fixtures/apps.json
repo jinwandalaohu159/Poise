@@ -10,7 +10,8 @@
       "state": "scheduled",
       "foreground": false,
       "small_cores": true,
-      "priority": "lower"
+      "priority": "lower",
+      "adjustment": "yielded"
     },
     "kind": "app",
     "cpu_pct": 0.0,
@@ -28,7 +29,8 @@
       "state": "scheduled",
       "foreground": true,
       "small_cores": false,
-      "priority": "higher"
+      "priority": "higher",
+      "adjustment": "raised"
     },
     "kind": "app",
     "cpu_pct": 6.5,
@@ -37,25 +39,31 @@
       {
         "pid": 100,
         "name": "browser.exe",
+        "path": "c:\\apps\\browser.exe",
+        "preference": null,
         "cpu_pct": 4.0,
         "memory_bytes": 2147483648,
         "schedule": {
           "state": "scheduled",
           "foreground": true,
           "small_cores": false,
-          "priority": "higher"
+          "priority": "higher",
+          "adjustment": "raised"
         }
       },
       {
         "pid": 101,
         "name": "gpu-helper.exe",
+        "path": "c:\\apps\\helper\\gpu-helper.exe",
+        "preference": "game",
         "cpu_pct": 2.5,
         "memory_bytes": 1073741824,
         "schedule": {
           "state": "self_managed",
           "foreground": false,
           "small_cores": null,
-          "priority": "normal"
+          "priority": "normal",
+          "adjustment": "none"
         }
       }
     ]
@@ -71,7 +79,8 @@
       "state": "scheduled",
       "foreground": false,
       "small_cores": null,
-      "priority": "high"
+      "priority": "high",
+      "adjustment": "raised"
     },
     "kind": "app",
     "cpu_pct": 0.0,
@@ -89,7 +98,8 @@
       "state": "excluded",
       "foreground": false,
       "small_cores": null,
-      "priority": "normal"
+      "priority": "normal",
+      "adjustment": "none"
     },
     "kind": "excluded",
     "cpu_pct": 0.0,
@@ -107,7 +117,8 @@
       "state": "self_managed",
       "foreground": false,
       "small_cores": null,
-      "priority": "normal"
+      "priority": "normal",
+      "adjustment": "none"
     },
     "kind": "app",
     "cpu_pct": 0.0,
@@ -125,7 +136,8 @@
       "state": "off",
       "foreground": false,
       "small_cores": null,
-      "priority": "normal"
+      "priority": "normal",
+      "adjustment": "none"
     },
     "kind": "app",
     "cpu_pct": 0.0,

@@ -17,7 +17,7 @@ mod tree;
 use game::renders_fullscreen;
 use role::{detect_anti_cheat, restartable_service, role_of};
 use scope::{preference_of, schedule_scope};
-use tree::root_of;
+use tree::{Marks, roots};
 
 /// 进程的角色。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -144,12 +144,10 @@ impl Classifier {
         let snap = input.snapshot;
         let by_pid = snap.by_pid();
         let anti_cheat_present = detect_anti_cheat(snap);
-        let visible: HashSet<Pid> = input.session.visible_window_pids.iter().copied().collect();
+        let marks = Marks::new(snap, input.session);
+        let visible = &marks.visible;
         let audio: HashSet<Pid> = input.session.audio_pids.iter().copied().collect();
-        let roots: HashMap<Pid, Pid> = by_pid
-            .keys()
-            .map(|&pid| (pid, root_of(pid, &by_pid, input, &visible)))
-            .collect();
+        let roots = roots(&by_pid, input, &marks);
         let foreground_root = input
             .session
             .foreground_pid
@@ -178,7 +176,7 @@ impl Classifier {
                     && (preference == AppPreference::Game
                         || renders_fullscreen(p, input, self.cfg.game_gpu_pct));
                 let c = Classification {
-                    schedule: schedule_scope(p, &role),
+                    schedule: schedule_scope(p, &role, marks.never_scheduled.contains(&pid)),
                     root_pid,
                     in_foreground_tree,
                     has_visible_window,

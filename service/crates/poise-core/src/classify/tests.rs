@@ -303,6 +303,27 @@ fn the_client_that_started_a_game_is_not_a_game() {
     assert!(!w.classify()[&810].is_game);
 }
 
+/// 无边框窗口、没被自动识别的游戏：用户单独给游戏本体选"游戏"后，它成为独立的程序，客户端不受影响。
+#[test]
+fn a_child_with_its_own_preference_is_its_own_program() {
+    let mut client = proc_(820, None, "leagueclient.exe", 1);
+    client.facts.image_path = Some(r"d:\games\lol\leagueclient.exe".into());
+    let mut game = proc_(821, Some(820), "league of legends.exe", 1);
+    game.facts.image_path = Some(r"d:\games\lol\game\league of legends.exe".into());
+    let mut w = World::new(vec![client, game]);
+    w.session.visible_window_pids = vec![820, 821];
+    assert_eq!(w.classify()[&821].root_pid, 820);
+    w.prefs.set(
+        r"d:\games\lol\game\league of legends.exe",
+        AppPreference::Game,
+    );
+    let c = w.classify();
+    assert_eq!(c[&821].root_pid, 821);
+    assert!(c[&821].is_game);
+    assert!(!c[&820].is_game);
+    assert_eq!(c[&820].preference, AppPreference::Auto);
+}
+
 #[test]
 fn user_marked_game_is_a_game_even_in_background() {
     let app = proc_(900, None, "emu.exe", 1);

@@ -190,6 +190,11 @@ pub struct AppProcess {
     pub pid: Pid,
     /// 进程文件名。
     pub name: String,
+    /// 小写完整路径（读不到时为空）。
+    pub path: String,
+    /// 可以单独设置类别时为它当前的类别（同一程序里有自己窗口的另一个程序，例如客户端里的游戏本体）；
+    /// 否则为空，跟随所属程序。
+    pub preference: Option<AppPreference>,
     pub cpu_pct: f32,
     pub memory_bytes: u64,
     /// 这个进程自己的调度状态（同一程序里个别进程可能不参与调度或自行管理）。
@@ -214,12 +219,29 @@ pub struct AppSchedule {
     /// 是否限制在小核上运行；不是大小核处理器时为空。
     pub small_cores: Option<bool>,
     pub priority: PriorityLevel,
+    /// Poise 对它做了什么。
+    pub adjustment: Adjustment,
+}
+
+/// Poise 对一个进程做的调整。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Adjustment {
+    /// 没有调整（优先级等都是程序或系统自己的）。
+    #[default]
+    None,
+    /// 让路：挪到小核、降低优先级、节能。
+    Yielded,
+    /// 不让系统自动节能限速（正在玩、正在发声、始终优先）。
+    Protected,
+    /// 标记为游戏：优先级提高一级，并且不让系统自动节能限速。
+    Raised,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ScheduleState {
-    /// 按类别调整（包括期望状态恰好是系统默认的情况）。
+    /// 参与调度（是否调整了见 [`AppSchedule::adjustment`]）。
     Scheduled,
     /// 不参与调度：受保护、系统组件、输入/显示/声音/安全相关，或系统拒绝访问。
     Excluded,

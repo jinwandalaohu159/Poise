@@ -46,7 +46,7 @@
                 </ComboBox>
             </Grid>
 
-            <!-- 展开后：各个进程（只供查看）。高度从 0 增长到内容高度，内容从上往下露出 -->
+            <!-- 展开后：各个进程（有自己窗口的另一个程序可以单独设置类别）。高度从 0 增长到内容高度，内容从上往下露出 -->
             <Grid x:Name="ProcessesHost" Visibility="Collapsed" SizeChanged="OnHostSizeChanged">
                 <StackPanel x:Name="ProcessesContent" VerticalAlignment="Top" Padding="0,0,0,6">
                     <Rectangle Height="1" Fill="{ThemeResource DividerStrokeColorDefaultBrush}" Margin="0,0,0,6" />
@@ -76,6 +76,15 @@
                                                HorizontalAlignment="Right" VerticalAlignment="Center" />
                                     <TextBlock Grid.Column="4" Text="{x:Bind Memory, Mode=OneWay}" Style="{StaticResource TableNumberTextStyle}"
                                                HorizontalAlignment="Right" VerticalAlignment="Center" />
+                                    <ComboBox Grid.Column="5" HorizontalAlignment="Stretch" VerticalAlignment="Center" Margin="{StaticResource AppsPreferenceGap}"
+                                              Visibility="{x:Bind PreferenceVisibility, Mode=OneWay}"
+                                              SelectedIndex="{x:Bind PreferenceIndex, Mode=TwoWay}"
+                                              DropDownOpened="OnDropDownOpened" DropDownClosed="OnDropDownClosed">
+                                        <ComboBoxItem Content="{l:L Key=pref.auto}" />
+                                        <ComboBoxItem Content="{l:L Key=pref.always_fast}" />
+                                        <ComboBoxItem Content="{l:L Key=pref.background}" />
+                                        <ComboBoxItem Content="{l:L Key=pref.game}" />
+                                    </ComboBox>
                                 </Grid>
                             </DataTemplate>
                         </ItemsControl.ItemTemplate>
