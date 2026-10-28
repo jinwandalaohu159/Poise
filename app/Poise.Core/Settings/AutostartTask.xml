@@ -1,0 +1,38 @@
+<!--
+  开机启动：当前用户登录时由任务计划程序启动 Poise 托盘代理。
+  界面设置页（Autostart.cs）和安装脚本（install.ps1）共用这份定义，注册时替换 {UserSid} 和 {AgentPath}。
+-->
+<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo>
+    <Author>Poise</Author>
+    <Description>登录后启动 Poise 托盘代理</Description>
+    <!-- 安装程序以管理员身份创建的任务，用户也能在设置页里关闭（删除）。 -->
+    <SecurityDescriptor>D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;FA;;;{UserSid})</SecurityDescriptor>
+  </RegistrationInfo>
+  <Triggers>
+    <LogonTrigger>
+      <Enabled>true</Enabled>
+      <UserId>{UserSid}</UserId>
+    </LogonTrigger>
+  </Triggers>
+  <Principals>
+    <Principal id="User">
+      <UserId>{UserSid}</UserId>
+      <LogonType>InteractiveToken</LogonType>
+      <RunLevel>LeastPrivilege</RunLevel>
+    </Principal>
+  </Principals>
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
+    <!-- 任务默认优先级是 7（低于正常），托盘代理会一直以低优先级运行。 -->
+    <Priority>4</Priority>
+  </Settings>
+  <Actions Context="User">
+    <Exec>
+      <Command>"{AgentPath}"</Command>
+    </Exec>
+  </Actions>
+</Task>

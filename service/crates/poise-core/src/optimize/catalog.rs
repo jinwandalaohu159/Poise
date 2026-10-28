@@ -1,7 +1,8 @@
 //! 固定的优化项目录。动态项（右键插件、导航栏入口、启动项）由平台层枚举。
 
 use super::model::{
-    Group, Hive, Matcher, OptimizationItem, TakesEffect, Target, Text, UserFile, Value,
+    Group, Hive, Matcher, OptimizationItem, SystemDefault, TakesEffect, Target, Text, UserFile,
+    Value,
 };
 
 const EXPLORER_ADVANCED: &str = r"Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced";
@@ -35,6 +36,8 @@ pub fn static_items(wsl_installed: bool) -> Vec<OptimizationItem> {
             in_one_click: true,
             slow_hint: false,
             takes_effect: TakesEffect::Immediately,
+            // 默认值取决于电源计划。
+            system_default: SystemDefault::Unknown,
         },
         OptimizationItem {
             id: "fast_startup_off".into(),
@@ -51,6 +54,7 @@ pub fn static_items(wsl_installed: bool) -> Vec<OptimizationItem> {
             in_one_click: true,
             slow_hint: false,
             takes_effect: TakesEffect::NextRestart,
+            system_default: SystemDefault::Value(Value::Dword(1)),
         },
         OptimizationItem {
             id: "explorer_open_this_pc".into(),
@@ -67,6 +71,7 @@ pub fn static_items(wsl_installed: bool) -> Vec<OptimizationItem> {
             in_one_click: true,
             slow_hint: false,
             takes_effect: TakesEffect::NextFolderWindow,
+            system_default: SystemDefault::Absent,
         },
         OptimizationItem {
             id: "explorer_separate_process".into(),
@@ -83,6 +88,7 @@ pub fn static_items(wsl_installed: bool) -> Vec<OptimizationItem> {
             in_one_click: true,
             slow_hint: false,
             takes_effect: TakesEffect::NextSignIn,
+            system_default: SystemDefault::Value(Value::Dword(0)),
         },
     ];
     if wsl_installed {
@@ -102,6 +108,8 @@ pub fn static_items(wsl_installed: bool) -> Vec<OptimizationItem> {
             in_one_click: true,
             slow_hint: false,
             takes_effect: TakesEffect::NextRestart,
+            // 没有这一项时 WSL 用自己的默认值。
+            system_default: SystemDefault::Absent,
         });
     }
     items

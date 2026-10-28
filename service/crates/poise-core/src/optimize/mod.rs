@@ -5,8 +5,8 @@ mod model;
 
 pub use catalog::static_items;
 pub use model::{
-    Group, Hive, ItemState, Matcher, OptimizationItem, SettingStore, StoreError, TakesEffect,
-    Target, Text, UserFile, Value,
+    Group, Hive, ItemState, Matcher, OptimizationItem, SettingStore, StoreError, SystemDefault,
+    TakesEffect, Target, Text, UserFile, Value,
 };
 
 use serde::{Deserialize, Serialize};
@@ -18,7 +18,7 @@ use crate::model::Millis;
 pub struct ItemStatus {
     pub item: OptimizationItem,
     pub state: ItemState,
-    /// 是否由 Poise 修改过（可以还原）。
+    /// 可以还原：Poise 改过（还原到修改前），或者已是优化状态且知道系统默认值（还原到默认）。
     pub revertible: bool,
 }
 
@@ -29,18 +29,42 @@ pub fn status(
 ) -> Vec<ItemStatus> {
     items
         .iter()
-        .map(|item| ItemStatus {
-            state: match store.read(&item.target) {
+        .map(|item| {
+            let state = match store.read(&item.target) {
                 Ok(v) if item.matcher.is_optimized(v.as_ref(), &item.optimized) => {
                     ItemState::Optimized
                 }
                 Ok(_) => ItemState::NotOptimized,
                 Err(_) => ItemState::Unknown,
-            },
-            revertible: journal.owns(&item.id),
-            item: item.clone(),
+            };
+            ItemStatus {
+                revertible: journal.owns(&item.id)
+                    || (state == ItemState::Optimized && item.system_default.is_known()),
+                state,
+                item: item.clone(),
+            }
         })
         .collect()
+}
+
+/// 把不是 Poise 改的设置恢复为系统默认。已经不是优化状态时什么都不做（不覆盖用户自己的其他取值）；
+/// 不知道默认值时返回 [`StoreError::Unsupported`]。
+pub fn restore_default(
+    item: &OptimizationItem,
+    store: &dyn SettingStore,
+) -> Result<(), StoreError> {
+    if !item.system_default.is_known() {
+        return Err(StoreError::Unsupported);
+    }
+    let current = store.read(&item.target)?;
+    if !item.matcher.is_optimized(current.as_ref(), &item.optimized) {
+        return Ok(());
+    }
+    match &item.system_default {
+        SystemDefault::Unknown => Err(StoreError::Unsupported),
+        SystemDefault::Absent => store.delete(&item.target),
+        SystemDefault::Value(v) => store.write(&item.target, v),
+    }
 }
 
 pub fn apply(
@@ -99,6 +123,7 @@ mod tests {
             in_one_click: one_click,
             slow_hint: false,
             takes_effect: TakesEffect::Immediately,
+            system_default: SystemDefault::Unknown,
         }
     }
 
@@ -123,5 +148,41 @@ mod tests {
         let s = &status(&items, &store, &j)[0];
         assert_eq!(s.state, ItemState::Optimized);
         assert!(s.revertible);
+    }
+
+    #[test]
+    fn settings_changed_elsewhere_can_go_back_to_the_system_default() {
+        let store = MemStore::default();
+        store.write(&reg("a"), &Value::Dword(1)).unwrap();
+        let unknown = item("a", true);
+        let j = Journal::default();
+        assert!(!status(std::slice::from_ref(&unknown), &store, &j)[0].revertible);
+        assert_eq!(
+            restore_default(&unknown, &store),
+            Err(StoreError::Unsupported)
+        );
+
+        let absent = OptimizationItem {
+            system_default: SystemDefault::Absent,
+            ..unknown
+        };
+        let s = &status(std::slice::from_ref(&absent), &store, &j)[0];
+        assert_eq!(s.state, ItemState::Optimized);
+        assert!(s.revertible);
+        restore_default(&absent, &store).unwrap();
+        assert_eq!(store.read(&reg("a")).unwrap(), None);
+        assert!(!status(&[absent], &store, &j)[0].revertible);
+    }
+
+    #[test]
+    fn restoring_the_default_keeps_other_user_values() {
+        let store = MemStore::default();
+        store.write(&reg("a"), &Value::Dword(7)).unwrap();
+        let it = OptimizationItem {
+            system_default: SystemDefault::Absent,
+            ..item("a", true)
+        };
+        restore_default(&it, &store).unwrap();
+        assert_eq!(store.read(&reg("a")).unwrap(), Some(Value::Dword(7)));
     }
 }

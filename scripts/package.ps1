@@ -9,7 +9,7 @@ $dist = Join-Path $root 'dist\Poise'
 if (-not $SkipBuild) {
     & (Join-Path $PSScriptRoot 'build.ps1')
 }
-foreach ($file in 'poise-service.exe', 'poise-agent.exe', 'Poise.exe', 'version.txt') {
+foreach ($file in 'poise-service.exe', 'poise-agent.exe', 'Poise.exe', 'AutostartTask.xml', 'version.txt') {
     if (-not (Test-Path (Join-Path $dist $file))) { throw "没有找到 $file，请先运行 scripts\build.ps1" }
 }
 $version = (Get-Content (Join-Path $dist 'version.txt') -Raw).Trim()

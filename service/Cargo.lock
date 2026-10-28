@@ -129,7 +129,7 @@ dependencies = [
 
 [[package]]
 name = "poise-agent"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "embed-resource",
  "log",
@@ -144,7 +144,7 @@ dependencies = [
 
 [[package]]
 name = "poise-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "serde",
  "thiserror",
@@ -152,7 +152,7 @@ dependencies = [
 
 [[package]]
 name = "poise-hardware"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "libloading",
  "log",
@@ -163,7 +163,7 @@ dependencies = [
 
 [[package]]
 name = "poise-platform"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "log",
  "poise-core",
@@ -174,7 +174,7 @@ dependencies = [
 
 [[package]]
 name = "poise-protocol"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "poise-core",
  "serde",
@@ -183,7 +183,7 @@ dependencies = [
 
 [[package]]
 name = "poise-service"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "embed-resource",

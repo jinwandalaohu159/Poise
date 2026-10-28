@@ -125,6 +125,27 @@ pub struct OptimizationItem {
     /// 可能拖慢右键或资源管理器（仅提示，不替用户关闭）。
     pub slow_hint: bool,
     pub takes_effect: TakesEffect,
+    /// 系统默认状态。设置不是 Poise 改的（用户自己或其他工具改的）时，"还原"回到这里。
+    /// 只在服务内部使用，不发给界面。
+    #[serde(skip)]
+    pub system_default: SystemDefault,
+}
+
+/// 一个设置的系统默认状态。
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum SystemDefault {
+    /// 不确定（例如取决于电源计划）：只能还原 Poise 自己做过的修改。
+    #[default]
+    Unknown,
+    /// 默认没有这一项，删除即恢复默认。
+    Absent,
+    Value(Value),
+}
+
+impl SystemDefault {
+    pub fn is_known(&self) -> bool {
+        !matches!(self, Self::Unknown)
+    }
 }
 
 /// 判断当前值是否已是优化状态的规则。

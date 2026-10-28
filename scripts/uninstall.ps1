@@ -23,11 +23,21 @@ if ($LASTEXITCODE -ne 0) {
     throw '有修改没能还原，程序和修改记录都已保留。可以重启电脑后再运行一次本脚本。'
 }
 
-# 当前用户的开机启动、界面设置与日志。
+# 所有用户的开机启动任务（任务计划程序里的 Poise 文件夹），以及旧版本写在 Run 键里的开机启动。
+Get-ScheduledTask -TaskPath '\Poise\' -ErrorAction SilentlyContinue | Unregister-ScheduledTask -Confirm:$false
+try {
+    $scheduler = New-Object -ComObject Schedule.Service
+    $scheduler.Connect()
+    $scheduler.GetFolder('\').DeleteFolder('Poise', 0)
+} catch {
+    # 文件夹不存在。
+}
 Remove-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name 'Poise' -ErrorAction SilentlyContinue
+# 当前用户的界面设置与日志。
 Remove-Item (Join-Path $env:LOCALAPPDATA 'Poise') -Recurse -Force -ErrorAction SilentlyContinue
 
 Remove-Item (Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs\Poise.lnk') -ErrorAction SilentlyContinue
+Remove-Item (Join-Path ([Environment]::GetFolderPath('CommonDesktopDirectory')) 'Poise.lnk') -ErrorAction SilentlyContinue
 Remove-Item 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Poise' -Recurse -ErrorAction SilentlyContinue
 # 修改已全部还原，记录不再需要。
 Remove-Item (Join-Path $env:ProgramData 'Poise') -Recurse -Force -ErrorAction SilentlyContinue

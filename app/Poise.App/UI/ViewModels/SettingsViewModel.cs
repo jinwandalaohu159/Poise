@@ -97,7 +97,16 @@ public sealed partial class SettingsViewModel : ObservableObject, IDisposable
     {
         if (_ready)
         {
-            Autostart.Set(value);
+            _ = ApplyAutostartAsync(value);
+        }
+    }
+
+    /// <summary>没设置成功时，开关回到实际状态。</summary>
+    private async Task ApplyAutostartAsync(bool enabled)
+    {
+        if (!await Autostart.SetAsync(enabled))
+        {
+            AutostartEnabled = Autostart.IsEnabled;
         }
     }
 

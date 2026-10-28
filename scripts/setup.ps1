@@ -24,7 +24,7 @@ try {
     [IO.Compression.ZipFile]::ExtractToDirectory((Join-Path $PSScriptRoot 'Poise.zip'), $payload)
     Write-Host '正在安装…'
     & (Join-Path $PSScriptRoot 'install.ps1') -Source $payload
-    [Windows.MessageBox]::Show('Poise 已安装，托盘图标已出现在任务栏。', 'Poise 安装程序', 'OK', 'Information') | Out-Null
+    [Windows.MessageBox]::Show('Poise 已安装：桌面上有 Poise 快捷方式，托盘图标已出现在任务栏。', 'Poise 安装程序', 'OK', 'Information') | Out-Null
     exit 0
 } catch {
     [Windows.MessageBox]::Show("安装没有完成：$($_.Exception.Message)", 'Poise 安装程序', 'OK', 'Error') | Out-Null

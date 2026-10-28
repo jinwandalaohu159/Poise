@@ -5,6 +5,8 @@ $root = Split-Path -Parent $PSScriptRoot
 $dist = Join-Path $root 'dist\Poise'
 $staging = Join-Path $root 'dist\app'
 $cargo = Join-Path $root 'service\Cargo.toml'
+# 版本号只在一处维护（服务的 Cargo 工作区）：写进各程序的文件属性，安装时写进"设置 → 应用"。
+$version = (Select-String -Path $cargo -Pattern '^version\s*=\s*"([^"]+)"').Matches[0].Groups[1].Value
 
 Write-Host '运行测试…'
 cargo test -q --workspace --manifest-path $cargo
@@ -17,7 +19,7 @@ cargo build --release -p poise-service -p poise-agent --manifest-path $cargo
 if ($LASTEXITCODE -ne 0) { throw '服务构建失败' }
 
 Write-Host '构建界面…'
-dotnet publish (Join-Path $root 'app\Poise.App\Poise.App.csproj') -c Release -r win-x64 --self-contained -o $staging -nologo
+dotnet publish (Join-Path $root 'app\Poise.App\Poise.App.csproj') -c Release -r win-x64 --self-contained -o $staging -nologo "-p:Version=$version"
 if ($LASTEXITCODE -ne 0) { throw '界面构建失败' }
 
 if (Test-Path $dist) { Remove-Item $dist -Recurse -Force }
@@ -28,8 +30,6 @@ foreach ($exe in 'poise-service.exe', 'poise-agent.exe') {
 }
 Remove-Item $staging -Recurse -Force
 
-# 版本号只在一处维护（服务的 Cargo 工作区）；安装时写进"设置 → 应用"。
-$version = (Select-String -Path $cargo -Pattern '^version\s*=\s*"([^"]+)"').Matches[0].Groups[1].Value
 Set-Content -Path (Join-Path $dist 'version.txt') -Value $version -Encoding ascii
 
 Write-Host "完成：$dist"

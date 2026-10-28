@@ -5,7 +5,7 @@ use std::path::Path;
 
 use poise_core::journal::{Journal, JournalError, JournalStorage};
 use poise_core::model::Millis;
-use poise_core::optimize::{SettingStore, Target, Value};
+use poise_core::optimize::{self, OptimizationItem, SettingStore, Target, Value};
 use poise_platform::persist::storage::FileJournal;
 use poise_platform::settings::store::WinSettingStore;
 use poise_platform::settings::user::UserContext;
@@ -87,6 +87,11 @@ impl Changes {
 
     pub fn revert(&mut self, owner: &str) -> Result<(), ChangeError> {
         self.edit(|s, j| j.revert(s, owner))
+    }
+
+    /// 把不是 Poise 改的设置恢复为系统默认。不记入日志：回到默认后没有需要还原的。
+    pub fn restore_default(&mut self, item: &OptimizationItem) -> Result<(), ChangeError> {
+        self.edit(|s, _| optimize::restore_default(item, s).map_err(JournalError::Revert))
     }
 
     /// 还原所有"系统优化"的修改（不含游戏偏好和硬件模式）。

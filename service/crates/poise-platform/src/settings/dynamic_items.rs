@@ -4,7 +4,7 @@
 use std::collections::BTreeMap;
 
 use poise_core::optimize::{
-    Group, Hive, Matcher, OptimizationItem, TakesEffect, Target, Text, Value,
+    Group, Hive, Matcher, OptimizationItem, SystemDefault, TakesEffect, Target, Text, Value,
 };
 use windows::Win32::System::Registry::{HKEY, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE};
 
@@ -152,6 +152,8 @@ pub fn context_menu_items(user: Option<&UserContext>) -> Vec<OptimizationItem> {
                 in_one_click: false,
                 slow_hint: everywhere,
                 takes_effect: TakesEffect::NextSignIn,
+                // 不在屏蔽列表里即为默认（插件照常加载）。
+                system_default: SystemDefault::Absent,
             })
         })
         .collect()
@@ -234,6 +236,7 @@ pub fn navigation_items(user: Option<&UserContext>) -> Vec<OptimizationItem> {
                 in_one_click: false,
                 slow_hint: false,
                 takes_effect: TakesEffect::NextFolderWindow,
+                system_default: SystemDefault::Unknown,
             })
         })
         .collect()
@@ -245,6 +248,8 @@ const APPROVED_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Explorer\
 
 /// 任务管理器使用的"已禁用"标记（首字节为奇数，后面是时间戳）。
 const DISABLED_MARK: [u8; 12] = [3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+/// 任务管理器使用的"已启用"标记。
+const ENABLED_MARK: [u8; 12] = [2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
 
 pub fn startup_items(user: Option<&UserContext>) -> Vec<OptimizationItem> {
     let mut sources: Vec<(Hive, HKEY, String, &str)> = vec![
@@ -304,6 +309,8 @@ pub fn startup_items(user: Option<&UserContext>) -> Vec<OptimizationItem> {
                 in_one_click: false,
                 slow_hint: false,
                 takes_effect: TakesEffect::NextSignIn,
+                // 在任务管理器里禁用的启动项，也可以在这里重新启用。
+                system_default: SystemDefault::Value(Value::Binary(ENABLED_MARK.to_vec())),
             });
         }
     }

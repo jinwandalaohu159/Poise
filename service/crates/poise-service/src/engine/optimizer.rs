@@ -37,18 +37,22 @@ impl Engine {
         )
     }
 
-    pub fn apply_optimization(&mut self, id: &str) -> Result<(), RequestError> {
-        let item = self
-            .optimization_items()
+    fn optimization_item(&self, id: &str) -> Result<OptimizationItem, RequestError> {
+        self.optimization_items()
             .into_iter()
             .find(|i| i.id == id)
-            .ok_or_else(|| RequestError::new(ErrorCode::NotFound, "没有这个优化项"))?;
+            .ok_or_else(|| RequestError::new(ErrorCode::NotFound, "没有这个优化项"))
+    }
+
+    pub fn apply_optimization(&mut self, id: &str) -> Result<(), RequestError> {
+        let item = self.optimization_item(id)?;
         let now = self.now();
         Ok(self
             .changes
             .apply(&item.id, &item.target, &item.optimized, now)?)
     }
 
+    /// 还原一项：Poise 改过的回到修改前，别处改的（用户自己或其他工具）回到系统默认。
     pub fn revert_optimization(&mut self, id: &str) -> Result<(), RequestError> {
         if !changes::is_optimization(id) {
             return Err(RequestError::new(
@@ -56,7 +60,11 @@ impl Engine {
                 "这项修改不属于系统优化",
             ));
         }
-        Ok(self.changes.revert(id)?)
+        if self.changes.journal().owns(id) {
+            return Ok(self.changes.revert(id)?);
+        }
+        let item = self.optimization_item(id)?;
+        Ok(self.changes.restore_default(&item)?)
     }
 
     pub fn apply_recommended(&mut self) -> Result<ApplyReport, RequestError> {

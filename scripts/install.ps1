@@ -2,6 +2,7 @@
 # - 文件复制到 Program Files\Poise（只有管理员可写，防止他人替换程序），连同卸载脚本
 # - 安装并启动 Poise 服务（LocalSystem）
 # - 在"设置 → 应用"里登记，可以从那里卸载
+# - 开始菜单和桌面上放 Poise 快捷方式（所有用户）
 # - 首次安装时为当前用户开启开机启动（托盘代理），之后由设置页控制
 # - 已安装时只替换文件并重启服务，保留设置、开机启动选择和优化记录
 #Requires -RunAsAdministrator
@@ -13,7 +14,8 @@ $ErrorActionPreference = 'Stop'
 $target = Join-Path $env:ProgramFiles 'Poise'
 $service = Join-Path $target 'poise-service.exe'
 $agent = Join-Path $target 'poise-agent.exe'
-$runKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
+# 旧版本的开机启动位置（Run 键），升级时迁移到任务计划程序。
+$legacyRunKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
 
 foreach ($exe in 'poise-service.exe', 'poise-agent.exe', 'Poise.exe') {
     if (-not (Test-Path (Join-Path $Source $exe))) { throw "没有找到 $exe，请先运行 scripts\build.ps1" }
@@ -38,17 +40,32 @@ if ($existing) {
 } else {
     & $service install
     if ($LASTEXITCODE -ne 0) { throw '服务安装失败' }
-    # 管理员身份与登录用户相同（通常如此）时，写入的是登录用户的开机启动。
-    New-ItemProperty -Path $runKey -Name 'Poise' -Value "`"$agent`"" -PropertyType String -Force | Out-Null
 }
 
-# 开始菜单快捷方式（所有用户）。
-$shortcut = Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs\Poise.lnk'
+# 开机启动：登录时由任务计划程序立即启动托盘代理（Run 键里的程序会被 Windows 推迟一两分钟）。
+# 任务定义与界面设置页共用 AutostartTask.xml。首次安装时开启；从旧版本（Run 键）升级时迁移过来。
+# 管理员身份与登录用户相同（通常如此）时，写入的是登录用户的开机启动。
+$legacyAutostart = $null -ne (Get-ItemProperty -Path $legacyRunKey -Name 'Poise' -ErrorAction SilentlyContinue)
+if (-not $existing -or $legacyAutostart) {
+    $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+    $template = Get-Content (Join-Path $target 'AutostartTask.xml') -Raw -Encoding UTF8
+    $xml = $template.Replace('{UserSid}', $sid).Replace('{AgentPath}', [Security.SecurityElement]::Escape($agent))
+    Register-ScheduledTask -TaskPath '\Poise\' -TaskName "Agent $sid" -Xml $xml -Force | Out-Null
+    Remove-ItemProperty -Path $legacyRunKey -Name 'Poise' -ErrorAction SilentlyContinue
+}
+
+# 开始菜单和桌面快捷方式（所有用户）。
 $shell = New-Object -ComObject WScript.Shell
-$link = $shell.CreateShortcut($shortcut)
-$link.TargetPath = Join-Path $target 'Poise.exe'
-$link.WorkingDirectory = $target
-$link.Save()
+$shortcuts = @(
+    (Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs\Poise.lnk'),
+    (Join-Path ([Environment]::GetFolderPath('CommonDesktopDirectory')) 'Poise.lnk')
+)
+foreach ($shortcut in $shortcuts) {
+    $link = $shell.CreateShortcut($shortcut)
+    $link.TargetPath = Join-Path $target 'Poise.exe'
+    $link.WorkingDirectory = $target
+    $link.Save()
+}
 
 # 在"设置 → 应用"里登记（所有用户可见），卸载时运行安装目录里的卸载脚本。
 $uninstallKey = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Poise'
@@ -73,4 +90,4 @@ New-ItemProperty -Path $uninstallKey -Name 'NoRepair' -Value 1 -PropertyType DWo
 # 以普通权限启动托盘代理：经由资源管理器启动，不继承本脚本的管理员权限。
 Start-Process -FilePath 'explorer.exe' -ArgumentList "`"$agent`""
 
-if ($existing) { Write-Host "Poise 已升级（$target）。" } else { Write-Host "Poise 已安装到 $target，托盘图标已出现在任务栏。" }
+if ($existing) { Write-Host "Poise 已升级（$target）。" } else { Write-Host "Poise 已安装到 $target，托盘图标已出现在任务栏，桌面上有 Poise 快捷方式。" }

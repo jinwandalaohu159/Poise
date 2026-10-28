@@ -59,9 +59,10 @@ dotnet test app\Poise.Core.Tests    # 界面逻辑与契约测试
 ```
 
 - 安装程序是单个 exe，用 Windows 自带的 IExpress 打包（不需要额外工具）：双击后请求管理员权限，自动安装或升级，结束时提示结果。
-- 安装后在"设置 → 应用"里登记为 Poise，可以从那里卸载（效果同 `uninstall.ps1`）。
-- 首次安装会为当前用户开启开机启动（托盘代理），之后由设置页控制。
-- 再次运行 `install.ps1` 即为升级：只替换文件、重启服务，保留设置、开机启动选择与优化记录。
+- 安装后桌面和开始菜单里有 Poise 快捷方式；在"设置 → 应用"里登记为 Poise，可以从那里卸载（效果同 `uninstall.ps1`）。
+- 首次安装会为当前用户开启开机启动，之后由设置页控制。开机启动是任务计划程序里 `\Poise\` 文件夹下的登录任务（定义见 `app/Poise.Core/Settings/AutostartTask.xml`，界面和安装脚本共用），登录后立即启动托盘代理；不用 Run 键，因为 Windows 会把 Run 键里的程序推迟一两分钟。
+- 再次运行 `install.ps1` 即为升级：只替换文件、重启服务，保留设置、开机启动选择与优化记录；旧版本写在 Run 键里的开机启动会迁移成登录任务。
+- 发布：在 `service/Cargo.toml` 里改版本号，运行 `package.ps1`，再用 Project Hub 把安装程序发布到 GitHub Releases。
 - 卸载时如有修改没能还原，程序和修改记录都会保留，可重启后再运行一次 `uninstall.ps1`。
 - 安装包未签名（没有代码签名证书），首次运行可能出现 SmartScreen 提示。
 - 图标的原图是 `icon/foam.png`。更换后运行 `python scripts/make-icons.py`（需要 Pillow），重新生成 `app/Poise.App/Assets` 下的程序图标、托盘提醒图标和界面标志，再构建即可。

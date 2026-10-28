@@ -13,6 +13,11 @@
                       LogicalName="Poise.Core.Localization.Strings.%(Filename)%(Extension)" />
   </ItemGroup>
   <ItemGroup>
+    <!-- 开机启动任务的定义：放在安装目录根下，界面和安装脚本共用。 -->
+    <None Include="Settings\AutostartTask.xml" Link="AutostartTask.xml"
+          CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+  <ItemGroup>
     <InternalsVisibleTo Include="Poise.Core.Tests" />
   </ItemGroup>
 </Project>

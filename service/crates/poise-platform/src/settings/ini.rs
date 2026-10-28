@@ -60,19 +60,27 @@ pub fn set(content: &str, section: &str, key: &str, value: &str) -> String {
     join(lines)
 }
 
+/// 删除一个键。段因此变空时连同段名（以及 [`set`] 新建段时加在前面的空行）一起删除。
 pub fn remove(content: &str, section: &str, key: &str) -> String {
     let lines: Vec<&str> = content.lines().collect();
     let Some((start, end)) = find_section(&lines, section) else {
         return content.to_string();
     };
-    let kept: Vec<String> = lines
+    let body: Vec<&str> = lines[start + 1..end]
         .iter()
-        .enumerate()
-        .filter(|(i, l)| {
-            !(*i > start && *i < end && key_of(l).is_some_and(|k| k.eq_ignore_ascii_case(key)))
-        })
-        .map(|(_, l)| l.to_string())
+        .copied()
+        .filter(|l| !key_of(l).is_some_and(|k| k.eq_ignore_ascii_case(key)))
         .collect();
+    let mut kept: Vec<String> = lines[..start].iter().map(|l| l.to_string()).collect();
+    if body.iter().all(|l| l.trim().is_empty()) {
+        if end == lines.len() && kept.last().is_some_and(|l| l.trim().is_empty()) {
+            kept.pop();
+        }
+    } else {
+        kept.push(lines[start].to_string());
+        kept.extend(body.iter().map(|l| l.to_string()));
+    }
+    kept.extend(lines[end..].iter().map(|l| l.to_string()));
     join(kept)
 }
 
@@ -124,6 +132,16 @@ mod tests {
         let added = set(SAMPLE, "experimental", "autoMemoryReclaim", "gradual");
         let back = remove(&added, "experimental", "autoMemoryReclaim");
         assert_eq!(back, SAMPLE);
+    }
+
+    #[test]
+    fn removing_the_only_key_drops_the_section_set_created() {
+        let original = "[wsl2]\r\nmemory=8GB\r\n";
+        let added = set(original, "experimental", "autoMemoryReclaim", "gradual");
+        assert_eq!(
+            remove(&added, "experimental", "autoMemoryReclaim"),
+            original
+        );
     }
 
     #[test]
