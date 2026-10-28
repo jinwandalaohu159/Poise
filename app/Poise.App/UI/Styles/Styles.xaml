@@ -4,39 +4,106 @@
 
     <!-- Quiet Fluent：全部基于 WinUI 内置的 Fluent 主题画刷，深浅色与系统强调色自动适配。 -->
 
+    <!-- 走势图四条线的颜色（图例与曲线共用）。色相相距较远，深浅两套主题下都与背景、网格线拉开对比；不用红色，以免被误读为出错。 -->
+    <ResourceDictionary.ThemeDictionaries>
+        <ResourceDictionary x:Key="Default">
+            <SolidColorBrush x:Key="ChartPerformanceBrush" Color="#4CC2FF" />
+            <SolidColorBrush x:Key="ChartEfficiencyBrush" Color="#6CCB5F" />
+            <SolidColorBrush x:Key="ChartMemoryBrush" Color="#C4A6FF" />
+            <SolidColorBrush x:Key="ChartTemperatureBrush" Color="#FF9D5C" />
+        </ResourceDictionary>
+        <ResourceDictionary x:Key="Light">
+            <SolidColorBrush x:Key="ChartPerformanceBrush" Color="#0067C0" />
+            <SolidColorBrush x:Key="ChartEfficiencyBrush" Color="#0F7B0F" />
+            <SolidColorBrush x:Key="ChartMemoryBrush" Color="#8764B8" />
+            <SolidColorBrush x:Key="ChartTemperatureBrush" Color="#C24E00" />
+        </ResourceDictionary>
+    </ResourceDictionary.ThemeDictionaries>
+
     <FontFamily x:Key="DisplayFont">Segoe UI Variable Display, Microsoft YaHei UI, Segoe UI</FontFamily>
     <FontFamily x:Key="TextFont">Segoe UI Variable Text, Microsoft YaHei UI, Segoe UI</FontFamily>
     <FontFamily x:Key="IconFont">Segoe Fluent Icons, Segoe MDL2 Assets</FontFamily>
 
-    <x:Double x:Key="PageMargin">24</x:Double>
-    <Thickness x:Key="PagePadding">24,8,24,24</Thickness>
+    <!-- 8px 栅格：页面边距 24，同组卡片间距 8（列表行 4），分组间距 28，卡片内边距 16 / 20 -->
+    <Thickness x:Key="PagePadding">24,4,24,32</Thickness>
+    <x:Double x:Key="PageMaxWidth">1040</x:Double>
     <x:Double x:Key="CardGap">8</x:Double>
-    <x:Double x:Key="SectionGap">24</x:Double>
+    <Thickness x:Key="LargeCardPadding">20</Thickness>
     <CornerRadius x:Key="CardCorner">8</CornerRadius>
 
     <!-- 字号层级（只用 6 级） -->
-    <Style x:Key="HeroTextStyle" TargetType="TextBlock">
-        <Setter Property="FontFamily" Value="{StaticResource DisplayFont}" />
-        <Setter Property="FontSize" Value="40" />
-        <Setter Property="FontWeight" Value="SemiBold" />
-        <Setter Property="LineHeight" Value="52" />
-    </Style>
     <Style x:Key="PageTitleTextStyle" TargetType="TextBlock">
         <Setter Property="FontFamily" Value="{StaticResource DisplayFont}" />
         <Setter Property="FontSize" Value="28" />
         <Setter Property="FontWeight" Value="SemiBold" />
     </Style>
+    <!-- 数值用等宽数字：滚动时数字宽度不变，后面的单位不会左右晃动 -->
     <Style x:Key="MetricValueTextStyle" TargetType="TextBlock">
         <Setter Property="FontFamily" Value="{StaticResource DisplayFont}" />
-        <Setter Property="FontSize" Value="28" />
+        <Setter Property="Typography.NumeralAlignment" Value="Tabular" />
+        <Setter Property="FontSize" Value="32" />
         <Setter Property="FontWeight" Value="SemiBold" />
-        <Setter Property="LineHeight" Value="36" />
+        <Setter Property="LineHeight" Value="40" />
     </Style>
+    <Style x:Key="MetricUnitTextStyle" TargetType="TextBlock">
+        <Setter Property="FontFamily" Value="{StaticResource DisplayFont}" />
+        <Setter Property="FontSize" Value="15" />
+        <Setter Property="Foreground" Value="{ThemeResource TextFillColorSecondaryBrush}" />
+        <Setter Property="VerticalAlignment" Value="Bottom" />
+        <Setter Property="Margin" Value="0,0,0,6" />
+    </Style>
+    <!-- 模块卡与摘要卡的关键数字 -->
+    <Style x:Key="KpiValueTextStyle" TargetType="TextBlock">
+        <Setter Property="FontFamily" Value="{StaticResource DisplayFont}" />
+        <Setter Property="Typography.NumeralAlignment" Value="Tabular" />
+        <Setter Property="FontSize" Value="34" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+        <Setter Property="LineHeight" Value="42" />
+    </Style>
+    <Style x:Key="KpiUnitTextStyle" TargetType="TextBlock" BasedOn="{StaticResource MetricUnitTextStyle}">
+        <Setter Property="FontSize" Value="17" />
+        <Setter Property="Margin" Value="0,0,0,7" />
+    </Style>
+    <!-- 分组标题：与下方卡片左边缘对齐，间距 8 -->
     <Style x:Key="SectionTextStyle" TargetType="TextBlock">
         <Setter Property="FontFamily" Value="{StaticResource TextFont}" />
         <Setter Property="FontSize" Value="14" />
         <Setter Property="FontWeight" Value="SemiBold" />
-        <Setter Property="Margin" Value="2,0,0,8" />
+        <Setter Property="Margin" Value="1,0,0,8" />
+    </Style>
+    <!-- 卡片标题（模块卡、图表卡） -->
+    <Style x:Key="CardTitleTextStyle" TargetType="TextBlock">
+        <Setter Property="FontFamily" Value="{StaticResource TextFont}" />
+        <Setter Property="FontSize" Value="14" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+    </Style>
+    <!-- 列表表头 -->
+    <Style x:Key="ColumnHeaderTextStyle" TargetType="TextBlock">
+        <Setter Property="FontFamily" Value="{StaticResource TextFont}" />
+        <Setter Property="FontSize" Value="12" />
+        <Setter Property="Foreground" Value="{ThemeResource TextFillColorTertiaryBrush}" />
+        <Setter Property="TextTrimming" Value="CharacterEllipsis" />
+    </Style>
+    <!-- 行尾的开关：不带文字；抵消模板里开关后面固定的 12 像素，使右缘与按钮、下拉框对齐 -->
+    <Style x:Key="TrailingToggleSwitchStyle" TargetType="ToggleSwitch" BasedOn="{StaticResource DefaultToggleSwitchStyle}">
+        <Setter Property="MinWidth" Value="0" />
+        <Setter Property="OnContent" Value="" />
+        <Setter Property="OffContent" Value="" />
+        <Setter Property="Margin" Value="0,0,-12,0" />
+    </Style>
+    <!-- 表格里的数值：等宽数字，右对齐的一列上下对得齐 -->
+    <Style x:Key="TableNumberTextStyle" TargetType="TextBlock">
+        <Setter Property="FontFamily" Value="{StaticResource TextFont}" />
+        <Setter Property="Typography.NumeralAlignment" Value="Tabular" />
+        <Setter Property="FontSize" Value="14" />
+        <Setter Property="TextWrapping" Value="NoWrap" />
+    </Style>
+    <!-- 图表坐标轴 -->
+    <Style x:Key="AxisTextStyle" TargetType="TextBlock">
+        <Setter Property="FontFamily" Value="{StaticResource TextFont}" />
+        <Setter Property="FontSize" Value="11" />
+        <Setter Property="Foreground" Value="{ThemeResource TextFillColorTertiaryBrush}" />
+        <Setter Property="HorizontalAlignment" Value="Right" />
     </Style>
     <Style x:Key="BodyTextStyle" TargetType="TextBlock">
         <Setter Property="FontFamily" Value="{StaticResource TextFont}" />
@@ -57,6 +124,22 @@
         <Setter Property="BorderThickness" Value="1" />
         <Setter Property="CornerRadius" Value="{StaticResource CardCorner}" />
         <Setter Property="Padding" Value="16" />
+    </Style>
+
+    <!-- 大卡片（状态区、模块卡、摘要卡） -->
+    <Style x:Key="LargeCardStyle" TargetType="Border" BasedOn="{StaticResource CardStyle}">
+        <Setter Property="Padding" Value="{StaticResource LargeCardPadding}" />
+    </Style>
+
+    <!-- 列表行（清理页）：与设置行同样的底色，行高 52 -->
+    <Style x:Key="ListRowStyle" TargetType="Grid">
+        <Setter Property="Background" Value="{ThemeResource CardBackgroundFillColorDefaultBrush}" />
+        <Setter Property="BorderBrush" Value="{ThemeResource CardStrokeColorDefaultBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="{StaticResource CardCorner}" />
+        <Setter Property="Padding" Value="16,0" />
+        <Setter Property="MinHeight" Value="52" />
+        <Setter Property="ColumnSpacing" Value="16" />
     </Style>
 
     <!-- 设置行：与 Windows 11 设置应用中的设置卡一致 -->
@@ -82,13 +165,31 @@
     </Style>
 
     <Style x:Key="ActionButtonStyle" TargetType="Button" BasedOn="{StaticResource DefaultButtonStyle}">
-        <Setter Property="MinHeight" Value="40" />
-        <Setter Property="MinWidth" Value="148" />
-        <Setter Property="Padding" Value="20,0" />
+        <Setter Property="MinHeight" Value="36" />
+        <Setter Property="MinWidth" Value="128" />
+        <Setter Property="Padding" Value="16,0" />
     </Style>
     <Style x:Key="AccentActionButtonStyle" TargetType="Button" BasedOn="{StaticResource AccentButtonStyle}">
-        <Setter Property="MinHeight" Value="40" />
-        <Setter Property="MinWidth" Value="148" />
-        <Setter Property="Padding" Value="20,0" />
+        <Setter Property="MinHeight" Value="36" />
+        <Setter Property="MinWidth" Value="128" />
+        <Setter Property="Padding" Value="16,0" />
     </Style>
+    <!-- 卡片右下角的"查看详情 ›"链接 -->
+    <Style x:Key="DetailsLinkStyle" TargetType="HyperlinkButton">
+        <Setter Property="Padding" Value="8,4" />
+        <Setter Property="FontSize" Value="13" />
+    </Style>
+
+    <!-- 程序偏好页的列：列名行（页面）与每一行（AppRow）共用，保证对齐。
+         展开箭头 | 图标 | 名称与状态 | CPU | 内存 | 偏好。数值列右对齐、宽度相同；偏好列前多留一段间距，把"数据"和"操作"分开 -->
+    <GridLength x:Key="AppsChevronColumn">24</GridLength>
+    <GridLength x:Key="AppsIconColumn">20</GridLength>
+    <GridLength x:Key="AppsCpuColumn">80</GridLength>
+    <GridLength x:Key="AppsMemoryColumn">80</GridLength>
+    <GridLength x:Key="AppsPreferenceColumn">176</GridLength>
+    <x:Double x:Key="AppsColumnSpacing">12</x:Double>
+    <!-- 行的左右内边距：左边给展开箭头留出点按区域，右边与卡片描边对齐 -->
+    <Thickness x:Key="AppsRowPadding">8,0,16,0</Thickness>
+    <!-- 偏好列与内存列之间额外的间距 -->
+    <Thickness x:Key="AppsPreferenceGap">28,0,0,0</Thickness>
 </ResourceDictionary>

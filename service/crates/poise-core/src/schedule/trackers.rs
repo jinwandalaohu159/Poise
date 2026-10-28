@@ -95,7 +95,7 @@ impl TempBoosts {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::classify::Role;
+    use crate::classify::{Role, ScheduleScope};
     use crate::prefs::AppPreference;
 
     fn classes(fg_root: Option<Pid>) -> HashMap<Pid, Classification> {
@@ -115,6 +115,7 @@ mod tests {
                     is_game: false,
                     anti_cheat_present: false,
                     restartable_service: None,
+                    schedule: ScheduleScope::App,
                 },
             );
         }

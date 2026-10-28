@@ -1,0 +1,53 @@
+<UserControl
+    x:Class="Poise.App.UI.Controls.SinceBootCard"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:c="using:Poise.App.UI.Controls"
+    xmlns:l="using:Poise.App.UI.Localization"
+    xmlns:p="using:Poise.Core.Presentation">
+
+    <UserControl.Resources>
+        <!-- 列宽：表头与每一行共用；列名居中，数值右对齐 -->
+        <GridLength x:Key="ValueColumn">112</GridLength>
+
+        <DataTemplate x:Key="RowTemplate" x:DataType="p:SinceBootRow">
+            <Grid ColumnSpacing="16" Padding="0,6" BorderThickness="0,1,0,0"
+                  BorderBrush="{ThemeResource DividerStrokeColorDefaultBrush}">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="{StaticResource ValueColumn}" />
+                    <ColumnDefinition Width="{StaticResource ValueColumn}" />
+                    <ColumnDefinition Width="{StaticResource ValueColumn}" />
+                </Grid.ColumnDefinitions>
+                <TextBlock Text="{x:Bind Label}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" />
+                <TextBlock Grid.Column="1" Text="{x:Bind AtBoot}" Style="{StaticResource TableNumberTextStyle}" HorizontalAlignment="Right" VerticalAlignment="Center"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                <TextBlock Grid.Column="2" Text="{x:Bind Now}" Style="{StaticResource TableNumberTextStyle}" HorizontalAlignment="Right" VerticalAlignment="Center" />
+                <c:StatusTag Grid.Column="3" HorizontalAlignment="Right"
+                             Text="{x:Bind Change}" Tone="{x:Bind c:SinceBootCard.ToneOf(Notable)}" />
+            </Grid>
+        </DataTemplate>
+    </UserControl.Resources>
+
+    <!-- 与开机时相比：说明 + 对比表（橙色的含义、系统缓存为什么不清理，见标题旁的圆圈问号） -->
+    <Border Style="{StaticResource LargeCardStyle}">
+        <StackPanel Spacing="12">
+            <TextBlock x:Name="CaptionText" Style="{StaticResource CaptionSecondaryTextStyle}" TextWrapping="Wrap" />
+            <StackPanel x:Name="Table" Visibility="Collapsed">
+                <Grid ColumnSpacing="16" Padding="0,0,0,6">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="{StaticResource ValueColumn}" />
+                        <ColumnDefinition Width="{StaticResource ValueColumn}" />
+                        <ColumnDefinition Width="{StaticResource ValueColumn}" />
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Text="{l:L Key=since_boot.col.item}" Style="{StaticResource ColumnHeaderTextStyle}" />
+                    <TextBlock Grid.Column="1" Text="{l:L Key=since_boot.col.boot}" Style="{StaticResource ColumnHeaderTextStyle}" HorizontalAlignment="Center" />
+                    <TextBlock Grid.Column="2" Text="{l:L Key=since_boot.col.now}" Style="{StaticResource ColumnHeaderTextStyle}" HorizontalAlignment="Center" />
+                    <TextBlock Grid.Column="3" Text="{l:L Key=since_boot.col.change}" Style="{StaticResource ColumnHeaderTextStyle}" HorizontalAlignment="Center" />
+                </Grid>
+                <ItemsControl x:Name="Rows" ItemTemplate="{StaticResource RowTemplate}" />
+            </StackPanel>
+        </StackPanel>
+    </Border>
+</UserControl>

@@ -1,17 +1,17 @@
 using System.Numerics;
-using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Automation;
+using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
 using Poise.Core.Localization;
 using Poise.App.UI.Theme;
 using Poise.Core.Presentation;
 using Poise.App.UI.ViewModels;
-using Windows.Graphics;
 
 namespace Poise.App.UI.Windows;
 
 /// <summary>
-/// 托盘面板：状态、三档模式、一键清理。贴着任务栏弹出，点别处就收起。
+/// 托盘面板：四个指标、模式、一键清理、打开主窗口。贴着任务栏弹出，点别处就收起。
 /// 只创建一次，之后显示/隐藏复用。点托盘图标时由托盘代理唤起（见 App）。
 /// </summary>
 public sealed partial class TrayFlyoutWindow : Window
@@ -19,14 +19,14 @@ public sealed partial class TrayFlyoutWindow : Window
     private const int Width = 360;
     /// <summary>首次显示前还没有布局结果时使用的高度。</summary>
     private const int FallbackHeight = 280;
-    private const int EdgeGap = 12;
     /// <summary>点托盘图标会先让面板失去焦点而收起，紧接着的点击不应再把它打开。</summary>
     private static readonly TimeSpan ReopenGuard = TimeSpan.FromMilliseconds(300);
 
     private readonly AppHost _host;
     private readonly HomeViewModel _vm;
+    private readonly ForegroundWatcher _foreground = new();
+    private readonly IntPtr _hwnd;
     private DateTime _hiddenAt = DateTime.MinValue;
-    private string? _shownTitle;
 
     public TrayFlyoutWindow(AppHost host)
     {
@@ -34,8 +34,9 @@ public sealed partial class TrayFlyoutWindow : Window
         _vm = new HomeViewModel(host);
         InitializeComponent();
         Title = "Poise";
+        _hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
         SystemBackdrop = new DesktopAcrylicBackdrop();
-        ConfigureChrome();
+        FlyoutPlacement.ConfigureChrome(AppWindow);
 
         Modes.Compact = true;
         Modes.ModeChosen += mode => _ = _vm.SetModeAsync(mode);
@@ -44,7 +45,6 @@ public sealed partial class TrayFlyoutWindow : Window
         CleanButton.Action = CleanAsync;
         Localize();
         Motion.EnableTransitions(Root);
-        Motion.EnableTransitions(StatusText);
         ResetEntrance();
         // 窗口高度跟随内容：语言、描述换行变化时自动校正。
         Root.SizeChanged += (_, e) =>
@@ -59,8 +59,12 @@ public sealed partial class TrayFlyoutWindow : Window
         Loc.Changed += Localize;
         host.Theme.Changed += ApplyTheme;
         Activated += OnActivated;
+        _foreground.Changed += OnForegroundChanged;
         Closed += OnClosed;
-        Render(_vm.Current);
+        if (_vm.Ready)
+        {
+            Render(_vm.Current);
+        }
         ApplyTheme();
     }
 
@@ -83,10 +87,12 @@ public sealed partial class TrayFlyoutWindow : Window
 
     public void Show()
     {
-        ResultText.Text = "";
+        ShowResult("");
         PlaceAboveTaskbar();
         AppWindow.Show();
         Activate();
+        Foreground.Take(_hwnd);
+        _foreground.Start();
         SetVisible(true);
         Root.Opacity = 1;
         Root.Translation = Vector3.Zero;
@@ -99,6 +105,7 @@ public sealed partial class TrayFlyoutWindow : Window
             return;
         }
         _hiddenAt = DateTime.UtcNow;
+        _foreground.Stop();
         AppWindow.Hide();
         SetVisible(false);
         ResetEntrance();
@@ -109,7 +116,7 @@ public sealed partial class TrayFlyoutWindow : Window
     {
         if (IsShown)
         {
-            ForegroundHandoff.Allow();
+            Foreground.AllowOthers();
             Hide();
         }
     }
@@ -121,46 +128,15 @@ public sealed partial class TrayFlyoutWindow : Window
         Root.Translation = new Vector3(0, 16, 0);
     }
 
-    private void ConfigureChrome()
-    {
-        AppWindow.IsShownInSwitchers = false;
-        if (AppWindow.Presenter is OverlappedPresenter p)
-        {
-            p.IsResizable = false;
-            p.IsMaximizable = false;
-            p.IsMinimizable = false;
-            p.IsAlwaysOnTop = true;
-            // 保留边框（Windows 11 的圆角与描边），去掉标题栏。
-            p.SetBorderAndTitleBar(hasBorder: true, hasTitleBar: false);
-        }
-    }
-
-    /// <summary>放在主屏工作区的右下角（任务栏在其他边时也贴着那条边）。</summary>
+    /// <summary>按内容高度调整窗口并贴着任务栏放好。</summary>
     private void PlaceAboveTaskbar()
     {
-        var display = DisplayArea.GetFromWindowId(AppWindow.Id, DisplayAreaFallback.Primary);
-        var work = display.WorkArea;
-        var outer = display.OuterBounds;
         var scale = Content.XamlRoot?.RasterizationScale ?? this.Scale();
-        var height = Root.ActualHeight > 0 ? Root.ActualHeight : FallbackHeight;
-        var frameW = AppWindow.Size.Width - AppWindow.ClientSize.Width;
-        var frameH = AppWindow.Size.Height - AppWindow.ClientSize.Height;
-        AppWindow.Resize(new SizeInt32((int)(Width * scale) + frameW, (int)Math.Ceiling(height * scale) + frameH));
-        var w = AppWindow.Size.Width;
-        var h = AppWindow.Size.Height;
-        var gap = (int)(EdgeGap * scale);
-
-        var x = work.X + work.Width - w - gap;
-        var y = work.Y + work.Height - h - gap;
-        if (work.Y > outer.Y)
-        {
-            y = work.Y + gap; // 任务栏在顶部
-        }
-        if (work.X > outer.X)
-        {
-            x = work.X + gap; // 任务栏在左侧
-        }
-        AppWindow.Move(new PointInt32(x, y));
+        // 按当前内容量一次高度（清理结果行可能刚显示或收起），避免窗口出现后再改尺寸、跳一下。
+        Root.Measure(new global::Windows.Foundation.Size(Width, double.PositiveInfinity));
+        var height = Root.DesiredSize.Height > 0 ? Root.DesiredSize.Height
+            : Root.ActualHeight > 0 ? Root.ActualHeight : FallbackHeight;
+        FlyoutPlacement.PlaceNearTaskbar(AppWindow, Width, height, scale);
     }
 
     private void OnActivated(object sender, WindowActivatedEventArgs args)
@@ -171,22 +147,21 @@ public sealed partial class TrayFlyoutWindow : Window
         }
     }
 
+    /// <summary>点了别处（桌面、任务栏、其他窗口）：前台已经不是面板，收起。</summary>
+    private void OnForegroundChanged(IntPtr hwnd)
+    {
+        if (hwnd != _hwnd)
+        {
+            Hide();
+        }
+    }
+
     private void SetVisible(bool visible) => _host.Presence.SetFlyoutVisible(visible);
 
     private void Render(HomeView v)
     {
-        Dot.Show(v.Level);
-        if (_shownTitle is not null && _shownTitle != v.Title && IsShown)
-        {
-            _ = Motion.SwapAsync(StatusText, () => StatusTitle.Text = v.Title);
-        }
-        else
-        {
-            StatusTitle.Text = v.Title;
-        }
-        _shownTitle = v.Title;
-        StatusDescription.Text = v.Description;
-        Modes.Show(v.Selected, v.Effective);
+        Metrics.Show(v);
+        Modes.Show(v.Selected, v.Effective, v.InUse, v.VendorMode);
         Modes.IsEnabled = CleanButton.IsEnabled = v.Connected;
     }
 
@@ -194,12 +169,15 @@ public sealed partial class TrayFlyoutWindow : Window
     {
         CleanButton.Label = Loc.Get("home.clean");
         CleanButton.BusyLabel = Loc.Get("home.cleaning");
+        ToolTipService.SetToolTip(OpenButton, Loc.Get("tray.open"));
+        AutomationProperties.SetName(OpenButton, Loc.Get("tray.open"));
     }
 
     private void OnClosed(object sender, WindowEventArgs args)
     {
         _vm.Updated -= Render;
         _vm.Dispose();
+        _foreground.Dispose();
         Loc.Changed -= Localize;
         _host.Theme.Changed -= ApplyTheme;
         SetVisible(false);
@@ -216,7 +194,14 @@ public sealed partial class TrayFlyoutWindow : Window
     private async Task CleanAsync()
     {
         var feedback = await _vm.CleanAsync();
-        ResultText.Text = feedback.Message;
+        ShowResult(feedback.Message);
+    }
+
+    /// <summary>清理结果：有内容时才占一行，面板高度随之调整。</summary>
+    private void ShowResult(string text)
+    {
+        ResultText.Text = text;
+        ResultText.Visibility = text.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private void OnOpenMain(object sender, RoutedEventArgs e)

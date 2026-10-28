@@ -2,6 +2,8 @@
 
 pub mod action;
 pub mod activity;
+pub mod app_groups;
+pub mod auto_mode;
 pub mod classify;
 pub mod cleanup;
 pub mod diagnose;
@@ -12,3 +14,4 @@ pub mod optimize;
 pub mod prefs;
 pub mod safety;
 pub mod schedule;
+pub mod seen_apps;

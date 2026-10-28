@@ -32,6 +32,12 @@ pub fn logical_cpus() -> u32 {
     info.dwNumberOfProcessors
 }
 
+/// 开机到现在的毫秒数。
+pub fn uptime_ms() -> u64 {
+    // SAFETY: 无参数。
+    unsafe { GetTickCount64() }
+}
+
 fn filetime(ft: FILETIME) -> u64 {
     ((ft.dwHighDateTime as u64) << 32) | ft.dwLowDateTime as u64
 }
@@ -39,8 +45,7 @@ fn filetime(ft: FILETIME) -> u64 {
 pub fn read_metrics() -> SystemMetrics {
     let mut m = SystemMetrics {
         logical_cpus: logical_cpus(),
-        // SAFETY: 无参数。
-        uptime_ms: unsafe { GetTickCount64() },
+        uptime_ms: uptime_ms(),
         ..Default::default()
     };
     read_cpu_times(&mut m);
@@ -81,6 +86,10 @@ fn read_memory(m: &mut SystemMetrics) {
         m.commit_limit = perf.CommitLimit as u64 * page;
         m.kernel_nonpaged = perf.KernelNonpaged as u64 * page;
         m.kernel_paged = perf.KernelPaged as u64 * page;
+        m.system_cache = perf.SystemCache as u64 * page;
+        m.handle_count = perf.HandleCount;
+        m.thread_count = perf.ThreadCount;
+        m.process_count = perf.ProcessCount;
     }
 }
 
@@ -114,7 +123,12 @@ pub fn on_battery() -> bool {
 /// 系统盘的剩余空间与总大小（字节）。
 pub fn system_drive_space() -> Option<(u64, u64)> {
     let drive = std::env::var("SystemDrive").unwrap_or_else(|_| "C:".into());
-    let root = crate::win::wide::WideString::new(&format!("{drive}\\"));
+    drive.chars().next().and_then(drive_space)
+}
+
+/// 某个盘符的剩余空间与总大小（字节）。
+pub fn drive_space(letter: char) -> Option<(u64, u64)> {
+    let root = crate::win::wide::WideString::new(&format!("{letter}:\\"));
     let (mut free, mut total) = (0u64, 0u64);
     // SAFETY: 路径缓冲区在调用期间有效，输出到本地变量。
     unsafe {

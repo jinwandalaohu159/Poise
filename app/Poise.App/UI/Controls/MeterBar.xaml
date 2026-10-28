@@ -1,0 +1,42 @@
+<UserControl
+    x:Class="Poise.App.UI.Controls.MeterBar"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    Height="4">
+
+    <!-- 细进度条：底轨 + 次要段（例如"可释放部分"）+ 主段。长度用横向缩放表现，由合成线程平滑过渡。 -->
+    <Grid x:Name="Track" CornerRadius="2" Background="{ThemeResource ControlStrongFillColorDisabledBrush}">
+        <VisualStateManager.VisualStateGroups>
+            <VisualStateGroup x:Name="LevelStates">
+                <VisualStateGroup.Transitions>
+                    <VisualTransition GeneratedDuration="0:0:0.25" />
+                </VisualStateGroup.Transitions>
+                <VisualState x:Name="Accent" />
+                <VisualState x:Name="Good">
+                    <VisualState.Setters>
+                        <Setter Target="Fill.Background" Value="{ThemeResource SystemFillColorSuccessBrush}" />
+                    </VisualState.Setters>
+                </VisualState>
+                <VisualState x:Name="Notice">
+                    <VisualState.Setters>
+                        <Setter Target="Fill.Background" Value="{ThemeResource SystemFillColorCautionBrush}" />
+                    </VisualState.Setters>
+                </VisualState>
+                <VisualState x:Name="Bad">
+                    <VisualState.Setters>
+                        <Setter Target="Fill.Background" Value="{ThemeResource SystemFillColorCriticalBrush}" />
+                    </VisualState.Setters>
+                </VisualState>
+                <VisualState x:Name="Neutral">
+                    <VisualState.Setters>
+                        <Setter Target="Fill.Background" Value="{ThemeResource TextFillColorTertiaryBrush}" />
+                    </VisualState.Setters>
+                </VisualState>
+            </VisualStateGroup>
+        </VisualStateManager.VisualStateGroups>
+        <Border x:Name="Secondary" HorizontalAlignment="Stretch" CornerRadius="2"
+                Background="{ThemeResource AccentFillColorDefaultBrush}" Opacity="0.35" />
+        <Border x:Name="Fill" HorizontalAlignment="Stretch" CornerRadius="2"
+                Background="{ThemeResource AccentFillColorDefaultBrush}" />
+    </Grid>
+</UserControl>

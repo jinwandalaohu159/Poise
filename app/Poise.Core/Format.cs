@@ -15,6 +15,50 @@ public static class Format
             : (bytes / mb).ToString("0", CultureInfo.InvariantCulture) + " MB";
     }
 
+    /// <summary>
+    /// 硬件容量：整数不带小数（16 GB、780 GB），1 TB 起用 TB（1.8 TB）。
+    /// 与 <see cref="Bytes"/> 的区别：容量是固定规格，不需要固定一位小数来对齐变化。
+    /// </summary>
+    public static string Capacity(ulong bytes)
+    {
+        const double tb = 1024d * 1024 * 1024 * 1024;
+        const double gb = 1024d * 1024 * 1024;
+        const double mb = 1024d * 1024;
+        return bytes switch
+        {
+            >= (ulong)tb => Trim(bytes / tb) + " TB",
+            >= (ulong)gb => (bytes / gb >= 100 ? (bytes / gb).ToString("0", CultureInfo.InvariantCulture) : Trim(bytes / gb)) + " GB",
+            _ => (bytes / mb).ToString("0", CultureInfo.InvariantCulture) + " MB",
+        };
+
+        static string Trim(double v) => v.ToString("0.#", CultureInfo.InvariantCulture);
+    }
+
+    /// <summary>个数：中文过万用"万"（4.6 万），英文过万用 K（46K），其余带千分位。</summary>
+    public static string Count(ulong n)
+    {
+        var chinese = Loc.Language == Loc.Chinese;
+        var unit = chinese ? 10_000d : 1_000d;
+        if (n < 10_000)
+        {
+            return n.ToString("N0", CultureInfo.InvariantCulture);
+        }
+        var value = (n / unit).ToString(n / unit >= 100 ? "0" : "0.#", CultureInfo.InvariantCulture);
+        return chinese ? $"{value} 万" : $"{value}K";
+    }
+
+    /// <summary>一段时长：3 天 4 小时 / 5 小时 12 分钟 / 8 分钟。</summary>
+    public static string Duration(TimeSpan d)
+    {
+        if (d.TotalDays >= 1)
+        {
+            return Loc.Format("time.span.days", (int)d.TotalDays, d.Hours);
+        }
+        return d.TotalHours >= 1
+            ? Loc.Format("time.span.hours", (int)d.TotalHours, d.Minutes)
+            : Loc.Format("time.span.minutes", Math.Max(1, (int)d.TotalMinutes));
+    }
+
     public static string Temperature(float celsius) => $"{celsius:0}°";
 
     public static string Percent(float pct) => $"{pct:0}%";

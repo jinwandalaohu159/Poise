@@ -8,6 +8,7 @@ namespace Poise.App.UI.Services;
 /// 界面可见性的唯一入口：
 /// 主窗口或托盘面板显示时加快状态刷新；主窗口显示期间定期告诉服务"界面在显示"（服务据此读取显卡）；
 /// 两者都不显示时触发 <see cref="AllHidden"/>，界面据此在闲置一段时间后退出、释放内存。
+/// 走势图只在主窗口显示时读取（<see cref="MainVisibilityChanged"/>）。
 /// </summary>
 public sealed class UiPresence : IDisposable
 {
@@ -37,6 +38,12 @@ public sealed class UiPresence : IDisposable
 
     public bool AnyVisible => _main || _flyout;
 
+    /// <summary>主窗口是否显示（走势图只在主窗口显示时读取）。</summary>
+    public bool MainVisible => _main;
+
+    /// <summary>主窗口显示或隐藏了。</summary>
+    public event Action? MainVisibilityChanged;
+
     public void SetMainVisible(bool visible)
     {
         if (_main == visible)
@@ -55,6 +62,7 @@ public sealed class UiPresence : IDisposable
         }
         ReportMain();
         Update(wasVisible);
+        MainVisibilityChanged?.Invoke();
     }
 
     public void SetFlyoutVisible(bool visible)

@@ -1,26 +1,19 @@
-//! 采样周期：采集 → 分类 → 调度 → 硬件模式 → 健康评估 → 自动清理。
+//! 采样周期：采集 → 观察趋势 → 分类 → 调度 → 读取传感器 → 健康评估 → 硬件模式 → 自动清理。
 
 use std::collections::HashMap;
 use std::time::Duration;
 
 use poise_core::classify::{Classification, ClassifyInput};
-use poise_core::diagnose::{self, DiagnoseConfig, HealthInput, Heat};
+use poise_core::diagnose::{self, DiagnoseConfig, Health, HealthInput, Sample};
 use poise_core::model::{Millis, Pid, Snapshot};
-use poise_core::prefs::Mode;
 use poise_core::safety::Trigger;
-use poise_core::schedule::{GameInfo, ScheduleInput};
+use poise_hardware::HardwareReading;
 
+use super::schedule::ScheduleOutcome;
 use super::{Engine, View};
 
 /// 采样间隔。前台切换不等采样，会立即触发一次调度。
 pub const TICK: Duration = Duration::from_secs(2);
-/// 泄漏嫌疑的重新计算间隔。
-const SUSPECTS_EVERY_MS: Millis = 60_000;
-
-struct ScheduleOutcome {
-    effective_mode: Mode,
-    game: Option<GameInfo>,
-}
 
 impl Engine {
     pub fn tick(&mut self) {
@@ -32,70 +25,56 @@ impl Engine {
                 return;
             }
         };
-        self.activity.update(&snapshot);
-        self.leaks.observe(&snapshot);
-        self.kernel_pool
-            .observe(now, snapshot.system.kernel_nonpaged);
-        self.refresh_suspects(now);
-
+        self.observe(&snapshot, now);
         let classes = self.classify(&snapshot, now);
         let outcome = self.schedule(&snapshot, &classes);
-        let reading = self
-            .hardware
-            .read(outcome.game.is_some() || self.ui_active(now), now);
-        let heat = self
-            .heat
-            .observe(&DiagnoseConfig::default(), reading.thermals, now);
-        let health = self.assess(&snapshot, &classes, &outcome, &reading, heat);
-        self.apply_hardware_mode(outcome.effective_mode, &health, now);
-
+        let reading = self.read_sensors(outcome.game.is_some(), now);
+        let health = self.assess(&snapshot, &classes, &outcome, &reading, now);
+        self.record_history(&snapshot, &reading, now);
+        let effective_mode = self.apply_modes(outcome.effective_mode, &health, now);
         self.view = Some(View {
             snapshot,
             classes,
-            effective_mode: outcome.effective_mode,
+            effective_mode,
             game: outcome.game,
             reading,
             health,
         });
+        self.remember_running_apps();
         self.run_deferred_cleanup();
         self.auto_clean(now);
     }
 
-    /// 前台切换时立即用上一轮的快照重新调度，不等下一次采样。
+    /// 前台切换、用户改模式时立即重新调度并落到硬件，不等下一次采样。
+    /// 重新取一次进程快照（约 10 ms）：刚打开的程序也能立即拿到前台待遇。
+    /// 这样紧接着的状态查询就是最终结果（包括过热降级后的实际模式），界面不会先显示一个中间状态。
     pub fn reschedule_now(&mut self) {
         let now = self.now();
         let Some(view) = self.view.take() else {
             return;
         };
-        let classes = self.classify(&view.snapshot, now);
-        let outcome = self.schedule(&view.snapshot, &classes);
+        let snapshot = self.snapshotter.take(now).unwrap_or(view.snapshot);
+        let classes = self.classify(&snapshot, now);
+        let outcome = self.schedule(&snapshot, &classes);
+        let effective_mode = self.apply_modes(outcome.effective_mode, &view.health, now);
         self.view = Some(View {
+            snapshot,
             classes,
-            effective_mode: outcome.effective_mode,
+            effective_mode,
             game: outcome.game,
-            ..view
+            reading: view.reading,
+            health: view.health,
         });
     }
 
-    /// 界面正显示着才读显卡（在 Optimus 笔记本上读显卡会唤醒休眠中的独显）。
-    fn ui_active(&self, now: Millis) -> bool {
-        self.session.ui_visible(now)
-    }
-
-    pub(super) fn foreground_immersive(&self) -> bool {
-        let now = self.now();
-        self.session.current(now).fullscreen || self.view.as_ref().is_some_and(|v| v.game.is_some())
-    }
-
-    fn refresh_suspects(&mut self, now: Millis) {
-        let due = self
-            .cleanup
-            .suspects_at
-            .is_none_or(|t| now.saturating_sub(t) >= SUSPECTS_EVERY_MS);
-        if due {
-            self.cleanup.suspects = self.leaks.suspects();
-            self.cleanup.suspects_at = Some(now);
-        }
+    /// 只在采样周期里做的观察：CPU 占用、泄漏与增长趋势。
+    fn observe(&mut self, snapshot: &Snapshot, now: Millis) {
+        self.activity.update(snapshot);
+        self.leaks.observe(snapshot);
+        self.kernel_pool
+            .observe(now, snapshot.system.kernel_nonpaged);
+        self.observe_growth(snapshot, now);
+        self.refresh_suspects(snapshot, now);
     }
 
     fn classify(&self, snapshot: &Snapshot, now: Millis) -> HashMap<Pid, Classification> {
@@ -110,51 +89,26 @@ impl Engine {
         })
     }
 
-    fn schedule(
-        &mut self,
-        snapshot: &Snapshot,
-        classes: &HashMap<Pid, Classification>,
-    ) -> ScheduleOutcome {
-        let session = self.session.current(self.now());
-        let plan = self.scheduler.plan(&ScheduleInput {
-            snapshot,
-            session: &session,
-            classes,
-            activity: &self.activity,
-            user_mode: self.settings.mode,
-            auto_full_for_games: self.settings.auto_full_for_games,
-        });
-        for planned in &plan.actions {
-            let Some(class) = classes.get(&planned.key.pid) else {
-                continue;
-            };
-            let result = self.executor.execute(
-                &planned.action,
-                class,
-                planned.original_priority,
-                Trigger::Auto,
-            );
-            match &result {
-                Ok(_) if self.cfg.dry_run => log::info!("[观察] {:?}", planned.action),
-                Ok(_) => log::debug!("{:?}", planned.action),
-                Err(e) => log::debug!("{:?} 未执行：{e}", planned.action),
-            }
-            self.scheduler.report(planned, &result);
-        }
-        ScheduleOutcome {
-            effective_mode: plan.effective_mode,
-            game: plan.game,
-        }
+    /// 取采集线程最近一次的读数（不等待）。界面显示着或在玩游戏时才读显卡和风扇
+    /// （在 Optimus 笔记本上读显卡会唤醒休眠中的独显）。
+    fn read_sensors(&mut self, gaming: bool, now: Millis) -> HardwareReading {
+        self.sensors
+            .set_detailed(gaming || self.session.ui_visible(now));
+        self.sensors.latest()
     }
 
     fn assess(
-        &self,
+        &mut self,
         snapshot: &Snapshot,
         classes: &HashMap<Pid, Classification>,
         outcome: &ScheduleOutcome,
-        reading: &poise_hardware::HardwareReading,
-        heat: Heat,
-    ) -> poise_core::diagnose::Health {
+        reading: &HardwareReading,
+        now: Millis,
+    ) -> Health {
+        let heat = self
+            .heat
+            .observe(&DiagnoseConfig::default(), reading.thermals, now);
+        self.last_heat = heat;
         let preview = self.plan_cleanup(snapshot, classes, Trigger::Manual, false);
         diagnose::assess(
             &DiagnoseConfig::default(),
@@ -167,5 +121,20 @@ impl Engine {
                 system_drive: reading.storage.system_drive,
             },
         )
+    }
+
+    /// 走势图：整机 CPU、大核 / 小核负载、内存、CPU 温度。
+    fn record_history(&mut self, snapshot: &Snapshot, reading: &HardwareReading, now: Millis) {
+        let cores = self.core_load_meter.sample();
+        self.history.push(
+            now,
+            Sample {
+                cpu_pct: self.activity.system_cpu_pct(),
+                performance_pct: cores.map(|c| c.performance_pct),
+                efficiency_pct: cores.map(|c| c.efficiency_pct),
+                mem_pct: snapshot.system.mem_used_pct(),
+                cpu_temp: reading.thermals.cpu_temp,
+            },
+        );
     }
 }

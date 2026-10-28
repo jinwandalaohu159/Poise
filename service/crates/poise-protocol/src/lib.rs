@@ -12,7 +12,7 @@ pub use framing::{FramingError, MAX_MESSAGE_BYTES, read_message, write_message};
 use serde::{Deserialize, Serialize};
 
 use poise_core::model::{Pid, SessionState};
-use poise_core::prefs::{AppPreference, Mode};
+use poise_core::prefs::{AppPreference, GameMode, Mode};
 
 pub const PIPE_NAME: &str = r"\\.\pipe\Poise";
 pub const PROTOCOL_VERSION: u32 = 1;
@@ -35,13 +35,24 @@ pub enum Request {
     SetMode {
         mode: Mode,
     },
-    SetAutoFullForGames {
-        enabled: bool,
+    /// 玩游戏时切换到哪个模式。
+    SetGameMode {
+        mode: GameMode,
     },
     SetAutoClean {
         enabled: bool,
     },
+    /// 智能调度开关。关闭时立即撤销全部进程调整。
+    SetSmartSchedule {
+        enabled: bool,
+    },
+    /// 风扇加速，0～100（0 = 不加速，由 BIOS 按温度调节）。超出范围按 100 处理。
+    SetFanBoost {
+        percent: u8,
+    },
     CleanNow,
+    /// 清理页：按程序列出占用，以及每一项会怎样处理。
+    CleanupOverview,
     ListApps,
     /// `path` 只用作偏好的键，服务不会运行它。
     SetAppPreference {
@@ -62,6 +73,8 @@ pub enum Request {
     ApplyRecommended,
     RevertAll,
     Diagnose,
+    /// 走势图的数据。只读、很轻，界面显示走势图时每 2 秒读取一次。
+    Trend,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

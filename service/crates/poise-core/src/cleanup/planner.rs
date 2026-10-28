@@ -7,6 +7,7 @@ use crate::classify::{Classification, Role};
 use crate::model::{Pid, ProcessKey, ProcessSample, Snapshot};
 use crate::safety::{SafetyGuard, Trigger};
 
+use super::growth::{Grown, GrowthMetric};
 use super::leak::{LeakMetric, LeakSuspect};
 
 #[derive(Debug, Clone, Copy)]
@@ -33,6 +34,8 @@ impl Default for CleanupConfig {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CleanupReason {
     Leak(LeakMetric),
+    /// 与进程自身稳定后的基线相比增长了数倍。
+    Grown(GrowthMetric),
     Oversized,
 }
 
@@ -44,7 +47,8 @@ pub struct CleanupStep {
     pub disruptive: bool,
     pub reason: CleanupReason,
     pub name: String,
-    pub private_bytes: u64,
+    /// 处理后预计归还的物理内存（专用工作集）。
+    pub memory_bytes: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -53,7 +57,7 @@ pub enum Advisory {
     HeavyApp {
         pid: Pid,
         name: String,
-        private_bytes: u64,
+        memory_bytes: u64,
     },
     /// 内核内存池过大，只有真重启能解决。
     RestartRecommended { kernel_nonpaged: u64 },
@@ -75,7 +79,12 @@ impl CleanupPlan {
     }
 
     pub fn expected_free(&self) -> u64 {
-        self.run_now.iter().map(|s| s.private_bytes).sum()
+        self.run_now.iter().map(|s| s.memory_bytes).sum()
+    }
+
+    /// 包括延后项在内，这份计划总共能释放的内存。
+    pub fn total_freeable(&self) -> u64 {
+        self.expected_free() + self.deferred.iter().map(|s| s.memory_bytes).sum::<u64>()
     }
 }
 
@@ -83,6 +92,8 @@ pub struct PlanInput<'a> {
     pub snapshot: &'a Snapshot,
     pub classes: &'a HashMap<Pid, Classification>,
     pub suspects: &'a [LeakSuspect],
+    /// 与自身基线相比异常增长的进程（由 [`super::GrowthWatch`] 判断）。
+    pub grown: &'a [Grown],
     pub trigger: Trigger,
     /// 前台有游戏或全屏程序。
     pub foreground_immersive: bool,
@@ -92,8 +103,18 @@ pub struct PlanInput<'a> {
 
 pub fn plan(cfg: &CleanupConfig, input: &PlanInput) -> CleanupPlan {
     let mut plan = CleanupPlan::default();
-    let suspects: HashMap<ProcessKey, LeakMetric> =
-        input.suspects.iter().map(|s| (s.key, s.metric)).collect();
+    let suspects: HashMap<ProcessKey, CleanupReason> = input
+        .grown
+        .iter()
+        .map(|g| (g.key, CleanupReason::Grown(g.change.metric)))
+        // 两者都有时，按趋势得出的结论优先（后插入的覆盖前面的）。
+        .chain(
+            input
+                .suspects
+                .iter()
+                .map(|s| (s.key, CleanupReason::Leak(s.metric))),
+        )
+        .collect();
     let mut seen_services = HashSet::new();
     let mut manual_pending = 0;
 
@@ -126,7 +147,7 @@ pub fn plan(cfg: &CleanupConfig, input: &PlanInput) -> CleanupPlan {
             disruptive,
             reason,
             name: p.facts.friendly_name(),
-            private_bytes: p.metrics.private_bytes,
+            memory_bytes: p.metrics.memory_bytes,
         };
         match (input.trigger, disruptive) {
             (Trigger::Auto, true) => manual_pending += 1,
@@ -159,10 +180,10 @@ fn reason_for(
     cfg: &CleanupConfig,
     p: &ProcessSample,
     c: &Classification,
-    suspects: &HashMap<ProcessKey, LeakMetric>,
+    suspects: &HashMap<ProcessKey, CleanupReason>,
 ) -> Option<CleanupReason> {
-    if let Some(m) = suspects.get(&p.facts.key) {
-        return Some(CleanupReason::Leak(*m));
+    if let Some(reason) = suspects.get(&p.facts.key) {
+        return Some(*reason);
     }
     let private = p.metrics.private_bytes;
     let oversized = match c.role {
@@ -205,7 +226,7 @@ fn heavy_app(p: &ProcessSample) -> Advisory {
     Advisory::HeavyApp {
         pid: p.facts.key.pid,
         name: p.facts.friendly_name(),
-        private_bytes: p.metrics.private_bytes,
+        memory_bytes: p.metrics.memory_bytes,
     }
 }
 
@@ -229,11 +250,11 @@ fn add_heavy_window_hints(cfg: &CleanupConfig, input: &PlanInput, plan: &mut Cle
                     && c.has_visible_window
                     && !c.in_foreground_tree
                     && !c.is_game
-            }) && p.metrics.private_bytes >= cfg.heavy_window_bytes
+            }) && p.metrics.memory_bytes >= cfg.heavy_window_bytes
                 && !already.contains(&p.facts.key.pid)
         })
         .collect();
-    heavy.sort_by_key(|p| std::cmp::Reverse(p.metrics.private_bytes));
+    heavy.sort_by_key(|p| std::cmp::Reverse(p.metrics.memory_bytes));
     plan.advisories
         .extend(heavy.into_iter().take(2).map(heavy_app));
 }
@@ -241,6 +262,7 @@ fn add_heavy_window_hints(cfg: &CleanupConfig, input: &PlanInput, plan: &mut Cle
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::classify::ScheduleScope;
     use crate::model::{ProcessFacts, ProcessMetrics, ServiceFacts, SystemMetrics};
     use crate::prefs::AppPreference;
 
@@ -254,12 +276,13 @@ mod tests {
                 services: vec![ServiceFacts {
                     name: "Audiosrv".into(),
                     accepts_stop: true,
-                    running_dependents: 0,
+                    ..Default::default()
                 }],
                 ..Default::default()
             },
             metrics: ProcessMetrics {
                 private_bytes: private_mb * MB,
+                memory_bytes: private_mb * MB,
                 ..Default::default()
             },
         }
@@ -278,6 +301,7 @@ mod tests {
             is_game: false,
             anti_cheat_present: false,
             restartable_service: Some("Audiosrv".into()),
+            schedule: ScheduleScope::Excluded,
         }
     }
 
@@ -292,6 +316,7 @@ mod tests {
             snapshot: snap,
             classes,
             suspects,
+            grown: &[],
             trigger,
             foreground_immersive: immersive,
             restart_advised: true,
@@ -333,8 +358,6 @@ mod tests {
             key: ProcessKey { pid, created: 1 },
             metric: LeakMetric::Memory,
             per_hour: 1e8,
-            first: 0.0,
-            current: 0.0,
         }
     }
 
@@ -429,5 +452,35 @@ mod tests {
             &input(&snap, &classes, &[], Trigger::Manual, false),
         );
         assert_eq!(p.run_now.len(), 1);
+    }
+
+    #[test]
+    fn processes_grown_past_their_baseline_are_cleaned_like_leaks() {
+        use crate::cleanup::Change;
+        let snap = Snapshot {
+            processes: vec![sample(3, "helper.exe", 50)],
+            ..Default::default()
+        };
+        let classes = HashMap::from([(3, class(Role::UserApp))]);
+        let grown = [Grown {
+            key: ProcessKey { pid: 3, created: 1 },
+            change: Change {
+                metric: GrowthMetric::Handles,
+                from: 1_000,
+                to: 40_000,
+            },
+        }];
+        let p = plan(
+            &CleanupConfig::default(),
+            &PlanInput {
+                grown: &grown,
+                ..input(&snap, &classes, &[], Trigger::Manual, false)
+            },
+        );
+        assert_eq!(p.run_now.len(), 1);
+        assert_eq!(
+            p.run_now[0].reason,
+            CleanupReason::Grown(GrowthMetric::Handles)
+        );
     }
 }

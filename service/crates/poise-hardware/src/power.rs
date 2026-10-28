@@ -1,4 +1,5 @@
-//! 通用层：三档模式对应的电源计划参数。全部经由变更日志修改，回到"均衡"时还原。
+//! 通用层：各模式对应的电源计划参数。全部经由变更日志修改，回到"均衡"时还原。
+//! 全力与机型极限模式把处理器性能全部放开（不改用户原来的电源计划，切回其他模式时还原）。
 
 use poise_core::journal::{Journal, JournalError};
 use poise_core::model::Millis;
@@ -14,6 +15,8 @@ const PERF_BOOST_MODE: &str = "be337238-0d82-4146-a960-4f3749d470c7";
 /// 能效偏好（EPP）：0 最偏性能，100 最偏节能。P 核 / E 核分别设置。
 const PERF_EPP: &str = "36687f9e-e3a5-4dbf-b1dc-15eb381c6863";
 const PERF_EPP_E: &str = "36687f9e-e3a5-4dbf-b1dc-15eb381c6864";
+/// 最大处理器状态（百分比）。
+const PROC_MAX: &str = "bc5038f7-23e0-4960-96da-33abaf5935ec";
 /// 核心停放：最少保持多少百分比的核心不休眠。
 const CP_MIN_CORES: &str = "0cc5b647-c1df-4637-891a-dec35c318583";
 const CP_MIN_CORES_E: &str = "0cc5b647-c1df-4637-891a-dec35c318584";
@@ -29,8 +32,9 @@ fn target(setting: &str, ac: bool) -> Target {
 /// 某个模式需要写入的设置；均衡模式返回空（表示还原到原始值）。
 pub fn settings_for(mode: Mode) -> Vec<(Target, Value)> {
     let values: &[(&str, u32)] = match mode {
-        Mode::Balanced => &[],
-        Mode::Full => &[
+        Mode::Balanced | Mode::Auto => &[],
+        Mode::Full | Mode::Vendor => &[
+            (PROC_MAX, 100),
             (PERF_BOOST_MODE, 2),
             (PERF_EPP, 0),
             (PERF_EPP_E, 0),
@@ -45,8 +49,21 @@ pub fn settings_for(mode: Mode) -> Vec<(Target, Value)> {
         .collect()
 }
 
-/// 应用模式。切换模式前先还原，保证不同模式的设置不会残留叠加。
+/// 切换到某个模式的电源设置：先还原上一个模式写入的值，再写入新的，保证不同模式的设置不会残留叠加。
+/// 整个过程是一批写入，电源计划只在最后重新激活一次（每次激活要几百毫秒，逐项激活会让切换慢好几秒）。
 pub fn apply(
+    mode: Mode,
+    store: &dyn SettingStore,
+    journal: &mut Journal,
+    now: Millis,
+) -> Result<(), JournalError> {
+    store.begin_batch();
+    let result = apply_values(mode, store, journal, now);
+    store.end_batch();
+    result
+}
+
+fn apply_values(
     mode: Mode,
     store: &dyn SettingStore,
     journal: &mut Journal,

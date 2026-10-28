@@ -1,0 +1,130 @@
+<Page
+    x:Class="Poise.App.UI.Pages.DiagnosePage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:c="using:Poise.App.UI.Controls"
+    xmlns:l="using:Poise.App.UI.Localization"
+    xmlns:p="using:Poise.Core.Presentation"
+    Background="Transparent">
+
+    <Page.Resources>
+        <!-- 排行的一项：名称与数值一行，下方是相对第一名的条形 -->
+        <DataTemplate x:Key="BarTemplate" x:DataType="p:BarItem">
+            <StackPanel Spacing="4" Margin="0,0,0,12">
+                <Grid ColumnSpacing="12">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Text="{x:Bind Name}" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" />
+                    <TextBlock Grid.Column="1" Text="{x:Bind Value}" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                </Grid>
+                <c:MeterBar Fraction="{x:Bind Fraction}" />
+            </StackPanel>
+        </DataTemplate>
+    </Page.Resources>
+
+    <Grid MaxWidth="{StaticResource PageMaxWidth}" Padding="{StaticResource PagePadding}">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <Grid>
+            <c:PageHeader x:Name="Header" />
+            <!-- 分析中：按钮里的刷新图标旋转（至少转满一圈），结论区保持原样，避免内容上下跳动 -->
+            <Button x:Name="AnalyzeButton" Click="OnAnalyze" HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,2,0,0">
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                    <FontIcon x:Name="AnalyzeIcon" FontFamily="{StaticResource IconFont}" Glyph="&#xE72C;" FontSize="14" />
+                    <TextBlock Text="{l:L Key=diagnose.reanalyze}" />
+                </StackPanel>
+            </Button>
+        </Grid>
+
+        <ScrollViewer Grid.Row="1" Margin="0,0,-24,0" Padding="0,0,24,0">
+            <StackPanel x:Name="Body" Spacing="8">
+
+                <!-- 结论：图标 + 结论 + 依据 + 建议 -->
+                <Border Style="{StaticResource LargeCardStyle}">
+                    <Grid ColumnSpacing="16">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <Border x:Name="ConclusionBadge" Width="40" Height="40" CornerRadius="20" VerticalAlignment="Top"
+                                Background="{ThemeResource SystemFillColorCautionBackgroundBrush}">
+                            <FontIcon x:Name="ConclusionIcon" FontFamily="{StaticResource IconFont}" FontSize="18"
+                                      Glyph="&#xE7BA;" Foreground="{ThemeResource SystemFillColorCautionBrush}" />
+                        </Border>
+                        <StackPanel Grid.Column="1" Spacing="6">
+                            <TextBlock x:Name="ConclusionText" Style="{StaticResource PageTitleTextStyle}" FontSize="20" TextWrapping="Wrap"
+                                       Text="{l:L Key=diagnose.analyzing}" />
+                            <TextBlock x:Name="EvidenceText" Style="{StaticResource BodyTextStyle}" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                            <TextBlock x:Name="SmartText" Style="{StaticResource CaptionSecondaryTextStyle}" />
+                            <StackPanel x:Name="Suggestions" Orientation="Horizontal" Spacing="8" Margin="0,8,0,0" />
+                            <TextBlock x:Name="SuggestionResult" Style="{StaticResource CaptionSecondaryTextStyle}" Visibility="Collapsed" />
+                        </StackPanel>
+                    </Grid>
+                </Border>
+
+                <!-- 走势（与主页共用） -->
+                <c:TrendCard />
+
+                <!-- 排行 -->
+                <Grid x:Name="Rankings" ColumnSpacing="8" RowSpacing="8">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition x:Name="SecondRankColumn" Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+                    <Border Style="{StaticResource LargeCardStyle}">
+                        <StackPanel Spacing="16">
+                            <TextBlock Text="{l:L Key=diagnose.top_cpu}" Style="{StaticResource CardTitleTextStyle}" />
+                            <ItemsControl x:Name="TopCpuList" ItemTemplate="{StaticResource BarTemplate}" />
+                        </StackPanel>
+                    </Border>
+                    <Border x:Name="MemoryRanking" Grid.Column="1" Style="{StaticResource LargeCardStyle}">
+                        <StackPanel Spacing="16">
+                            <TextBlock Text="{l:L Key=diagnose.top_memory}" Style="{StaticResource CardTitleTextStyle}" />
+                            <ItemsControl x:Name="TopMemoryList" ItemTemplate="{StaticResource BarTemplate}" />
+                        </StackPanel>
+                    </Border>
+                </Grid>
+            </StackPanel>
+        </ScrollViewer>
+
+        <VisualStateManager.VisualStateGroups>
+            <!-- 结论的色调：发现问题为橙色感叹号，没发现明显问题为绿色对勾 -->
+            <VisualStateGroup x:Name="ToneStates">
+                <VisualState x:Name="Notice" />
+                <VisualState x:Name="Good">
+                    <VisualState.Setters>
+                        <Setter Target="ConclusionBadge.Background" Value="{ThemeResource SystemFillColorSuccessBackgroundBrush}" />
+                        <Setter Target="ConclusionIcon.Foreground" Value="{ThemeResource SystemFillColorSuccessBrush}" />
+                        <Setter Target="ConclusionIcon.Glyph" Value="&#xE73E;" />
+                    </VisualState.Setters>
+                </VisualState>
+            </VisualStateGroup>
+            <VisualStateGroup>
+                <VisualState x:Name="Wide">
+                    <VisualState.StateTriggers>
+                        <AdaptiveTrigger MinWindowWidth="760" />
+                    </VisualState.StateTriggers>
+                </VisualState>
+                <VisualState x:Name="Narrow">
+                    <VisualState.StateTriggers>
+                        <AdaptiveTrigger MinWindowWidth="0" />
+                    </VisualState.StateTriggers>
+                    <VisualState.Setters>
+                        <Setter Target="MemoryRanking.(Grid.Column)" Value="0" />
+                        <Setter Target="MemoryRanking.(Grid.Row)" Value="1" />
+                        <Setter Target="SecondRankColumn.Width" Value="0" />
+                    </VisualState.Setters>
+                </VisualState>
+            </VisualStateGroup>
+        </VisualStateManager.VisualStateGroups>
+    </Grid>
+</Page>

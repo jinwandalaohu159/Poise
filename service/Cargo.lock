@@ -186,6 +186,7 @@ name = "poise-service"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "embed-resource",
  "log",
  "poise-core",
  "poise-hardware",

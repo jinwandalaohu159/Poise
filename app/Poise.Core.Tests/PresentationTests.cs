@@ -1,10 +1,15 @@
 using Poise.Core.Ipc;
 using Poise.Core.Localization;
+using Poise.Core.Monitoring;
 using Poise.Core.Presentation;
+using Poise.Core.Settings;
 
 namespace Poise.Core.Tests;
 
-/// <summary>把服务状态换成界面文案与指标（HomeViewBuilder、CleanupText、ErrorText、HardwareText、DiagnoseText）。</summary>
+/// <summary>
+/// 把服务数据换成界面文案与指标：HomeViewBuilder、CleanupText、CleanupPageText、ErrorText、HardwareText、
+/// DiagnoseText、OptimizeSummary。
+/// </summary>
 public sealed class PresentationTests
 {
     private static readonly DateTimeOffset Now = DateTimeOffset.Now;
@@ -26,37 +31,37 @@ public sealed class PresentationTests
         var v = HomeViewBuilder.Build(null, Now);
 
         Assert.False(v.Connected);
-        Assert.Null(v.Level);
-        Assert.Equal(Loc.Get("status.disconnected"), v.Title);
-        Assert.Null(v.Cpu.Value);
+        Assert.Null(v.CpuLoad.Value);
+        Assert.Null(v.CpuTemp.Fraction);
         Assert.Null(v.Memory.Value);
         Assert.False(v.CanSnoozeRestart);
     }
 
-    [Theory]
-    [InlineData(HealthCode.Smooth, "status.smooth")]
-    [InlineData(HealthCode.Tired, "status.tired")]
-    [InlineData(HealthCode.Hot, "status.hot")]
-    [InlineData(HealthCode.RestartRecommended, "status.restart")]
-    [InlineData(HealthCode.StorageLow, "status.storage")]
-    [InlineData(HealthCode.InGame, "status.in_game")]
-    public void Each_health_code_has_its_own_title_and_description(HealthCode code, string key)
+    [Fact]
+    public void Fan_line_shows_one_speed_against_the_maximum()
     {
-        var v = HomeViewBuilder.Build(WithHealth(Full, code), Now);
+        TestSupport.UseChinese();
 
-        Assert.Equal(Loc.Get(key), v.Title);
-        Assert.False(string.IsNullOrWhiteSpace(v.Description));
-        Assert.DoesNotContain("{0}", v.Description);
+        var fan = HomeViewBuilder.Build(Full, Now).Fan!;
+
+        Assert.Equal((60, "当前 2,500 / 4,800 RPM"), (fan.Boost, fan.Speed));
+        Assert.Equal(("自动", "60%"), (FanView.BoostText(0), FanView.BoostText(60)));
+        Assert.Null(HomeViewBuilder.Build(Minimal, Now).Fan);
     }
 
     [Fact]
-    public void In_game_names_the_game_and_whether_full_power_is_on()
+    public void Modes_include_the_machine_mode_only_when_supported()
     {
-        var full = HomeViewBuilder.Build(WithHealth(Full, HealthCode.InGame), Now);
-        var notFull = HomeViewBuilder.Build(WithHealth(Full, HealthCode.InGame) with { EffectiveMode = Mode.Balanced }, Now);
+        TestSupport.UseChinese();
 
-        Assert.Equal(Loc.Format("status.in_game.desc", "League of Legends"), full.Description);
-        Assert.Equal(Loc.Format("status.in_game.desc_no_full", "League of Legends"), notFull.Description);
+        var withG = ModeText.Options("dell_g_mode", Mode.Auto, Mode.Balanced);
+        Assert.Equal([Mode.Auto, Mode.Quiet, Mode.Balanced, Mode.Full, Mode.Vendor], withG.Select(o => o.Mode));
+        Assert.Equal(("G 模式", "当前：均衡"), (withG[4].Title, withG[0].Description));
+        Assert.Equal(4, ModeText.Options(null, Mode.Full, Mode.Full).Count);
+        Assert.Equal(Loc.Get("mode.auto.desc"), ModeText.Options(null, Mode.Full, Mode.Full)[0].Description);
+
+        Assert.Equal([GameMode.Off, GameMode.Full, GameMode.Vendor], ModeText.GameOptions("dell_g_mode").Select(o => o.Mode));
+        Assert.Equal([GameMode.Off, GameMode.Full], ModeText.GameOptions(null).Select(o => o.Mode));
     }
 
     [Fact]
@@ -67,10 +72,26 @@ public sealed class PresentationTests
     }
 
     [Fact]
-    public void Cpu_shows_temperature_when_available_otherwise_load()
+    public void Four_metrics_with_units_and_bar_lengths()
     {
-        Assert.Equal(Loc.Get("metric.cpu_temp"), HomeViewBuilder.Build(Full, Now).Cpu.Label);
-        Assert.Equal(Loc.Get("metric.cpu_load"), HomeViewBuilder.Build(Minimal, Now).Cpu.Label);
+        var v = HomeViewBuilder.Build(Full, Now);
+
+        Assert.Equal((12.5, "%"), (v.CpuLoad.Value!.Value, v.CpuLoad.Unit));
+        Assert.Equal(0.125, v.CpuLoad.Fraction!.Value, 3);
+        Assert.Equal((71.0, "°C"), (v.CpuTemp.Value!.Value, v.CpuTemp.Unit));
+        Assert.Equal(0.71, v.CpuTemp.Fraction!.Value, 3);
+        Assert.Equal(58.0, v.GpuTemp.Value);
+        Assert.Equal(0.63, v.Memory.Fraction!.Value, 3);
+    }
+
+    [Fact]
+    public void Missing_temperatures_show_no_value()
+    {
+        var v = HomeViewBuilder.Build(Minimal, Now);
+
+        Assert.Null(v.CpuTemp.Value);
+        Assert.Null(v.GpuTemp.Value);
+        Assert.Equal(63.0, v.Memory.Value!.Value, 1);
     }
 
     [Theory]
@@ -81,17 +102,21 @@ public sealed class PresentationTests
     {
         var s = Full with { Metrics = Full.Metrics with { CpuTemp = celsius } };
 
-        Assert.Equal(expected, HomeViewBuilder.Build(s, Now).Cpu.Level);
+        Assert.Equal(expected, HomeViewBuilder.Build(s, Now).CpuTemp.Level);
     }
 
     [Fact]
-    public void Auto_clean_line_shows_the_last_cleanup()
+    public void Cleanup_card_shows_items_last_cleanup_and_freeable_share()
     {
-        var withLast = HomeViewBuilder.Build(Full, Now);
-        var without = HomeViewBuilder.Build(Minimal, Now);
+        var withLast = HomeViewBuilder.Build(Full, Now).Cleanup;
+        var nothing = HomeViewBuilder.Build(Minimal, Now).Cleanup;
 
-        Assert.Contains("2.0 GB", withLast.AutoCleanDetail);
-        Assert.Equal(Loc.Get("home.auto_clean.desc"), without.AutoCleanDetail);
+        Assert.Equal((1UL << 30, 2), (withLast.FreeableBytes, withLast.Items));
+        Assert.StartsWith(Loc.Format("home.cleanup.items", 2), withLast.Detail);
+        Assert.Contains("2.0 GB", withLast.Detail);
+        Assert.Equal(0.63, withLast.MemoryFraction, 3);
+        Assert.Equal(1.0 / 32, withLast.FreeableFraction, 3);
+        Assert.Equal(Loc.Get("home.cleanup.none"), nothing.Detail);
     }
 
     // ---- 清理结果 ----
@@ -156,16 +181,35 @@ public sealed class PresentationTests
     // ---- 硬件信息 ----
 
     [Fact]
+    public void In_use_badge_only_marks_a_game_or_overheat_switch()
+    {
+        // 所选安静、实际均衡：没有游戏也没有过热，是切换的中间状态，不标。
+        var transient = Full with { Mode = Mode.Quiet, EffectiveMode = Mode.Balanced, Health = Full.Health with { Code = HealthCode.Smooth, Level = Level.Good, Game = null } };
+        Assert.Null(HomeViewBuilder.Build(transient, Now).InUse);
+
+        // 玩游戏时切到全力：标在全力上。
+        var game = transient with { EffectiveMode = Mode.Full, Health = transient.Health with { Code = HealthCode.InGame, Game = "League of Legends" } };
+        Assert.Equal(Mode.Full, HomeViewBuilder.Build(game, Now).InUse);
+
+        // 过热降档：标在均衡上；选"自动"时不标。
+        var hot = transient with { Mode = Mode.Full, Health = transient.Health with { Code = HealthCode.Hot, Level = Level.Bad } };
+        Assert.Equal(Mode.Balanced, HomeViewBuilder.Build(hot, Now).InUse);
+        Assert.Null(HomeViewBuilder.Build(hot with { Mode = Mode.Auto }, Now).InUse);
+    }
+
+    [Fact]
     public void Hardware_rows_include_everything_that_was_read()
     {
         var rows = HardwareText.Rows(Full).ToDictionary(r => r.Label, r => r.Value);
 
         Assert.Equal("Dell G15 5520", rows[Loc.Get("settings.device")]);
+        Assert.Equal("6 个性能核（12 线程）+ 8 个能效核（8 线程）", rows[Loc.Get("hw.cpu")]);
         Assert.Equal("71°C", rows[Loc.Get("hw.cpu_temp")]);
-        Assert.Equal("2400 RPM · 2600 RPM", rows[Loc.Get("hw.fans")]);
-        Assert.Equal(Loc.Format("hw.memory_value", "32.0 GB", 4800, 2), rows[Loc.Get("hw.memory")]);
-        Assert.Equal($"45°C · {Loc.Get("hw.disk.warning")} · {Loc.Format("hw.disk_wear", 3)}", rows["WD SN750 2TB"]);
-        Assert.Equal(Loc.Format("hw.system_drive_value", "12.0 GB", "500.0 GB"), rows[Loc.Get("hw.system_drive")]);
+        Assert.Equal(Loc.Format("hw.fan_value", "2,500", "4,800"), rows[Loc.Get("hw.fans")]);
+        Assert.Equal("32 GB · 16 GB × 2 · 4800 MHz", rows[Loc.Get("hw.memory")]);
+        Assert.Equal($"WD SN750 2TB · {Loc.Format("hw.disk_usage", "488 GB", "2 TB")} · {Loc.Get("hw.disk.warning")} · 45°C · {Loc.Format("hw.disk_wear", 3)}",
+            rows[Loc.Get("hw.disk")]);
+        Assert.Equal(Loc.Format("hw.system_drive_value", "12 GB", "500 GB"), rows[Loc.Format("hw.volume_system", "C")]);
         Assert.Equal(Loc.Get("settings.thermal.on"), rows[Loc.Get("settings.thermal")]);
     }
 
@@ -174,18 +218,254 @@ public sealed class PresentationTests
     {
         var labels = HardwareText.Rows(Minimal).Select(r => r.Label).ToList();
 
-        Assert.Equal([Loc.Get("settings.device"), "Disk", Loc.Get("settings.thermal")], labels);
+        Assert.Equal([Loc.Get("settings.device"), Loc.Get("hw.disk"), Loc.Get("settings.thermal")], labels);
+    }
+
+    // ---- 调度 ----
+
+    [Fact]
+    public void Schedule_state_reads_like_a_status_line()
+    {
+        Assert.Equal("后台 · 能效核 · 优先级较低",
+            ScheduleText.State(new AppSchedule(ScheduleState.Scheduled, false, true, PriorityLevel.Lower)));
+        Assert.Equal("前台 · 性能核可用 · 优先级较高",
+            ScheduleText.State(new AppSchedule(ScheduleState.Scheduled, true, false, PriorityLevel.Higher)));
+        // 不是大小核处理器：不提核心。
+        Assert.Equal("后台 · 优先级正常",
+            ScheduleText.State(new AppSchedule(ScheduleState.Scheduled, false, null, PriorityLevel.Normal)));
+        Assert.Equal("未调整（由程序自行管理）",
+            ScheduleText.State(new AppSchedule(ScheduleState.SelfManaged, false, true, PriorityLevel.Normal)));
+        Assert.Null(ScheduleText.State(null));
+    }
+
+    [Fact]
+    public void Processor_without_small_cores_shows_one_count()
+    {
+        Assert.Equal("8 核（16 线程）", HardwareText.Processor(new CpuInfo(8, 16, 0, 0)));
+    }
+
+    [Fact]
+    public void Diagnose_shows_the_smart_schedule_switch()
+    {
+        var d = TestSupport.Fixture<Diagnosis>("diagnosis.json");
+
+        Assert.Equal("智能调度：已开启", DiagnoseText.Build(d).SmartSchedule);
+    }
+
+    [Fact]
+    public void Trend_loads_show_both_core_kinds_or_whole_cpu()
+    {
+        var t = TrendSeries.From(TestSupport.Fixture<Trend>("trend.json"), TimeSpan.FromSeconds(100));
+
+        Assert.Equal("性能核 64% · 能效核 18%", TrendText.Loads(t.Samples[0]));
+        Assert.Equal("CPU 占用 92%", TrendText.Loads(t.Samples[1]));
+        Assert.Equal("", TrendText.Loads(null));
+    }
+
+    [Fact]
+    public void Memory_lists_mixed_modules_one_by_one()
+    {
+        const ulong gb = 1UL << 30;
+        var mixed = new MemoryInfo(24 * gb, 0, [8 * gb, 16 * gb]);
+
+        Assert.Equal("24 GB · 16 GB + 8 GB", HardwareText.Memory(mixed));
+    }
+
+    // ---- 清理页 ----
+
+    [Fact]
+    public void Cleanup_page_splits_rows_and_explains_each_one()
+    {
+        var v = CleanupPageText.Build(TestSupport.Fixture<CleanupOverview>("cleanup_overview.json"), Now);
+
+        Assert.Equal(3, v.NeedsAttention);
+        Assert.Equal([1u, 20u, 40u], v.Attention.Select(r => r.Pid));
+        var audio = v.Attention[0];
+        Assert.Equal((Loc.Get("issue.oversized"), TagTone.Notice), (audio.Status, audio.Tone));
+        Assert.Equal(Loc.Get("remedy.restart_audio"), audio.Action);
+        Assert.Equal("", audio.ProcessCount);
+        var wechat = v.Attention[1];
+        Assert.Equal(Loc.Format("issue.growing_rate", "80 MB"), wechat.Status);
+        Assert.Equal(Loc.Format("cleanup.processes", 12), wechat.ProcessCount);
+        Assert.Equal(Loc.Get("remedy.reopen"), wechat.Action);
+        var edge = Assert.Single(v.Others);
+        Assert.Equal((Loc.Get("cleanup.normal"), TagTone.None, ""), (edge.Status, edge.Tone, edge.Action));
+        Assert.Equal(1.0, edge.MemoryFraction, 3);
+        Assert.True(v.RestartAdvised);
+        Assert.Equal(20.0 / 32, v.MemoryUsedFraction, 3);
+    }
+
+    [Fact]
+    public void Processes_grown_since_start_say_by_how_much_and_why_they_are_left_alone()
+    {
+        TestSupport.UseChinese();
+        var v = CleanupPageText.Build(TestSupport.Fixture<CleanupOverview>("cleanup_overview.json"), Now);
+
+        var push = v.Attention.Single(r => r.Pid == 40);
+        Assert.Equal(("句柄比启动时多 4.4 万", TagTone.Notice), (push.Status, push.Tone));
+        Assert.Equal(Loc.Get("remedy.none"), push.Action);
+    }
+
+    [Fact]
+    public void Since_boot_card_compares_each_total_and_marks_the_notable_ones()
+    {
+        TestSupport.UseChinese();
+        var v = CleanupPageText.Build(TestSupport.Fixture<CleanupOverview>("cleanup_overview.json"), Now).SinceBoot;
+
+        var recorded = Format.When(DateTimeOffset.FromUnixTimeMilliseconds(1_793_000_000_000), Now);
+        Assert.Equal($"已开机 3 天 0 小时 · 基线记录于 {recorded}", v.Caption);
+        Assert.Equal(1, v.NotableCount);
+        Assert.Equal(new SinceBootRow("句柄", "8.2 万", "16.8 万", "+8.6 万", true), v.Rows[0]);
+        Assert.Equal(new SinceBootRow("内核内存", "700 MB", "900 MB", "+200 MB", false), v.Rows[1]);
+        Assert.Equal(new SinceBootRow("系统缓存", "1.0 GB", "6.0 GB", "+5.0 GB", false), v.Rows[2]);
+    }
+
+    [Fact]
+    public void Since_boot_card_explains_when_the_baseline_will_exist()
+    {
+        var v = SinceBootText.Build(null, Now);
+
+        Assert.Equal((Loc.Get("since_boot.pending"), 0), (v.Caption, v.Rows.Count));
+    }
+
+    [Theory]
+    [InlineData("restart_service", "Spooler", "remedy.restart_service")]
+    [InlineData("recreate_compositor", null, "remedy.recreate_compositor")]
+    [InlineData("restart_app", null, "remedy.restart_app")]
+    [InlineData("none", null, "")]
+    public void Remedies_have_their_own_text(string kind, string? service, string key)
+    {
+        var text = CleanupPageText.Action(new Remedy(kind, service));
+
+        var expected = key.Length == 0 ? "" : service is null ? Loc.Get(key) : Loc.Format(key, service);
+        Assert.Equal(expected, text);
+    }
+
+    // ---- 系统优化进度 ----
+
+    [Fact]
+    public void Optimize_summary_counts_recommended_items_only()
+    {
+        static ItemStatus Item(string id, bool oneClick, string state) => new(
+            new OptimizationItem(id, "explorer", new TextValue("plain", id), new TextValue("plain", ""), oneClick, false, "immediately"),
+            state, false);
+        var s = OptimizeSummary.From([
+            Item("a", true, "optimized"), Item("b", true, "not_optimized"), Item("plugin", false, "not_optimized"),
+        ]);
+
+        Assert.Equal((1, 2), (s.Optimized, s.Total));
+        Assert.Equal(0.5, s.Fraction, 3);
+        Assert.Equal(Loc.Format("home.optimize.remaining", 1), s.Detail);
     }
 
     // ---- 卡顿诊断 ----
 
     [Fact]
-    public void Diagnosis_names_the_cause_and_lists_top_users()
+    public void Diagnosis_gives_evidence_actions_and_rankings()
     {
-        var v = DiagnoseText.Build(TestSupport.Fixture<StutterReport>("stutter_report.json"));
+        var v = DiagnoseText.Build(TestSupport.Fixture<Diagnosis>("diagnosis.json"));
 
         Assert.Equal(Loc.Format("diagnose.background_cpu", "OneDrive"), v.Conclusion);
-        Assert.Equal(["OneDrive  12%", "Chrome  5%"], v.TopCpu);
-        Assert.Equal(["Chrome  3.0 GB"], v.TopMemory);
+        Assert.Equal(Loc.Format("diagnose.evidence.share", "92", "OneDrive", "35"), v.Evidence);
+        Assert.Equal(Level.Notice, v.Level);
+        Assert.Equal(SuggestionKind.SetLowPriority, v.Suggestions[0].Kind);
+        Assert.EndsWith("onedrive.exe", v.Suggestions[0].Path);
+        Assert.Equal(SuggestionKind.OpenApps, v.Suggestions[1].Kind);
+        Assert.Equal(["OneDrive", "Chrome"], v.TopCpu.Select(b => b.Name));
+        Assert.Equal(["35.0%", "4.5%"], v.TopCpu.Select(b => b.Value));
+        Assert.Equal(1.0, v.TopCpu[0].Fraction, 3);
+        Assert.Equal(4.5 / 35, v.TopCpu[1].Fraction, 3);
+        Assert.Equal("3.0 GB", Assert.Single(v.TopMemory).Value);
+    }
+
+    [Theory]
+    [InlineData("{\"kind\":\"thermal\"}", SuggestionKind.OpenOptimize)]
+    [InlineData("{\"kind\":\"memory_pressure\"}", SuggestionKind.OpenCleanup)]
+    [InlineData("{\"kind\":\"leaks\",\"count\":3}", SuggestionKind.OpenCleanup)]
+    [InlineData("{\"kind\":\"foreground_heavy\",\"name\":\"Game\",\"share_pct\":60.0}", SuggestionKind.SwitchToFull)]
+    [InlineData("{\"kind\":\"unclear\"}", SuggestionKind.OpenOptimize)]
+    public void Every_cause_suggests_a_next_step(string cause, SuggestionKind expected)
+    {
+        var d = new Diagnosis(System.Text.Json.JsonDocument.Parse(cause).RootElement, 50, 60, 95, true, [], [], true);
+
+        var v = DiagnoseText.Build(d);
+
+        Assert.Equal(expected, v.Suggestions[0].Kind);
+        Assert.False(string.IsNullOrWhiteSpace(v.Evidence));
+        Assert.DoesNotContain("{", v.Conclusion + v.Evidence);
+    }
+
+    [Fact]
+    public void App_detail_adds_the_process_count_for_multi_process_apps()
+    {
+        var apps = TestSupport.Fixture<List<AppEntry>>("apps.json");
+
+        Assert.Equal("前台 · 性能核可用 · 优先级较高 · 2 个进程", AppsText.Detail(apps[1]));
+        Assert.Equal("后台 · 能效核 · 优先级较低", AppsText.Detail(apps[0]));
+        Assert.Equal(apps[^1].Path, AppsText.Detail(apps[^1]));
+        Assert.Equal(("6.5%", "3.0 GB"), (AppsText.Cpu(apps[1].CpuPct), AppsText.Memory(apps[1].MemoryBytes)));
+    }
+
+    [Fact]
+    public void Apps_sort_by_any_column_in_either_direction_with_name_as_tie_breaker()
+    {
+        var rows = new[] { ("b", 1f, 300UL), ("a", 5f, 100UL), ("c", 5f, 200UL) };
+
+        string Names(AppSort column, bool descending) =>
+            string.Concat(AppsText.Order(rows, new AppSortState(column, descending), r => r.Item1, r => r.Item2, r => r.Item3).Select(r => r.Item1));
+
+        Assert.Equal("abc", Names(AppSort.Name, false));
+        Assert.Equal("cba", Names(AppSort.Name, true));
+        Assert.Equal("acb", Names(AppSort.Cpu, true));
+        Assert.Equal("bac", Names(AppSort.Cpu, false));
+        Assert.Equal("bca", Names(AppSort.Memory, true));
+        Assert.Equal("acb", Names(AppSort.Memory, false));
+    }
+
+    [Fact]
+    public void Clicking_a_column_uses_its_natural_direction_and_clicking_again_reverses()
+    {
+        var byName = AppSortState.Default;
+
+        Assert.Equal(new AppSortState(AppSort.Name, true), byName.Click(AppSort.Name));
+        Assert.Equal(new AppSortState(AppSort.Cpu, true), byName.Click(AppSort.Cpu));
+        Assert.Equal(new AppSortState(AppSort.Cpu, false), byName.Click(AppSort.Cpu).Click(AppSort.Cpu));
+        Assert.Equal(new AppSortState(AppSort.Memory, true), byName.Click(AppSort.Cpu).Click(AppSort.Cpu).Click(AppSort.Memory));
+        Assert.Equal(byName, byName.Click(AppSort.Cpu).Click(AppSort.Name));
+        Assert.Equal("按 CPU 从高到低排序", AppsText.SortHint(byName, AppSort.Cpu));
+        Assert.Equal("按名称排序（Z→A）", AppsText.SortHint(byName, AppSort.Name));
+    }
+
+    [Fact]
+    public void App_names_interleave_chinese_by_pinyin_initial_with_english()
+    {
+        string[] names = ["微信", "百度网盘", "docker", "Chrome", "钉钉", "7-Zip", "爱奇艺", "Zoom", "腾讯会议"];
+
+        Assert.Equal(["7-Zip", "爱奇艺", "百度网盘", "Chrome", "钉钉", "docker", "腾讯会议", "微信", "Zoom"], names.Order(NameOrder.Instance));
+    }
+
+    [Theory]
+    [InlineData("阿里旺旺", 'A')]
+    [InlineData("百度网盘", 'B')]
+    [InlineData("钉钉", 'D')]
+    [InlineData("飞书", 'F')]
+    [InlineData("酷狗音乐", 'K')]
+    [InlineData("网易云音乐", 'W')]
+    [InlineData("迅雷", 'X')]
+    [InlineData("有道词典", 'Y')]
+    [InlineData("知乎", 'Z')]
+    [InlineData("qq", 'Q')]
+    [InlineData(".NET Host", '#')]
+    public void Name_initials_follow_pinyin(string name, char initial)
+    {
+        Assert.Equal(initial, NameOrder.Initial(name));
+    }
+
+    [Fact]
+    public void Fan_speed_never_shows_above_the_maximum()
+    {
+        Assert.Equal("4,800 / 4,800 RPM", FanText.Speed([new FanInfo(4819, 4800), new FanInfo(4811, 4800)]));
+        Assert.Equal("3,900 / 4,800 RPM", FanText.Speed([new FanInfo(3900, 4800)]));
+        Assert.Equal("2,000 / 0 RPM", FanText.Speed([new FanInfo(2000, 0)]));
     }
 }

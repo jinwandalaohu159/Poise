@@ -14,6 +14,7 @@ mod install;
 mod ipc_server;
 mod logging;
 mod runtime;
+mod sensor_feed;
 
 use std::sync::mpsc;
 

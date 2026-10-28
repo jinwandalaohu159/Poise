@@ -1,0 +1,101 @@
+{
+  "freeable_bytes": 1116733440,
+  "needs_attention": 3,
+  "mem_used_bytes": 21474836480,
+  "mem_total_bytes": 34359738368,
+  "restart_advised": true,
+  "auto_clean": true,
+  "last_cleanup": null,
+  "since_boot": {
+    "baseline_uptime_ms": 300000,
+    "baseline_at_unix_ms": 1793000000000,
+    "uptime_ms": 259200000,
+    "items": [
+      {
+        "item": "handles",
+        "at_boot": 82000,
+        "now": 168000,
+        "notable": true
+      },
+      {
+        "item": "kernel_pool",
+        "at_boot": 734003200,
+        "now": 943718400,
+        "notable": false
+      },
+      {
+        "item": "system_cache",
+        "at_boot": 1073741824,
+        "now": 6442450944,
+        "notable": false
+      }
+    ]
+  },
+  "processes": [
+    {
+      "pid": 1,
+      "name": "Windows 音频设备图形隔离",
+      "path": "c:\\windows\\system32\\audiodg.exe",
+      "process_count": 1,
+      "memory_bytes": 1116733440,
+      "cpu_pct": 3.1,
+      "issue": "oversized",
+      "growth_per_hour": null,
+      "since_start": null,
+      "remedy": {
+        "kind": "restart_service",
+        "service": "Audiosrv"
+      },
+      "disruptive": true
+    },
+    {
+      "pid": 20,
+      "name": "微信",
+      "path": null,
+      "process_count": 12,
+      "memory_bytes": 2147483648,
+      "cpu_pct": 0.4,
+      "issue": "growing",
+      "growth_per_hour": 83886080,
+      "since_start": null,
+      "remedy": {
+        "kind": "reopen_manually"
+      },
+      "disruptive": false
+    },
+    {
+      "pid": 30,
+      "name": "Microsoft Edge",
+      "path": null,
+      "process_count": 23,
+      "memory_bytes": 3221225472,
+      "cpu_pct": 1.2,
+      "issue": "none",
+      "growth_per_hour": null,
+      "since_start": null,
+      "remedy": {
+        "kind": "none"
+      },
+      "disruptive": false
+    },
+    {
+      "pid": 40,
+      "name": "Service Host: Windows Push Notifications",
+      "path": "c:\\windows\\system32\\svchost.exe",
+      "process_count": 1,
+      "memory_bytes": 94371840,
+      "cpu_pct": 0.0,
+      "issue": "accumulated",
+      "growth_per_hour": null,
+      "since_start": {
+        "metric": "handles",
+        "from": 2100,
+        "to": 46000
+      },
+      "remedy": {
+        "kind": "none"
+      },
+      "disruptive": false
+    }
+  ]
+}

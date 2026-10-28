@@ -64,11 +64,20 @@ pub trait SettingStore {
     fn read(&self, target: &Target) -> Result<Option<Value>, StoreError>;
     fn write(&self, target: &Target, value: &Value) -> Result<(), StoreError>;
     fn delete(&self, target: &Target) -> Result<(), StoreError>;
+
+    /// 开始一批写入：批内的修改可以推迟到 [`SettingStore::end_batch`] 时一起生效
+    /// （例如电源计划只重新激活一次，而不是每写一项激活一次）。默认无操作。
+    fn begin_batch(&self) {}
+
+    /// 结束一批写入，让推迟的修改生效。默认无操作。
+    fn end_batch(&self) {}
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Group {
+    /// 电源计划里影响发热与性能的设置。
+    Power,
     Explorer,
     StartupBackground,
     Memory,
@@ -129,6 +138,8 @@ pub enum Matcher {
     Present,
     /// 二进制值首字节为奇数（任务管理器的启动项"已禁用"标记，后面附带时间戳）。
     FirstByteOdd,
+    /// 数值不超过给定值即可（例如最小处理器状态只要不强制高频就算已优化）。
+    AtMost(u32),
 }
 
 impl Matcher {
@@ -139,6 +150,8 @@ impl Matcher {
             (Self::Present, Some(_)) => true,
             (Self::FirstByteOdd, Some(Value::Binary(b))) => b.first().is_some_and(|x| x % 2 == 1),
             (Self::FirstByteOdd, Some(_)) => false,
+            (Self::AtMost(limit), Some(Value::Dword(v))) => *v <= limit,
+            (Self::AtMost(_), Some(_)) => false,
         }
     }
 }

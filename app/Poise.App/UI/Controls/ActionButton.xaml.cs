@@ -1,4 +1,3 @@
-using System.Numerics;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Poise.App.UI.Theme;
@@ -7,6 +6,7 @@ namespace Poise.App.UI.Controls;
 
 /// <summary>
 /// 一键操作按钮：点击后文字换成进度环和"正在…"，完成后变成对勾，再回到原文字。不弹任何窗口。
+/// 三种内容叠放在同一格里、始终参与测量，按钮宽度不随状态变化。
 /// </summary>
 public sealed partial class ActionButton : UserControl
 {
@@ -17,7 +17,6 @@ public sealed partial class ActionButton : UserControl
         {
             Motion.EnableTransitions(e, Motion.Fast);
         }
-        Motion.AddPressFeedback(Button);
     }
 
     public string Label
@@ -64,9 +63,7 @@ public sealed partial class ActionButton : UserControl
         {
             await Action();
             Show(DoneIcon);
-            DoneIcon.Scale = new Vector3(0.6f, 0.6f, 1);
-            DoneIcon.CenterPoint = new Vector3((float)DoneIcon.ActualWidth / 2, (float)DoneIcon.ActualHeight / 2, 0);
-            DoneIcon.Scale = Vector3.One;
+            await Motion.PopAsync(DoneIcon);
             await Task.Delay(900);
         }
         finally

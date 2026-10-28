@@ -17,11 +17,18 @@ public sealed class PoiseApi(PoiseClient client)
 
     public Task SetModeAsync(Mode mode) => Client.CallAsync("set_mode", new { mode });
 
-    public Task SetAutoFullForGamesAsync(bool enabled) => Client.CallAsync("set_auto_full_for_games", new { enabled });
+    public Task SetGameModeAsync(GameMode mode) => Client.CallAsync("set_game_mode", new { mode });
 
     public Task SetAutoCleanAsync(bool enabled) => Client.CallAsync("set_auto_clean", new { enabled });
+    public Task SetSmartScheduleAsync(bool enabled) => Client.CallAsync("set_smart_schedule", new { enabled });
+
+    /// <summary>风扇加速，0～100（0 = 不加速）。</summary>
+    public Task SetFanBoostAsync(int percent) => Client.CallAsync("set_fan_boost", new { percent = (byte)Math.Clamp(percent, 0, 100) });
 
     public Task<CleanupResult> CleanNowAsync() => Client.CallAsync<CleanupResult>("clean_now");
+
+    /// <summary>清理页：按程序列出占用，以及每一项会怎样处理。</summary>
+    public Task<CleanupOverview> CleanupOverviewAsync() => Client.CallAsync<CleanupOverview>("cleanup_overview");
 
     public Task<List<AppEntry>> ListAppsAsync() => Client.CallAsync<List<AppEntry>>("list_apps");
 
@@ -38,5 +45,8 @@ public sealed class PoiseApi(PoiseClient client)
 
     public Task<List<string>> RevertAllAsync() => Client.CallAsync<List<string>>("revert_all");
 
-    public Task<StutterReport> DiagnoseAsync() => Client.CallAsync<StutterReport>("diagnose");
+    public Task<Diagnosis> DiagnoseAsync() => Client.CallAsync<Diagnosis>("diagnose");
+
+    /// <summary>走势图的数据（只读、很轻）。</summary>
+    public Task<Trend> GetTrendAsync() => Client.CallAsync<Trend>("trend");
 }

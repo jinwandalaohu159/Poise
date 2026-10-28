@@ -10,9 +10,14 @@ use poise_platform::persist::storage::FileJournal;
 use poise_platform::settings::store::WinSettingStore;
 use poise_platform::settings::user::UserContext;
 
-/// 属于"系统优化"的修改（可在优化记录页里全部还原）。其他来源有固定前缀。
+/// 游戏偏好与硬件模式的修改有固定前缀；其余都属于"系统优化"（可在优化记录页里全部还原）。
 pub const GAME_PREFIX: &str = "game:";
-pub const HARDWARE_PREFIX: &str = "hardware:";
+const HARDWARE_PREFIX: &str = "hardware:";
+
+/// 这项修改是否属于"系统优化"。
+pub fn is_optimization(owner: &str) -> bool {
+    !owner.starts_with(GAME_PREFIX) && !owner.starts_with(HARDWARE_PREFIX)
+}
 
 pub struct Changes {
     pub store: WinSettingStore,
@@ -91,7 +96,7 @@ impl Changes {
             .entries()
             .iter()
             .map(|e| e.owner.clone())
-            .filter(|o| !o.starts_with(GAME_PREFIX) && !o.starts_with(HARDWARE_PREFIX))
+            .filter(|o| is_optimization(o))
             .collect();
         let mut failed = Vec::new();
         for owner in owners {

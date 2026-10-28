@@ -13,10 +13,11 @@ namespace Poise.App.UI.Windows;
 /// <summary>主窗口：Mica 背景、扩展标题栏、页面跳转。关闭后释放，托盘继续运行。</summary>
 public sealed partial class MainWindow : Window
 {
-    private const int DefaultWidth = 760;
-    private const int DefaultHeight = 620;
-    private const int MinWidth = 560;
-    private const int MinHeight = 520;
+    private const int DefaultWidth = 1000;
+    /// <summary>主页内容（状态、走势、模式、风扇、两张模块卡、入口）尽量不用滚动就能看全；屏幕较矮时不超过工作区的 92%。</summary>
+    private const int DefaultHeight = 1170;
+    private const int MinWidth = 640;
+    private const int MinHeight = 560;
 
     private readonly AppHost _host;
 
@@ -28,6 +29,8 @@ public sealed partial class MainWindow : Window
         SystemBackdrop = new MicaBackdrop();
         ExtendsContentIntoTitleBar = true;
         SetTitleBar(TitleBar);
+        // 系统按钮与标题栏同高（48），设置按钮与它们对齐。
+        AppWindow.TitleBar.PreferredHeightOption = TitleBarHeightOption.Tall;
         AppWindow.SetIcon(Path.Combine(AppContext.BaseDirectory, "Assets", "Poise.ico"));
         ToolTipService.SetToolTip(SettingsButton, Loc.Get("settings.title"));
         Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(SettingsButton, Loc.Get("settings.title"));
@@ -71,7 +74,7 @@ public sealed partial class MainWindow : Window
     {
         if (ContentFrame.CurrentSourcePageType != page)
         {
-            ContentFrame.Navigate(page, null, new DrillInNavigationTransitionInfo());
+            ContentFrame.DrillInto(page);
         }
     }
 
@@ -80,19 +83,24 @@ public sealed partial class MainWindow : Window
     private void SizeWindow()
     {
         var scale = this.Scale();
-        AppWindow.Resize(new SizeInt32((int)(DefaultWidth * scale), (int)(DefaultHeight * scale)));
+        var area = DisplayArea.GetFromWindowId(AppWindow.Id, DisplayAreaFallback.Primary).WorkArea;
+        // 小屏幕上不超出可用区域（留出上下边距）。
+        var width = Math.Min((int)(DefaultWidth * scale), area.Width * 95 / 100);
+        var height = Math.Min((int)(DefaultHeight * scale), area.Height * 92 / 100);
+        AppWindow.Resize(new SizeInt32(width, height));
         if (AppWindow.Presenter is OverlappedPresenter presenter)
         {
             presenter.PreferredMinimumWidth = (int)(MinWidth * scale);
             presenter.PreferredMinimumHeight = (int)(MinHeight * scale);
         }
-        var area = DisplayArea.GetFromWindowId(AppWindow.Id, DisplayAreaFallback.Primary).WorkArea;
         AppWindow.Move(new PointInt32(
             area.X + (area.Width - AppWindow.Size.Width) / 2,
             area.Y + (area.Height - AppWindow.Size.Height) / 2));
     }
 
-    /// <summary>标题栏区域默认用于拖动窗口；设置按钮需要单独声明为可点击区域。</summary>
+    /// <summary>
+    /// 设置按钮紧挨在系统按钮左边；标题栏区域默认用于拖动窗口，设置按钮需要单独声明为可点击区域。
+    /// </summary>
     private void UpdatePassthrough()
     {
         if (Root.XamlRoot is null)
@@ -100,6 +108,7 @@ public sealed partial class MainWindow : Window
             return;
         }
         var scale = Root.XamlRoot.RasterizationScale;
+        SettingsButton.Margin = new Thickness(0, 0, AppWindow.TitleBar.RightInset / scale, 0);
         var bounds = SettingsButton.TransformToVisual(Root).TransformBounds(
             new global::Windows.Foundation.Rect(0, 0, SettingsButton.ActualWidth, SettingsButton.ActualHeight));
         var rect = new RectInt32((int)(bounds.X * scale), (int)(bounds.Y * scale), (int)(bounds.Width * scale), (int)(bounds.Height * scale));

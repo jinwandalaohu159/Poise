@@ -1,4 +1,4 @@
-//! 智能调度：前台提速、后台按需让路、游戏模式、临时全速。
+//! 智能调度：按程序类别和前台/后台状态分配核心、优先级和节能；游戏模式；临时全速。
 //!
 //! 对外只有 [`Scheduler`]：每个采样周期调用一次 [`Scheduler::plan`]，
 //! 把动作交给安全执行器后用 [`Scheduler::report`] 回报结果。
@@ -9,42 +9,44 @@ mod trackers;
 
 use std::collections::{HashMap, HashSet};
 
-use crate::action::{EcoQos, ExecError, ExecOutcome};
-use crate::activity::ActivityTracker;
+use crate::action::{ActionKind, CoreSet, ExecError, ExecOutcome};
 use crate::classify::Classification;
-use crate::model::{Millis, Pid, ProcessKey, SessionState, Snapshot};
+use crate::model::{Millis, Pid, PriorityClass, ProcessKey, ProcessSample, Snapshot};
 use crate::prefs::Mode;
 
-pub use policy::{Desired, PolicyConfig};
-pub use reconcile::PlannedAction;
+pub use policy::Desired;
+pub use reconcile::{PlannedAction, ProcessSchedule};
 
-use policy::{PolicyContext, ProcessView};
+use policy::ProcessView;
 use reconcile::Reconciler;
 use trackers::{ForegroundTracker, GameTracker, TempBoosts};
 
 #[derive(Debug, Clone, Copy)]
 pub struct ScheduleConfig {
-    pub policy: PolicyConfig,
     /// 失去前台后延迟多久再降级。
     pub debounce_ms: Millis,
+    /// 是否是大小核处理器。不是时不限制核心，只用优先级和节能区分前后台。
+    pub hybrid: bool,
 }
 
 impl Default for ScheduleConfig {
     fn default() -> Self {
         Self {
-            policy: PolicyConfig::default(),
             debounce_ms: 5_000,
+            hybrid: true,
         }
     }
 }
 
 pub struct ScheduleInput<'a> {
     pub snapshot: &'a Snapshot,
-    pub session: &'a SessionState,
     pub classes: &'a HashMap<Pid, Classification>,
-    pub activity: &'a ActivityTracker,
+    /// "智能调度"开关。关闭时撤销全部进程调整，模式切换照常。
+    pub enabled: bool,
+    /// 用户的模式（"自动"已换算成具体模式）。
     pub user_mode: Mode,
-    pub auto_full_for_games: bool,
+    /// 玩游戏时切换到的模式；None 表示不切换。
+    pub game_mode: Option<Mode>,
 }
 
 /// 正在运行的游戏（用于界面显示"游戏中 · 英雄联盟"）。
@@ -56,10 +58,9 @@ pub struct GameInfo {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SchedulePlan {
-    /// 实际生效的模式（玩游戏时可能被自动切到全力）。
+    /// 实际生效的模式（玩游戏时可能被切到全力或极限模式）。
     pub effective_mode: Mode,
     pub game: Option<GameInfo>,
-    pub foreground_busy: bool,
     pub actions: Vec<PlannedAction>,
 }
 
@@ -91,41 +92,36 @@ impl Scheduler {
         self.reconciler.retain_alive(&alive);
 
         let game_active = self.games.any_active();
-        let effective_mode = if game_active && input.auto_full_for_games {
-            Mode::Full
-        } else {
-            input.user_mode
-        };
-        let foreground_busy = game_active
-            || input.session.fullscreen
-            || self.foreground_load(input) >= self.cfg.policy.foreground_busy_core_pct;
-        let ctx = PolicyContext {
-            mode: effective_mode,
-            foreground_busy,
+        let effective_mode = match input.game_mode {
+            Some(game) if game_active => game,
+            _ => input.user_mode,
         };
 
+        self.reconciler.begin(now);
+        let by_pid = snap.by_pid();
         let mut actions = Vec::new();
         for p in &snap.processes {
             let Some(class) = input.classes.get(&p.facts.key.pid) else {
                 continue;
             };
             let key = p.facts.key;
-            let view = ProcessView {
-                class,
-                usage: input.activity.usage(&key),
-                active_game: self.games.is_active(&key),
-                recently_foreground: self.foreground.recently_foreground(class.root_pid),
-                boosted: self.boosts.is_boosted(&key, class.root_pid),
-                yielding: self.reconciler.current(&key).eco == EcoQos::On,
+            let desired = if input.enabled {
+                self.desired(class, &key)
+            } else {
+                Desired::NEUTRAL
             };
-            let desired = policy::decide(&self.cfg.policy, &ctx, &view);
-            actions.extend(self.reconciler.diff(key, p.facts.priority, desired));
+            let inherited_low = self.inherited_low(p, &by_pid);
+            actions.extend(
+                self.reconciler
+                    .diff(key, p.facts.priority, inherited_low, desired),
+            );
         }
+        // 先提速（新的前台程序立即拿到性能），再让路和恢复。
+        actions.sort_by_key(|a| a.action.kind(a.original_priority) != ActionKind::Boost);
 
         SchedulePlan {
             effective_mode,
             game: self.current_game(snap),
-            foreground_busy,
             actions,
         }
     }
@@ -148,19 +144,33 @@ impl Scheduler {
         self.reconciler.applied_count()
     }
 
-    fn foreground_load(&self, input: &ScheduleInput) -> f32 {
-        input
-            .snapshot
-            .processes
-            .iter()
-            .filter(|p| {
-                input
-                    .classes
-                    .get(&p.facts.key.pid)
-                    .is_some_and(|c| c.in_foreground_tree)
-            })
-            .map(|p| input.activity.usage(&p.facts.key).core_pct)
-            .sum()
+    /// 一个进程当前的调度状态（程序偏好页显示）。
+    pub fn state(&self, key: &ProcessKey) -> ProcessSchedule {
+        self.reconciler.state(key)
+    }
+
+    /// 父进程被 Poise 降为"低于正常"后新建的子进程，会继承这个优先级（Windows 的规则）。
+    fn inherited_low(&self, p: &ProcessSample, by_pid: &HashMap<Pid, &ProcessSample>) -> bool {
+        p.facts.priority == Some(PriorityClass::BelowNormal)
+            && p.facts
+                .parent_pid
+                .and_then(|pp| by_pid.get(&pp))
+                .is_some_and(|parent| {
+                    parent.is_parent_of(p) && self.reconciler.lowered(&parent.facts.key)
+                })
+    }
+
+    fn desired(&self, class: &Classification, key: &ProcessKey) -> Desired {
+        let mut desired = policy::decide(&ProcessView {
+            class,
+            active_game: self.games.is_active(key),
+            recently_foreground: self.foreground.recently_foreground(class.root_pid),
+            boosted: self.boosts.is_boosted(key, class.root_pid),
+        });
+        if !self.cfg.hybrid {
+            desired.cores = CoreSet::All;
+        }
+        desired
     }
 
     fn current_game(&self, snap: &Snapshot) -> Option<GameInfo> {
@@ -178,8 +188,8 @@ impl Scheduler {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::action::{Action, CoreSet};
-    use crate::classify::Role;
+    use crate::action::{Action, CoreSet, EcoQos};
+    use crate::classify::{Role, ScheduleScope};
     use crate::model::{PriorityClass, ProcessFacts, ProcessSample};
     use crate::prefs::AppPreference;
 
@@ -209,6 +219,22 @@ mod tests {
             is_game: game,
             anti_cheat_present: false,
             restartable_service: None,
+            schedule: ScheduleScope::App,
+        }
+    }
+
+    /// 采样里的优先级反映 Poise 已经设置的值（与真实系统一致）。
+    fn snapshot(s: &Scheduler, at: Millis) -> Snapshot {
+        let mut processes = vec![sample(1, "game.exe"), sample(2, "chrome.exe")];
+        for p in &mut processes {
+            if let ProcessSchedule::Adjusted(d) = s.state(&p.facts.key) {
+                p.facts.priority = d.priority.or(p.facts.priority);
+            }
+        }
+        Snapshot {
+            at,
+            processes,
+            ..Default::default()
         }
     }
 
@@ -218,18 +244,13 @@ mod tests {
         classes: &HashMap<Pid, Classification>,
         mode: Mode,
     ) -> SchedulePlan {
-        let snap = Snapshot {
-            at,
-            processes: vec![sample(1, "game.exe"), sample(2, "chrome.exe")],
-            ..Default::default()
-        };
+        let snap = snapshot(s, at);
         let plan = s.plan(&ScheduleInput {
             snapshot: &snap,
-            session: &SessionState::default(),
             classes,
-            activity: &ActivityTracker::default(),
+            enabled: true,
             user_mode: mode,
-            auto_full_for_games: true,
+            game_mode: Some(Mode::Full),
         });
         for a in &plan.actions {
             s.report(a, &Ok(ExecOutcome::default()));
@@ -272,10 +293,110 @@ mod tests {
         let plan = run(&mut s, 7000, &fg2, Mode::Balanced);
         assert!(plan.actions.iter().any(|a| a.key.pid == 1
             && a.action
-                == Action::SetEcoQos {
+                == Action::SetCoreSet {
                     pid: 1,
-                    state: EcoQos::Default
+                    set: CoreSet::Efficiency
                 }));
+    }
+
+    #[test]
+    fn turning_smart_scheduling_off_restores_everything() {
+        let mut s = Scheduler::default();
+        let classes = HashMap::from([(1, class(1, true, false)), (2, class(2, false, false))]);
+        run(&mut s, 0, &classes, Mode::Balanced);
+        assert_eq!(s.adjusted_count(), 2);
+        let snap = snapshot(&s, 1000);
+        let plan = s.plan(&ScheduleInput {
+            snapshot: &snap,
+            classes: &classes,
+            enabled: false,
+            user_mode: Mode::Balanced,
+            game_mode: None,
+        });
+        for a in &plan.actions {
+            s.report(a, &Ok(ExecOutcome::default()));
+        }
+        assert_eq!(s.adjusted_count(), 0);
+    }
+
+    #[test]
+    fn children_that_inherited_low_priority_are_restored_to_normal() {
+        let mut s = Scheduler::default();
+        let classes = HashMap::from([(2, class(2, false, false)), (3, class(2, false, false))]);
+        let mut parent = sample(2, "app.exe");
+        let snap = |processes| Snapshot {
+            at: 0,
+            processes,
+            ..Default::default()
+        };
+        let apply = |s: &mut Scheduler, snap: &Snapshot| {
+            let plan = s.plan(&ScheduleInput {
+                snapshot: snap,
+                classes: &classes,
+                enabled: true,
+                user_mode: Mode::Balanced,
+                game_mode: None,
+            });
+            for a in &plan.actions {
+                s.report(a, &Ok(ExecOutcome::default()));
+            }
+        };
+        apply(&mut s, &snap(vec![parent.clone()]));
+        // 父进程已被降低；之后新建的子进程继承了"低于正常"。
+        parent.facts.priority = Some(PriorityClass::BelowNormal);
+        let mut child = sample(3, "helper.exe");
+        child.facts.parent_pid = Some(2);
+        child.facts.key.created = 2;
+        child.facts.priority = Some(PriorityClass::BelowNormal);
+        apply(&mut s, &snap(vec![parent, child]));
+        let restore = s.release_all();
+        assert!(restore.iter().any(|a| a.key.pid == 3
+            && a.action
+                == Action::SetPriority {
+                    pid: 3,
+                    class: PriorityClass::Normal
+                }));
+    }
+
+    #[test]
+    fn boosts_come_before_demotions() {
+        let mut s = Scheduler::new(ScheduleConfig {
+            debounce_ms: 0,
+            ..Default::default()
+        });
+        run(
+            &mut s,
+            0,
+            &HashMap::from([(1, class(1, true, false)), (2, class(2, false, false))]),
+            Mode::Balanced,
+        );
+        // 前台从 1 切到 2（不防抖）：同一轮里 2 提速、1 降级，提速排在前面。
+        let swapped = HashMap::from([(1, class(1, false, false)), (2, class(2, true, false))]);
+        let plan = run(&mut s, 10_000, &swapped, Mode::Balanced);
+        let first_demote = plan
+            .actions
+            .iter()
+            .position(|a| a.key.pid == 1)
+            .expect("进程 1 降级");
+        assert!(plan.actions[..first_demote].iter().all(|a| a.key.pid == 2));
+        assert!(plan.actions.iter().any(|a| a.key.pid == 2));
+    }
+
+    #[test]
+    fn non_hybrid_cpus_never_restrict_cores() {
+        let mut s = Scheduler::new(ScheduleConfig {
+            hybrid: false,
+            ..Default::default()
+        });
+        let classes = HashMap::from([(1, class(1, false, false)), (2, class(2, false, false))]);
+        let plan = run(&mut s, 0, &classes, Mode::Balanced);
+        assert!(
+            !plan
+                .actions
+                .iter()
+                .any(|a| matches!(a.action, Action::SetCoreSet { .. }))
+        );
+        assert!(!plan.actions.is_empty());
     }
 
     #[test]

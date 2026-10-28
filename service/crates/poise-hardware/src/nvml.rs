@@ -7,6 +7,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use libloading::{Library, Symbol};
+use poise_platform::persist::paths;
 
 type Device = *mut std::ffi::c_void;
 
@@ -91,9 +92,7 @@ impl Nvml {
 
 fn nvml_path() -> PathBuf {
     // 使用完整路径加载，避免 DLL 搜索路径劫持。
-    let root =
-        std::env::var_os("SystemRoot").map_or_else(|| PathBuf::from(r"C:\Windows"), PathBuf::from);
-    root.join("System32").join("nvml.dll")
+    paths::windows_dir().join("System32").join("nvml.dll")
 }
 
 fn open() -> Option<Session> {

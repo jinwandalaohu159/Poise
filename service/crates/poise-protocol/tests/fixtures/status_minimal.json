@@ -8,8 +8,10 @@
   },
   "mode": "quiet",
   "effective_mode": "full",
-  "auto_full_for_games": true,
+  "game_mode": "vendor",
   "auto_clean": false,
+  "fan_boost": 60,
+  "smart_schedule": false,
   "metrics": {
     "cpu_pct": 12.5,
     "cpu_temp": null,
@@ -24,17 +26,22 @@
   "hardware": {
     "profile": "Generic",
     "thermal_control": false,
+    "fan_boost_supported": false,
+    "vendor_mode": null,
     "fans": [],
     "disks": [
       {
         "name": "Disk",
+        "size_bytes": null,
         "temp_c": null,
         "health": "unknown",
-        "wear_pct": null
+        "wear_pct": null,
+        "volumes": []
       }
     ],
     "system_drive": null,
-    "memory": null
+    "memory": null,
+    "cpu": null
   },
   "adjusted_processes": 7,
   "deferred_cleanup": 1,

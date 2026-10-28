@@ -2,6 +2,7 @@
 
 use std::path::PathBuf;
 use std::sync::RwLock;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use poise_core::optimize::{Hive, SettingStore, StoreError, Target, UserFile, Value};
 use windows::Win32::Foundation::{ERROR_ACCESS_DENIED, WIN32_ERROR};
@@ -15,12 +16,18 @@ use crate::win::registry;
 #[derive(Default)]
 pub struct WinSettingStore {
     user: RwLock<Option<UserContext>>,
+    /// 批量写入的嵌套层数；大于 0 时电源计划只写不激活。
+    batch: AtomicU32,
+    /// 批内写过电源计划，结束时需要重新激活一次。
+    power_pending: AtomicBool,
 }
 
 impl WinSettingStore {
     pub fn new(user: Option<UserContext>) -> Self {
         Self {
             user: RwLock::new(user),
+            batch: AtomicU32::new(0),
+            power_pending: AtomicBool::new(false),
         }
     }
 
@@ -136,8 +143,27 @@ impl SettingStore for WinSettingStore {
                     return Err(StoreError::Unsupported);
                 };
                 let (sub, set) = power_guids(subgroup, setting)?;
-                power_plan::write(&sub, &set, *ac, *v).map_err(reg_err)
+                if self.batch.load(Ordering::Acquire) > 0 {
+                    self.power_pending.store(true, Ordering::Release);
+                    power_plan::write_value(&sub, &set, *ac, *v).map_err(reg_err)
+                } else {
+                    power_plan::write(&sub, &set, *ac, *v).map_err(reg_err)
+                }
             }
+        }
+    }
+
+    fn begin_batch(&self) {
+        self.batch.fetch_add(1, Ordering::AcqRel);
+    }
+
+    fn end_batch(&self) {
+        let outermost = self.batch.fetch_sub(1, Ordering::AcqRel) == 1;
+        if outermost
+            && self.power_pending.swap(false, Ordering::AcqRel)
+            && let Err(e) = power_plan::activate()
+        {
+            log::warn!("重新激活电源计划失败：{e:?}");
         }
     }
 

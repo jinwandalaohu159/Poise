@@ -25,3 +25,6 @@ windows-service = "0.8"
 [dependencies.windows]
 version = "0.62"
 features = ["Win32_System_Threading"]
+
+[build-dependencies]
+embed-resource = "3"

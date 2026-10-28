@@ -5,7 +5,8 @@
     xmlns:c="using:Poise.App.UI.Controls"
     xmlns:l="using:Poise.App.UI.Localization">
 
-    <Grid x:Name="Root" Padding="16" RowSpacing="16" VerticalAlignment="Top">
+    <!-- 紧凑排列：指标 / 模式 / 一键清理 + 打开主窗口；清理结果只在有内容时占一行 -->
+    <Grid x:Name="Root" Padding="14" RowSpacing="12" VerticalAlignment="Top">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
@@ -13,27 +14,23 @@
             <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
-        <!-- 状态 -->
-        <Grid ColumnSpacing="12">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="Auto" />
-                <ColumnDefinition Width="*" />
-            </Grid.ColumnDefinitions>
-            <c:StatusDot x:Name="Dot" VerticalAlignment="Top" Margin="0,10,0,0" />
-            <StackPanel x:Name="StatusText" Grid.Column="1">
-                <TextBlock x:Name="StatusTitle" Style="{StaticResource PageTitleTextStyle}" FontSize="20" />
-                <TextBlock x:Name="StatusDescription" Style="{StaticResource CaptionSecondaryTextStyle}" />
-            </StackPanel>
-        </Grid>
+        <!-- 四个指标（紧凑：不显示进度条），与主页一致 -->
+        <c:MetricStrip x:Name="Metrics" IsCompact="True" />
 
         <c:ModeSelector x:Name="Modes" Grid.Row="1" />
 
-        <c:ActionButton x:Name="CleanButton" Grid.Row="2" HorizontalAlignment="Stretch" />
-
-        <Grid Grid.Row="3">
-            <TextBlock x:Name="ResultText" Style="{StaticResource CaptionSecondaryTextStyle}"
-                       VerticalAlignment="Center" Margin="0,0,96,0" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" />
-            <HyperlinkButton HorizontalAlignment="Right" Content="{l:L Key=tray.open}" Click="OnOpenMain" />
+        <Grid Grid.Row="2" ColumnSpacing="8">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <c:ActionButton x:Name="CleanButton" HorizontalAlignment="Stretch" />
+            <Button x:Name="OpenButton" Grid.Column="1" MinHeight="36" Padding="10,0" Click="OnOpenMain">
+                <FontIcon FontFamily="{StaticResource IconFont}" Glyph="&#xE8A7;" FontSize="16" />
+            </Button>
         </Grid>
+
+        <TextBlock x:Name="ResultText" Grid.Row="3" Visibility="Collapsed" Margin="2,0"
+                   Style="{StaticResource CaptionSecondaryTextStyle}" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" />
     </Grid>
 </Window>

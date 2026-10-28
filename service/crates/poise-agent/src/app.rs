@@ -147,12 +147,13 @@ impl App {
         ui_app::reclaim_foreground();
         let prefs = UiPrefs::load();
         theme::apply(prefs.theme);
-        let snapshot = self.link.snapshot();
+        let status = self.link.status();
         let target = self.foreground.target();
         let state = MenuState {
             prefs: &prefs,
-            connected: snapshot.status.is_some(),
-            mode: snapshot.status.as_ref().map(|s| s.mode),
+            connected: status.is_some(),
+            mode: status.as_ref().map(|s| s.mode),
+            vendor_mode: status.as_ref().and_then(|s| s.hardware.vendor_mode.clone()),
             boost_target: target.as_ref().map(|(_, name)| name.clone()),
         };
         match menu::show(self.hwnd, &state) {
@@ -178,10 +179,11 @@ impl App {
 
     fn refresh_icon(&mut self) {
         let prefs = UiPrefs::load();
-        let snapshot = self.link.snapshot();
-        let (attention, title) = describe(snapshot.status.as_ref());
-        self.tray
-            .update(attention, &prefs.format("tray.tooltip", &prefs.get(title)));
+        let (attention, title) = describe(self.link.status().as_ref());
+        self.tray.update(
+            attention && prefs.tray_alert,
+            &prefs.format("tray.tooltip", &prefs.get(title)),
+        );
     }
 
     fn promote(&mut self) {

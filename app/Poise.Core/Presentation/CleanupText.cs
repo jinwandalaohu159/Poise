@@ -38,7 +38,10 @@ public static class CleanupText
         var message = r.FreedBytes > 0
             ? Loc.Format("clean.done", Format.Bytes(r.FreedBytes))
             : r.Handled.Count > 0 ? Loc.Format("clean.done_count", r.Handled.Count) : Loc.Get("clean.nothing");
-        return new Feedback(r.Handled.Count > 0 ? FeedbackKind.Success : FeedbackKind.Info, message, details);
+        var count = r.FreedBytes > 0
+            ? new CountUp(r.FreedBytes, v => Loc.Format("clean.done", Format.Bytes((ulong)v)))
+            : null;
+        return new Feedback(r.Handled.Count > 0 ? FeedbackKind.Success : FeedbackKind.Info, message, details, Count: count);
     }
 
     /// <summary>自动清理一行的说明：做过清理时显示上次的结果，否则显示功能说明。</summary>

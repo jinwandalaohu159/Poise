@@ -8,8 +8,10 @@
   },
   "mode": "quiet",
   "effective_mode": "full",
-  "auto_full_for_games": true,
+  "game_mode": "vendor",
   "auto_clean": false,
+  "fan_boost": 60,
+  "smart_schedule": true,
   "metrics": {
     "cpu_pct": 12.5,
     "cpu_temp": 71.0,
@@ -24,6 +26,8 @@
   "hardware": {
     "profile": "Dell G15 5520",
     "thermal_control": true,
+    "fan_boost_supported": true,
+    "vendor_mode": "dell_g_mode",
     "fans": [
       {
         "rpm": 2400,
@@ -37,9 +41,17 @@
     "disks": [
       {
         "name": "WD SN750 2TB",
+        "size_bytes": 2147483648000,
         "temp_c": 45,
         "health": "warning",
-        "wear_pct": 3
+        "wear_pct": 3,
+        "volumes": [
+          {
+            "letter": "C",
+            "free_bytes": 12884901888,
+            "total_bytes": 536870912000
+          }
+        ]
       }
     ],
     "system_drive": {
@@ -49,7 +61,16 @@
     "memory": {
       "total_bytes": 34359738368,
       "speed_mhz": 4800,
-      "modules": 2
+      "module_bytes": [
+        17179869184,
+        17179869184
+      ]
+    },
+    "cpu": {
+      "performance_cores": 6,
+      "performance_threads": 12,
+      "efficiency_cores": 8,
+      "efficiency_threads": 8
     }
   },
   "adjusted_processes": 7,

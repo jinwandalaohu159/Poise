@@ -17,13 +17,32 @@
                 <TextBlock Text="Poise" VerticalAlignment="Center" Style="{StaticResource CaptionSecondaryTextStyle}" FontSize="13" />
             </StackPanel>
         </Grid>
+        <!-- 设置：与最小化、最大化、关闭同样大小，紧挨在它们左边（右边距按系统按钮的实际宽度设置） -->
         <Button x:Name="SettingsButton"
-                Width="40" Height="32" Padding="0"
-                HorizontalAlignment="Right" VerticalAlignment="Center"
-                Margin="0,0,148,0"
+                Width="46" Height="48" Padding="0" CornerRadius="0"
+                HorizontalAlignment="Right" VerticalAlignment="Top"
                 Background="Transparent" BorderThickness="0"
                 Click="OnSettingsClick">
-            <FontIcon FontFamily="{StaticResource IconFont}" FontSize="16" Glyph="&#xE713;" />
+            <Button.Resources>
+                <ResourceDictionary>
+                    <!-- 悬停、按下的底色与系统标题栏按钮一致 -->
+                    <ResourceDictionary.ThemeDictionaries>
+                        <ResourceDictionary x:Key="Default">
+                            <SolidColorBrush x:Key="ButtonBackgroundPointerOver" Color="#15FFFFFF" />
+                            <SolidColorBrush x:Key="ButtonBackgroundPressed" Color="#0BFFFFFF" />
+                            <SolidColorBrush x:Key="ButtonBorderBrushPointerOver" Color="Transparent" />
+                            <SolidColorBrush x:Key="ButtonBorderBrushPressed" Color="Transparent" />
+                        </ResourceDictionary>
+                        <ResourceDictionary x:Key="Light">
+                            <SolidColorBrush x:Key="ButtonBackgroundPointerOver" Color="#09000000" />
+                            <SolidColorBrush x:Key="ButtonBackgroundPressed" Color="#06000000" />
+                            <SolidColorBrush x:Key="ButtonBorderBrushPointerOver" Color="Transparent" />
+                            <SolidColorBrush x:Key="ButtonBorderBrushPressed" Color="Transparent" />
+                        </ResourceDictionary>
+                    </ResourceDictionary.ThemeDictionaries>
+                </ResourceDictionary>
+            </Button.Resources>
+            <FontIcon FontFamily="{StaticResource IconFont}" FontSize="15" Glyph="&#xE713;" />
         </Button>
 
         <Frame x:Name="ContentFrame" Grid.Row="1" />

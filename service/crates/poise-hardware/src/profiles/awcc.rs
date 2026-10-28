@@ -1,14 +1,24 @@
 //! 戴尔 AWCC BIOS 接口（WMI 类 AWCCWmiMethodFunction）：温度、风扇转速、散热模式。
 //!
 //! 只使用 BIOS 自己报告的 ID：先读"有几个风扇、几个传感器、几种模式"，再按序号读出各自的 ID。
-//! 写入只有一种：切换散热模式，且目标必须在 BIOS 报告的模式列表里。
+//! 写入只有三种：切换散热模式（目标必须在 BIOS 报告的模式列表里，G 模式除外）、风扇加速（风扇必须在
+//! BIOS 报告的风扇列表里，强度 0～255，0 即不加速）、G 模式开关。
 
 use poise_platform::win::wmi::{WmiError, WmiNamespace, WmiResult};
+
+use super::FanReading;
 
 const NAMESPACE: &str = r"root\WMI";
 const CLASS: &str = "AWCCWmiMethodFunction";
 const READ: &str = "Thermal_Information";
 const CONTROL: &str = "Thermal_Control";
+/// G 模式开关（G 系列机型）。功能号：0x01 切换，0x02 读取（1 = 开）。
+const GAME_SHIFT: &str = "GameShiftStatus";
+const GAME_SHIFT_TOGGLE: u8 = 0x01;
+const GAME_SHIFT_READ: u8 = 0x02;
+/// G 模式对应的散热模式。BIOS 的模式列表里没有它，需要先打开 G 模式开关。
+/// G15 5520 实测：打开后散热模式读数为 0xAB，风扇 7 秒内升到约 4600 RPM；关闭后恢复原状。
+pub const G_MODE: u8 = 0xAB;
 
 /// Thermal_Information 的功能号（参数低字节），高字节是功能的参数。
 mod info {
@@ -20,14 +30,24 @@ mod info {
     pub const FAN_RPM: u8 = 0x05;
     pub const FAN_MAX_RPM: u8 = 0x09;
     pub const POWER_MODE: u8 = 0x0B;
+    /// 风扇当前的加速值（0～255）。
+    pub const FAN_BOOST: u8 = 0x0C;
 }
 /// Thermal_Control 的功能号。
 const CONTROL_POWER_MODE: u8 = 0x01;
+/// 风扇加速：参数为风扇 ID 与加速值（0～255）。G15 5520 实测：均衡模式下 128 → 约 3500 RPM，
+/// 255 → 约 4500 RPM（最高 4800），设回 0 后转速随温度回落。
+const CONTROL_FAN_BOOST: u8 = 0x02;
 /// BIOS 表示"失败 / 不支持"的返回值。
 const BIOS_ERROR: u32 = 0xFFFF_FFFF;
 
 fn arg(function: u8, value: u8) -> u32 {
-    u32::from(function) | (u32::from(value) << 8)
+    args(function, value, 0)
+}
+
+/// 参数按字节排列：功能号、参数 1、参数 2。
+fn args(function: u8, first: u8, second: u8) -> u32 {
+    u32::from(function) | (u32::from(first) << 8) | (u32::from(second) << 16)
 }
 
 /// BIOS 报告的设备布局。
@@ -61,12 +81,6 @@ impl Layout {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct FanReading {
-    pub rpm: u32,
-    pub max_rpm: u32,
-}
-
 pub struct Awcc {
     ns: WmiNamespace,
     path: String,
@@ -93,23 +107,29 @@ impl Awcc {
         Ok(awcc)
     }
 
+    /// 同一接口的另一条连接（沿用已读出的布局），给采集线程只读使用。
+    pub fn reconnect(&self) -> WmiResult<Self> {
+        Ok(Self {
+            ns: WmiNamespace::connect(NAMESPACE)?,
+            path: self.path.clone(),
+            layout: self.layout.clone(),
+        })
+    }
+
     pub fn layout(&self) -> &Layout {
         &self.layout
     }
 
     fn call(&self, method: &str, function: u8, value: u8) -> WmiResult<u32> {
-        let r = self.ns.call_u32(
-            CLASS,
-            &self.path,
-            method,
-            "arg2",
-            arg(function, value),
-            "argr",
-        )?;
+        self.call_raw(method, arg(function, value))
+    }
+
+    fn call_raw(&self, method: &str, argument: u32) -> WmiResult<u32> {
+        let r = self
+            .ns
+            .call_u32(CLASS, &self.path, method, "arg2", argument, "argr")?;
         if r == BIOS_ERROR {
-            Err(WmiError(format!(
-                "BIOS 不支持 {method}({function:#x}, {value:#x})"
-            )))
+            Err(WmiError(format!("BIOS 不支持 {method}({argument:#x})")))
         } else {
             Ok(r)
         }
@@ -123,7 +143,7 @@ impl Awcc {
     pub fn temperature(&self, sensor: u8) -> Option<f32> {
         self.read(info::TEMPERATURE, sensor)
             .ok()
-            .filter(|t| (1..=125).contains(t))
+            .filter(|&t| crate::plausible_celsius(u64::from(t)))
             .map(|t| t as f32)
     }
 
@@ -142,6 +162,45 @@ impl Awcc {
 
     pub fn power_mode(&self) -> Option<u8> {
         self.read(info::POWER_MODE, 0).ok().map(|m| m as u8)
+    }
+
+    /// 风扇当前的加速值（0～255）。
+    pub fn fan_boost(&self, fan: u8) -> Option<u8> {
+        self.read(info::FAN_BOOST, fan)
+            .ok()
+            .and_then(|v| u8::try_from(v).ok())
+    }
+
+    /// 设置风扇加速（0 = 不加速，由 BIOS 按温度调节）。只接受 BIOS 自己报告的风扇。
+    pub fn set_fan_boost(&self, fan: u8, value: u8) -> Result<(), String> {
+        if !self.layout.fans.contains(&fan) {
+            return Err(format!("BIOS 没有列出风扇 {fan:#x}"));
+        }
+        self.call_raw(CONTROL, args(CONTROL_FAN_BOOST, fan, value))
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+
+    /// G 模式开关的状态；机型没有这个接口时为 None。
+    pub fn g_mode(&self) -> Option<bool> {
+        self.call_raw(GAME_SHIFT, u32::from(GAME_SHIFT_READ))
+            .ok()
+            .map(|v| v == 1)
+    }
+
+    /// 打开或关闭 G 模式：开关状态不同时才切换；打开时同时进入 G 模式的散热模式。
+    /// 关闭后由调用方切到目标散热模式。
+    pub fn set_g_mode(&self, on: bool) -> Result<(), String> {
+        let current = self.g_mode().ok_or("BIOS 没有 G 模式开关")?;
+        if current != on {
+            self.call_raw(GAME_SHIFT, u32::from(GAME_SHIFT_TOGGLE))
+                .map_err(|e| e.to_string())?;
+        }
+        if on {
+            self.call(CONTROL, CONTROL_POWER_MODE, G_MODE)
+                .map_err(|e| e.to_string())?;
+        }
+        Ok(())
     }
 
     /// 切换散热模式。只接受 BIOS 自己报告的模式。
@@ -180,5 +239,6 @@ mod tests {
     fn packs_function_and_argument() {
         assert_eq!(arg(info::TEMPERATURE, 0x06), 0x0604);
         assert_eq!(arg(CONTROL_POWER_MODE, 0xA3), 0xA301);
+        assert_eq!(args(CONTROL_FAN_BOOST, 0x32, 0x80), 0x0080_3202);
     }
 }

@@ -7,6 +7,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
+use std::time::{Duration, Instant};
 
 use poise_core::model::Pid;
 use poise_platform::ipc::pipe::{PipeConnection, PipeServer};
@@ -114,6 +115,18 @@ fn client_allowed(pid: Pid, allowed_dir: Option<&PathBuf>) -> bool {
     path.is_some_and(|p| p.parent().is_some_and(|parent| parent.eq(dir.as_path())))
 }
 
+/// 一次请求（含等待引擎）超过这个时间就记一条日志，用来发现界面操作"不跟手"的原因。
+const SLOW_REQUEST: Duration = Duration::from_millis(100);
+
+/// 请求的名称（不含参数），用于日志。
+fn request_name(request: &impl std::fmt::Debug) -> String {
+    let text = format!("{request:?}");
+    text.split([' ', '{', '('])
+        .next()
+        .unwrap_or_default()
+        .to_string()
+}
+
 fn serve(conn: PipeConnection, pid: Pid, engine: &Mutex<Engine>) {
     let mut reader = BufReader::new(conn);
     loop {
@@ -136,8 +149,22 @@ fn serve(conn: PipeConnection, pid: Pid, engine: &Mutex<Engine>) {
                 break;
             }
         };
+        let started = Instant::now();
+        let name = request_name(&envelope.request);
         let response = match engine.lock() {
-            Ok(mut eng) => eng.handle(envelope.id, pid, envelope.request),
+            Ok(mut eng) => {
+                let waited = started.elapsed();
+                let response = eng.handle(envelope.id, pid, envelope.request);
+                let total = started.elapsed();
+                if total > SLOW_REQUEST {
+                    log::info!(
+                        "请求 {name} 耗时 {} ms（等待采样 {} ms）",
+                        total.as_millis(),
+                        waited.as_millis()
+                    );
+                }
+                response
+            }
             Err(_) => ResponseEnvelope::error(envelope.id, ErrorCode::Internal, "服务内部错误"),
         };
         if write_message(reader.get_mut(), &response).is_err() {

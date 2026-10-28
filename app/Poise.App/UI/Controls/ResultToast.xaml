@@ -1,0 +1,22 @@
+<UserControl
+    x:Class="Poise.App.UI.Controls.ResultToast"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    HorizontalAlignment="Center"
+    VerticalAlignment="Bottom"
+    MaxWidth="560"
+    Margin="24,0,24,24"
+    Visibility="Collapsed">
+
+    <!-- 浮在页面底部的结果提示：不占布局，出现和消失都不会推动页面内容 -->
+    <Border x:Name="Surface"
+            CornerRadius="{StaticResource OverlayCornerRadius}"
+            Background="{ThemeResource AcrylicInAppFillColorDefaultBrush}"
+            BorderBrush="{ThemeResource SurfaceStrokeColorFlyoutBrush}"
+            BorderThickness="1">
+        <Border.Shadow>
+            <ThemeShadow />
+        </Border.Shadow>
+        <InfoBar x:Name="Bar" IsOpen="True" IsClosable="True" BorderThickness="0" />
+    </Border>
+</UserControl>

@@ -5,6 +5,13 @@ use super::model::{
 };
 
 const EXPLORER_ADVANCED: &str = r"Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced";
+/// 电源计划：处理器电源管理子组、最小处理器状态。
+const SUB_PROCESSOR: &str = "54533251-82be-4824-96c1-47b60b740d00";
+const PROC_THROTTLE_MIN: &str = "893dee8e-2bef-41e0-89c6-b55d0929964c";
+/// Windows"平衡"方案的默认值。
+const IDLE_MIN_STATE_PCT: u32 = 5;
+/// 不超过这个值就不算"强制高频"。
+const IDLE_MIN_STATE_LIMIT: u32 = 50;
 
 fn key(k: &str) -> Text {
     Text::Key(k.to_string())
@@ -12,6 +19,23 @@ fn key(k: &str) -> Text {
 
 pub fn static_items(wsl_installed: bool) -> Vec<OptimizationItem> {
     let mut items = vec![
+        OptimizationItem {
+            // "高性能"等电源计划把插电时的最小处理器状态设为 100%：处理器从不降频，空闲时也一直发热。
+            id: "cpu_idle_downclock".into(),
+            group: Group::Power,
+            title: key("opt.cpu_idle.title"),
+            description: key("opt.cpu_idle.desc"),
+            target: Target::PowerSetting {
+                subgroup: SUB_PROCESSOR.into(),
+                setting: PROC_THROTTLE_MIN.into(),
+                ac: true,
+            },
+            optimized: Value::Dword(IDLE_MIN_STATE_PCT),
+            matcher: Matcher::AtMost(IDLE_MIN_STATE_LIMIT),
+            in_one_click: true,
+            slow_hint: false,
+            takes_effect: TakesEffect::Immediately,
+        },
         OptimizationItem {
             id: "fast_startup_off".into(),
             group: Group::StartupBackground,
@@ -96,6 +120,21 @@ mod tests {
         ids.sort();
         ids.dedup();
         assert_eq!(ids.len(), with.len());
+    }
+
+    #[test]
+    fn forced_full_clock_is_not_optimized_but_balanced_defaults_are() {
+        let item = static_items(false)
+            .into_iter()
+            .find(|i| i.id == "cpu_idle_downclock")
+            .unwrap();
+        let optimized = |v| {
+            item.matcher
+                .is_optimized(Some(&Value::Dword(v)), &item.optimized)
+        };
+        assert!(!optimized(100));
+        assert!(optimized(5));
+        assert!(optimized(0));
     }
 
     #[test]

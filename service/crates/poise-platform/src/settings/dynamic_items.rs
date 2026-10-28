@@ -8,6 +8,7 @@ use poise_core::optimize::{
 };
 use windows::Win32::System::Registry::{HKEY, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE};
 
+use crate::persist::paths;
 use crate::settings::user::UserContext;
 use crate::win::registry;
 use crate::win::version_info;
@@ -61,8 +62,7 @@ fn expand_env(path: &str) -> String {
 }
 
 fn is_system_file(path: &str) -> bool {
-    let windir = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".into());
-    path.to_lowercase().starts_with(&windir.to_lowercase())
+    paths::is_in_windows_dir(&path.to_lowercase())
 }
 
 /// 一个右键插件（按 CLSID 合并多个注册位置）。

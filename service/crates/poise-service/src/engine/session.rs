@@ -1,6 +1,11 @@
-//! 托盘代理上报的用户会话状态，以及它是否还"新鲜"；界面窗口是否正显示着。
+//! 用户会话：托盘代理上报的会话状态，以及它是否还"新鲜"；界面窗口是否正显示着；
+//! 交互用户变化时更新"当前用户"的注册表位置。
 
 use poise_core::model::{Millis, SessionState};
+use poise_platform::settings::user::UserContext;
+
+use super::Engine;
+use crate::config::RunMode;
 
 /// 超过这个时间没有上报，就认为看不到用户桌面了。
 const FRESH_FOR_MS: Millis = 10_000;
@@ -64,6 +69,23 @@ impl SessionTracker {
     /// 界面窗口是否正显示着。
     pub fn ui_visible(&self, now: Millis) -> bool {
         self.ui_visible_until.is_some_and(|until| now <= until)
+    }
+}
+
+impl Engine {
+    /// 交互用户变化（登录、切换用户）时，更新"当前用户"的注册表位置。
+    /// 没有它，"资源管理器"等按用户保存的优化项无法读写。
+    pub(super) fn on_session_changed(&mut self, session_id: u32) {
+        if self.cfg.mode == RunMode::Service {
+            let user = UserContext::for_session(session_id);
+            if user != self.changes.store.user() {
+                log::info!(
+                    "交互会话 {session_id}，用户：{:?}",
+                    user.as_ref().and_then(|u| u.sid.clone())
+                );
+            }
+            self.changes.store.set_user(user);
+        }
     }
 }
 

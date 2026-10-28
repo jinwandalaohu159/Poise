@@ -1,0 +1,28 @@
+<UserControl
+    x:Class="Poise.App.UI.Controls.FanRow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:c="using:Poise.App.UI.Controls"
+    xmlns:l="using:Poise.App.UI.Localization">
+
+    <!-- 风扇：当前 / 最高转速；滑块 0 = 自动（BIOS 按温度调节），1% 一档 -->
+    <Grid Style="{StaticResource SettingsRowStyle}">
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="20" />
+            <ColumnDefinition Width="*" />
+            <ColumnDefinition Width="Auto" />
+            <ColumnDefinition Width="Auto" />
+        </Grid.ColumnDefinitions>
+        <c:FanGlyph VerticalAlignment="Center" />
+        <StackPanel Grid.Column="1" VerticalAlignment="Center">
+            <TextBlock Text="{l:L Key=home.fan}" />
+            <TextBlock x:Name="SpeedText" Style="{StaticResource CaptionSecondaryTextStyle}" TextTrimming="CharacterEllipsis" />
+        </StackPanel>
+        <TextBlock x:Name="ValueText" Grid.Column="2" MinWidth="40" VerticalAlignment="Center" TextAlignment="Right"
+                   Style="{StaticResource BodyStrongTextBlockStyle}" />
+        <Slider x:Name="Boost" Grid.Column="3" Width="200" VerticalAlignment="Center"
+                Minimum="0" Maximum="100" StepFrequency="1" SmallChange="1" LargeChange="10"
+                IsThumbToolTipEnabled="False"
+                AutomationProperties.Name="{l:L Key=home.fan.strength}" />
+    </Grid>
+</UserControl>

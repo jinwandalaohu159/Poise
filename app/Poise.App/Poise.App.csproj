@@ -16,6 +16,8 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <LangVersion>latest</LangVersion>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <!-- 程序图标（资源管理器、开始菜单快捷方式）。由 scripts/make-icons.py 生成。 -->
+    <ApplicationIcon>Assets\Poise.ico</ApplicationIcon>
     <!-- 界面只在打开时运行、一次操作量很小：不需要后台 GC 线程。 -->
     <ConcurrentGarbageCollection>false</ConcurrentGarbageCollection>
     <SatelliteResourceLanguages>zh-Hans;en</SatelliteResourceLanguages>
@@ -28,6 +30,6 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\Poise.Core\Poise.Core.csproj" />
-    <Content Include="Assets\*.ico" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="Assets\*.ico;Assets\*.png" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

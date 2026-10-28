@@ -8,12 +8,12 @@
     Background="Transparent">
 
     <ScrollViewer>
-        <StackPanel MaxWidth="960" Padding="{StaticResource PagePadding}" Spacing="{StaticResource CardGap}">
+        <StackPanel MaxWidth="{StaticResource PageMaxWidth}" Padding="{StaticResource PagePadding}" Spacing="{StaticResource CardGap}">
             <c:PageHeader x:Name="Header" />
 
             <Grid Style="{StaticResource SettingsRowStyle}">
                 <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="20" />
                     <ColumnDefinition Width="*" />
                     <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
@@ -26,7 +26,7 @@
 
             <Grid Style="{StaticResource SettingsRowStyle}">
                 <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="20" />
                     <ColumnDefinition Width="*" />
                     <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
@@ -39,7 +39,7 @@
 
             <Grid Style="{StaticResource SettingsRowStyle}">
                 <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="20" />
                     <ColumnDefinition Width="*" />
                     <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
@@ -48,36 +48,52 @@
                     <TextBlock Text="{l:L Key=settings.autostart}" />
                     <TextBlock Text="{l:L Key=settings.autostart.desc}" Style="{StaticResource CaptionSecondaryTextStyle}" />
                 </StackPanel>
-                <ToggleSwitch Grid.Column="2" MinWidth="0"
-                              OnContent="{l:L Key=common.on}" OffContent="{l:L Key=common.off}"
+                <ToggleSwitch Grid.Column="2" Style="{StaticResource TrailingToggleSwitchStyle}"
                               IsEnabled="{x:Bind Vm.AutostartAvailable}"
                               IsOn="{x:Bind Vm.AutostartEnabled, Mode=TwoWay}" />
             </Grid>
 
-            <TextBlock Text="{l:L Key=settings.hardware}" Style="{StaticResource SectionTextStyle}" Margin="2,16,0,8" />
+            <Grid Style="{StaticResource SettingsRowStyle}">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="20" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <FontIcon FontFamily="{StaticResource IconFont}" Glyph="&#xEA8F;" FontSize="20" />
+                <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                    <TextBlock Text="{l:L Key=settings.tray_alert}" />
+                    <TextBlock Text="{l:L Key=settings.tray_alert.desc}" Style="{StaticResource CaptionSecondaryTextStyle}" TextWrapping="Wrap" />
+                </StackPanel>
+                <ToggleSwitch Grid.Column="2" Style="{StaticResource TrailingToggleSwitchStyle}"
+                              IsOn="{x:Bind Vm.TrayAlertEnabled, Mode=TwoWay}" />
+            </Grid>
+
+            <TextBlock Text="{l:L Key=settings.hardware}" Style="{StaticResource SectionTextStyle}" Margin="1,20,0,0" />
             <Border Style="{StaticResource CardStyle}">
                 <ItemsControl ItemsSource="{x:Bind Vm.Hardware}">
                     <ItemsControl.ItemTemplate>
                         <DataTemplate x:DataType="p:HardwareRow">
-                            <Grid ColumnSpacing="24" Padding="0,4">
+                            <!-- 名称在左，数值右对齐 -->
+                            <Grid ColumnSpacing="24" Padding="0,6">
                                 <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="160" />
+                                    <ColumnDefinition Width="Auto" />
                                     <ColumnDefinition Width="*" />
                                 </Grid.ColumnDefinitions>
                                 <TextBlock Text="{x:Bind Label}" Style="{StaticResource CaptionSecondaryTextStyle}"
-                                           VerticalAlignment="Center" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" />
-                                <TextBlock Grid.Column="1" Text="{x:Bind Value}" Style="{StaticResource BodyTextStyle}" />
+                                           VerticalAlignment="Center" TextWrapping="NoWrap" />
+                                <TextBlock Grid.Column="1" Text="{x:Bind Value}" Style="{StaticResource BodyTextStyle}"
+                                           HorizontalAlignment="Right" TextAlignment="Right" />
                             </Grid>
                         </DataTemplate>
                     </ItemsControl.ItemTemplate>
                 </ItemsControl>
             </Border>
 
-            <TextBlock Text="{l:L Key=settings.about}" Style="{StaticResource SectionTextStyle}" Margin="2,16,0,8" />
+            <TextBlock Text="{l:L Key=settings.about}" Style="{StaticResource SectionTextStyle}" Margin="1,20,0,0" />
             <Border Style="{StaticResource CardStyle}">
                 <Grid ColumnSpacing="24" RowSpacing="8">
                     <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="160" />
+                        <ColumnDefinition Width="Auto" />
                         <ColumnDefinition Width="*" />
                     </Grid.ColumnDefinitions>
                     <Grid.RowDefinitions>
@@ -85,11 +101,12 @@
                         <RowDefinition />
                     </Grid.RowDefinitions>
                     <StackPanel Grid.ColumnSpan="2" Orientation="Horizontal" Spacing="12" Margin="0,0,0,8">
-                        <c:LogoMark />
+                        <c:LogoMark Width="32" Height="32" />
                         <TextBlock x:Name="AppVersion" Style="{StaticResource BodyTextStyle}" VerticalAlignment="Center" />
                     </StackPanel>
-                    <TextBlock Grid.Row="1" Text="{l:L Key=settings.service}" Style="{StaticResource CaptionSecondaryTextStyle}" />
-                    <TextBlock Grid.Row="1" Grid.Column="1" Text="{x:Bind Vm.ServiceText, Mode=OneWay}" Style="{StaticResource BodyTextStyle}" />
+                    <TextBlock Grid.Row="1" Text="{l:L Key=settings.service}" Style="{StaticResource CaptionSecondaryTextStyle}" VerticalAlignment="Center" />
+                    <TextBlock Grid.Row="1" Grid.Column="1" Text="{x:Bind Vm.ServiceText, Mode=OneWay}" Style="{StaticResource BodyTextStyle}"
+                               HorizontalAlignment="Right" TextAlignment="Right" />
                 </Grid>
             </Border>
         </StackPanel>

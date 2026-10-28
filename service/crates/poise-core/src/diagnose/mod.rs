@@ -2,10 +2,12 @@
 
 mod health;
 mod heat;
+mod history;
 mod stutter;
 
 pub use health::{Health, HealthCode, HealthInput, Level, assess};
 pub use heat::{Heat, HeatWatch};
+pub use history::{HISTORY_WINDOW_MS, HistoryPoint, MetricHistory, Sample};
 pub use stutter::{StutterCause, StutterInput, StutterReport, analyze_stutter};
 
 use serde::{Deserialize, Serialize};

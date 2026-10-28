@@ -1,4 +1,4 @@
-//! 界面的语言与外观设置（界面写在 %LOCALAPPDATA%\Poise\ui.json），以及对应的文字表。
+//! 界面的语言、外观与托盘提醒设置（界面写在 %LOCALAPPDATA%\Poise\ui.json），以及对应的文字表。
 //! 文字表与界面共用同一份文件，编译时嵌入。
 
 use std::collections::HashMap;
@@ -18,18 +18,30 @@ pub enum Theme {
     Dark,
 }
 
-#[derive(Deserialize, Default)]
-#[serde(rename_all = "PascalCase")]
+#[derive(Deserialize)]
+#[serde(rename_all = "PascalCase", default)]
 struct UiFile {
     language: Option<String>,
-    #[serde(default)]
     theme: u8,
+    tray_alert: bool,
+}
+
+impl Default for UiFile {
+    fn default() -> Self {
+        Self {
+            language: None,
+            theme: 0,
+            tray_alert: true,
+        }
+    }
 }
 
 /// 读取一次当前的界面设置（菜单每次弹出前读取，保证与界面一致）。
 pub struct UiPrefs {
     strings: HashMap<String, String>,
     pub theme: Theme,
+    /// 需要留意时在托盘图标上显示圆点（设置页可关闭）。
+    pub tray_alert: bool,
 }
 
 impl UiPrefs {
@@ -48,7 +60,11 @@ impl UiPrefs {
             2 => Theme::Dark,
             _ => Theme::System,
         };
-        Self { strings, theme }
+        Self {
+            strings,
+            theme,
+            tray_alert: file.tray_alert,
+        }
     }
 
     pub fn get(&self, key: &str) -> String {
@@ -80,13 +96,23 @@ mod tests {
     use super::*;
 
     #[test]
+    fn tray_alert_defaults_to_on_and_follows_the_file() {
+        let old: UiFile = serde_json::from_str(r#"{"Language":"zh-CN","Theme":2}"#).unwrap();
+        assert!(old.tray_alert);
+        let off: UiFile = serde_json::from_str(r#"{"Theme":0,"TrayAlert":false}"#).unwrap();
+        assert!(!off.tray_alert);
+    }
+
+    #[test]
     fn both_string_tables_have_the_tray_keys() {
         for table in [ZH, EN] {
             let map: HashMap<String, String> = serde_json::from_str(table).unwrap();
             for key in [
+                "mode.auto",
                 "mode.quiet",
                 "mode.balanced",
                 "mode.full",
+                "mode.vendor.dell_g_mode",
                 "home.clean",
                 "tray.open",
                 "tray.exit",

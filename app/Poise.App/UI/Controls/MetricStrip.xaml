@@ -1,0 +1,20 @@
+<UserControl
+    x:Class="Poise.App.UI.Controls.MetricStrip"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:c="using:Poise.App.UI.Controls">
+
+    <!-- 四个核心指标等宽一行：CPU 占用、CPU 温度、显卡温度、内存（主页与托盘面板共用） -->
+    <Grid x:Name="Root" ColumnSpacing="32">
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="*" />
+            <ColumnDefinition Width="*" />
+            <ColumnDefinition Width="*" />
+            <ColumnDefinition Width="*" />
+        </Grid.ColumnDefinitions>
+        <c:MetricTile x:Name="CpuLoadTile" />
+        <c:MetricTile x:Name="CpuTempTile" Grid.Column="1" />
+        <c:MetricTile x:Name="GpuTempTile" Grid.Column="2" />
+        <c:MetricTile x:Name="MemoryTile" Grid.Column="3" />
+    </Grid>
+</UserControl>

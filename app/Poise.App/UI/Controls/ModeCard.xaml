@@ -13,70 +13,58 @@
           CornerRadius="{StaticResource CardCorner}">
 
         <VisualStateManager.VisualStateGroups>
-            <VisualStateGroup x:Name="SelectionStates">
-                <VisualState x:Name="Unselected" />
-                <VisualState x:Name="Selected">
-                    <VisualState.Setters>
-                        <Setter Target="Card.Background" Value="Transparent" />
-                        <Setter Target="Card.BorderBrush" Value="Transparent" />
-                        <Setter Target="Icon.Foreground" Value="{ThemeResource TextOnAccentFillColorPrimaryBrush}" />
-                        <Setter Target="TitleLabel.Foreground" Value="{ThemeResource TextOnAccentFillColorPrimaryBrush}" />
-                        <Setter Target="Desc.Foreground" Value="{ThemeResource TextOnAccentFillColorSecondaryBrush}" />
-                        <Setter Target="Check.Visibility" Value="Visible" />
-                    </VisualState.Setters>
-                </VisualState>
-            </VisualStateGroup>
             <VisualStateGroup x:Name="SizeStates">
                 <VisualState x:Name="Full" />
                 <VisualState x:Name="Compact">
                     <VisualState.Setters>
                         <Setter Target="Desc.Visibility" Value="Collapsed" />
-                        <Setter Target="Card.MinHeight" Value="72" />
-                        <Setter Target="Body.Padding" Value="12" />
+                        <Setter Target="Badge.Visibility" Value="Collapsed" />
+                        <Setter Target="Card.MinHeight" Value="64" />
+                        <Setter Target="Body.Padding" Value="6,10" />
+                        <Setter Target="Icon.FontSize" Value="20" />
+                        <Setter Target="TitleLabel.FontSize" Value="13" />
                     </VisualState.Setters>
                 </VisualState>
             </VisualStateGroup>
         </VisualStateManager.VisualStateGroups>
 
-        <!-- 悬停层：半透明叠加，选中与未选中时都适用 -->
+        <!-- 悬停与按下：半透明叠加（按下时更浅），不改变卡片尺寸 -->
         <Border x:Name="HoverLayer"
                 Background="{ThemeResource SubtleFillColorSecondaryBrush}"
                 CornerRadius="{StaticResource CardCorner}"
                 Opacity="0" />
 
-        <Grid x:Name="Body" Padding="16">
-        <StackPanel Spacing="4">
-            <FontIcon x:Name="Icon"
-                      HorizontalAlignment="Left"
-                      Margin="0,0,0,4"
-                      FontFamily="{StaticResource IconFont}"
-                      FontSize="24"
-                      Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" />
-            <TextBlock x:Name="TitleLabel" FontSize="14" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
-            <TextBlock x:Name="Desc"
-                       FontSize="12"
-                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                       MaxLines="2"
-                       TextTrimming="CharacterEllipsis"
-                       TextWrapping="Wrap" />
-        </StackPanel>
+        <!-- 图标、名称、说明居中；选中只由 ModeSelector 的描边框表示，卡片上不加勾 -->
+        <Grid x:Name="Body" Padding="12,16">
+            <StackPanel Spacing="4" HorizontalAlignment="Center" VerticalAlignment="Center">
+                <FontIcon x:Name="Icon"
+                          HorizontalAlignment="Center"
+                          Margin="0,0,0,4"
+                          FontFamily="{StaticResource IconFont}"
+                          FontSize="24"
+                          Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" />
+                <TextBlock x:Name="TitleLabel" FontSize="14" FontWeight="SemiBold" HorizontalAlignment="Center"
+                           TextAlignment="Center" TextTrimming="CharacterEllipsis" />
+                <TextBlock x:Name="Desc"
+                           FontSize="12"
+                           HorizontalAlignment="Center"
+                           TextAlignment="Center"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                           MaxLines="2"
+                           TextTrimming="CharacterEllipsis"
+                           TextWrapping="Wrap" />
+            </StackPanel>
+        </Grid>
 
-        <FontIcon x:Name="Check"
-                  HorizontalAlignment="Right" VerticalAlignment="Top"
-                  FontFamily="{StaticResource IconFont}" FontSize="14"
-                  Glyph="&#xE73E;"
-                  Foreground="{ThemeResource TextOnAccentFillColorPrimaryBrush}"
-                  Visibility="Collapsed" />
-
-        <!-- 游戏时自动切到全力的标记 -->
+        <!-- "使用中"：实际使用的模式与所选不同时（游戏时、过热降级）标在右上角 -->
         <Border x:Name="Badge"
-                HorizontalAlignment="Right" VerticalAlignment="Bottom"
+                HorizontalAlignment="Right" VerticalAlignment="Top"
+                Margin="0,8,8,0"
                 Padding="6,1"
-                Background="{ThemeResource TextOnAccentFillColorPrimaryBrush}"
+                Background="{ThemeResource AccentFillColorDefaultBrush}"
                 CornerRadius="8"
                 Opacity="0">
-            <TextBlock x:Name="BadgeText" FontSize="11" Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" />
+            <TextBlock x:Name="BadgeText" FontSize="11" Foreground="{ThemeResource TextOnAccentFillColorPrimaryBrush}" />
         </Border>
-        </Grid>
     </Grid>
 </UserControl>

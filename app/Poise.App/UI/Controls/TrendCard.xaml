@@ -1,0 +1,69 @@
+<UserControl
+    x:Class="Poise.App.UI.Controls.TrendCard"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:c="using:Poise.App.UI.Controls"
+    xmlns:l="using:Poise.App.UI.Localization">
+
+    <UserControl.Resources>
+        <Style x:Key="LegendSwatchStyle" TargetType="Border">
+            <Setter Property="Width" Value="12" />
+            <Setter Property="Height" Value="3" />
+            <Setter Property="CornerRadius" Value="1.5" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+        </Style>
+    </UserControl.Resources>
+
+    <!-- 最近 5 分钟走势：主页与卡顿诊断共用，数据来自 TrendFeed -->
+    <Border Style="{StaticResource LargeCardStyle}">
+        <StackPanel Spacing="12">
+            <Grid ColumnSpacing="16">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+                <TextBlock Text="{l:L Key=trend.title}" Style="{StaticResource CardTitleTextStyle}" />
+                <!-- 图例：大小核处理器显示性能核与能效核，否则显示 CPU 占用 -->
+                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="16" HorizontalAlignment="Right">
+                    <StackPanel x:Name="PerformanceLegend" Orientation="Horizontal" Spacing="6">
+                        <Border Style="{StaticResource LegendSwatchStyle}" Background="{ThemeResource ChartPerformanceBrush}" />
+                        <TextBlock Text="{l:L Key=trend.legend.performance}" Style="{StaticResource CaptionSecondaryTextStyle}" />
+                    </StackPanel>
+                    <StackPanel x:Name="EfficiencyLegend" Orientation="Horizontal" Spacing="6">
+                        <Border Style="{StaticResource LegendSwatchStyle}" Background="{ThemeResource ChartEfficiencyBrush}" />
+                        <TextBlock Text="{l:L Key=trend.legend.efficiency}" Style="{StaticResource CaptionSecondaryTextStyle}" />
+                    </StackPanel>
+                    <StackPanel x:Name="CpuLegend" Orientation="Horizontal" Spacing="6" Visibility="Collapsed">
+                        <Border Style="{StaticResource LegendSwatchStyle}" Background="{ThemeResource ChartPerformanceBrush}" />
+                        <TextBlock Text="{l:L Key=trend.legend.cpu}" Style="{StaticResource CaptionSecondaryTextStyle}" />
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                        <Border Style="{StaticResource LegendSwatchStyle}" Background="{ThemeResource ChartMemoryBrush}" />
+                        <TextBlock Text="{l:L Key=trend.legend.mem}" Style="{StaticResource CaptionSecondaryTextStyle}" />
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                        <Border Style="{StaticResource LegendSwatchStyle}" Background="{ThemeResource ChartTemperatureBrush}" />
+                        <TextBlock Text="{l:L Key=trend.legend.temp}" Style="{StaticResource CaptionSecondaryTextStyle}" />
+                    </StackPanel>
+                </StackPanel>
+            </Grid>
+
+            <c:LineChart x:Name="Chart" Height="200" />
+
+            <Grid>
+                <StackPanel VerticalAlignment="Center" Spacing="2">
+                    <TextBlock x:Name="LoadsText" Style="{StaticResource CaptionSecondaryTextStyle}" />
+                    <TextBlock x:Name="CollectingText" Text="{l:L Key=trend.collecting}"
+                               Style="{StaticResource CaptionSecondaryTextStyle}" Visibility="Collapsed" />
+                </StackPanel>
+                <HyperlinkButton x:Name="DetailsLink" Style="{StaticResource DetailsLinkStyle}" HorizontalAlignment="Right"
+                                 VerticalAlignment="Center" Visibility="Collapsed" Click="OnDetails">
+                    <StackPanel Orientation="Horizontal" Spacing="4">
+                        <TextBlock Text="{l:L Key=trend.details}" />
+                        <FontIcon FontFamily="{StaticResource IconFont}" Glyph="&#xE76C;" FontSize="10" />
+                    </StackPanel>
+                </HyperlinkButton>
+            </Grid>
+        </StackPanel>
+    </Border>
+</UserControl>

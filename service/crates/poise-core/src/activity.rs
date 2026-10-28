@@ -15,6 +15,13 @@ pub struct Usage {
     pub last_active_at: Option<Millis>,
 }
 
+impl Usage {
+    /// 占整机的百分比（单核百分比除以逻辑处理器数）。
+    pub fn share_pct(&self, logical_cpus: u32) -> f32 {
+        self.core_pct / logical_cpus.max(1) as f32
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct ActivityConfig {
     /// 超过这个单核百分比视为"在干活"。

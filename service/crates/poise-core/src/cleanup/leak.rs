@@ -71,8 +71,6 @@ pub struct LeakSuspect {
     pub key: ProcessKey,
     pub metric: LeakMetric,
     pub per_hour: f64,
-    pub first: f64,
-    pub current: f64,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -176,8 +174,6 @@ impl LeakDetector {
             key,
             metric,
             per_hour: g.per_hour,
-            first: g.first,
-            current: g.current,
         })
     }
 }

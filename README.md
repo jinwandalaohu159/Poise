@@ -61,6 +61,7 @@ dotnet test app\Poise.Core.Tests    # 界面逻辑与契约测试
 - 再次运行 `install.ps1` 即为升级：只替换文件、重启服务，保留设置、开机启动选择与优化记录。
 - 卸载时如有修改没能还原，程序和修改记录都会保留，可重启后再运行一次 `uninstall.ps1`。
 - 安装包未签名（没有代码签名证书），首次运行可能出现 SmartScreen 提示。
+- 图标的原图是 `icon/foam.png`。更换后运行 `python scripts/make-icons.py`（需要 Pillow），重新生成 `app/Poise.App/Assets` 下的程序图标、托盘提醒图标和界面标志，再构建即可。
 
 ## 安全边界
 

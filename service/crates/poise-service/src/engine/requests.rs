@@ -1,19 +1,20 @@
 //! 把 IPC 请求分派到引擎的各个部分。只处理协议里列出的固定请求。
 
-use poise_core::model::{Pid, ProcessKey};
-use poise_platform::settings::user::UserContext;
+use poise_core::model::Pid;
+use poise_core::prefs::Mode;
 use poise_protocol::{ErrorCode, HelloResult, PROTOCOL_VERSION, Request, ResponseEnvelope};
 use serde::Serialize;
 
 use super::Engine;
 use super::error::RequestError;
-use crate::config::RunMode;
-
-/// 临时全速的最长时间（分钟）。
-const MAX_BOOST_MINUTES: u32 = 240;
 
 fn ok<T: Serialize>(id: u64, value: &T) -> ResponseEnvelope {
     ResponseEnvelope::ok(id, value)
+}
+
+/// 刚启动、还没有第一轮采样结果。
+fn not_ready() -> RequestError {
+    RequestError::new(ErrorCode::NotReady, "正在收集数据，请稍后再试")
 }
 
 fn reply<T: Serialize>(id: u64, r: Result<T, RequestError>) -> ResponseEnvelope {
@@ -48,7 +49,10 @@ impl Engine {
                 )
             }
             Request::ReportSession(state) => {
-                if state.session_id != self.session.session_id() {
+                // 会话变了（切换用户），或者还不知道登录用户（服务启动时还没人登录）：重新找。
+                if state.session_id != self.session.session_id()
+                    || self.changes.store.user().is_none()
+                {
                     self.on_session_changed(state.session_id);
                 }
                 let now = self.now();
@@ -71,14 +75,38 @@ impl Engine {
                 ok(id, &())
             }
             Request::SetMode { mode } => {
+                if mode == Mode::Vendor && !self.vendor_available() {
+                    return reply::<()>(
+                        id,
+                        Err(RequestError::new(
+                            ErrorCode::InvalidRequest,
+                            "这台电脑没有机型极限模式",
+                        )),
+                    );
+                }
                 self.settings.mode = mode;
                 self.save_settings();
                 self.reschedule_now();
                 ok(id, &())
             }
-            Request::SetAutoFullForGames { enabled } => {
-                self.settings.auto_full_for_games = enabled;
+            Request::SetFanBoost { percent } => {
+                self.settings.fan_boost = percent.min(100);
                 self.save_settings();
+                self.apply_fan_boost();
+                ok(id, &())
+            }
+            Request::SetGameMode { mode } => {
+                self.settings.game_mode = mode;
+                self.save_settings();
+                // 正在玩游戏时立即换到新的目标模式。
+                self.reschedule_now();
+                ok(id, &())
+            }
+            Request::SetSmartSchedule { enabled } => {
+                self.settings.smart_schedule = enabled;
+                self.save_settings();
+                // 关闭时立即撤销全部进程调整，打开时立即按类别调整。
+                self.reschedule_now();
                 ok(id, &())
             }
             Request::SetAutoClean { enabled } => {
@@ -90,6 +118,7 @@ impl Engine {
                 let result = self.clean_now();
                 ok(id, &result)
             }
+            Request::CleanupOverview => reply(id, self.cleanup_overview().ok_or_else(not_ready)),
             Request::ListApps => ok(id, &self.apps()),
             Request::SetAppPreference { path, preference } => {
                 let r = self.set_app_preference(&path, preference);
@@ -105,38 +134,8 @@ impl Engine {
             Request::RevertOptimization { id: item } => reply(id, self.revert_optimization(&item)),
             Request::ApplyRecommended => reply(id, self.apply_recommended()),
             Request::RevertAll => reply(id, self.revert_optimizations()),
-            Request::Diagnose => reply(
-                id,
-                self.diagnose().ok_or_else(|| {
-                    RequestError::new(ErrorCode::NotReady, "正在收集数据，请稍后再试")
-                }),
-            ),
-        }
-    }
-
-    fn temp_boost(&mut self, pid: Pid, minutes: u32) -> Result<(), RequestError> {
-        let key = self
-            .process_key(pid)
-            .ok_or_else(|| RequestError::new(ErrorCode::ProcessGone, "程序已经退出"))?;
-        let until = self.now() + u64::from(minutes.min(MAX_BOOST_MINUTES)) * 60_000;
-        self.scheduler.boost(key, until);
-        self.reschedule_now();
-        Ok(())
-    }
-
-    fn process_key(&self, pid: Pid) -> Option<ProcessKey> {
-        self.view.as_ref()?.snapshot.find(pid).map(|p| p.facts.key)
-    }
-
-    /// 交互用户变化（登录、切换用户）时，更新"当前用户"的注册表位置。
-    fn on_session_changed(&mut self, session_id: u32) {
-        if self.cfg.mode == RunMode::Service {
-            let user = UserContext::for_session(session_id);
-            log::info!(
-                "交互会话 {session_id}，用户：{:?}",
-                user.as_ref().and_then(|u| u.sid.clone())
-            );
-            self.changes.store.set_user(user);
+            Request::Diagnose => reply(id, self.diagnose().ok_or_else(not_ready)),
+            Request::Trend => ok(id, &self.trend()),
         }
     }
 }

@@ -8,6 +8,7 @@ use super::enumerate::ProcessTable;
 use super::facts::FactsCache;
 use crate::observe::services::ServiceMap;
 use crate::observe::system;
+use crate::persist::paths;
 
 #[derive(Default)]
 pub struct Snapshotter {
@@ -32,6 +33,10 @@ impl Snapshotter {
                         key: r.key,
                         parent_pid: (r.parent_pid != 0).then_some(r.parent_pid),
                         name: r.name,
+                        in_windows_dir: s
+                            .image_path
+                            .as_deref()
+                            .is_some_and(paths::is_in_windows_dir),
                         image_path: s.image_path,
                         display_name: s.display_name,
                         session_id: r.session_id,

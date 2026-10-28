@@ -1,0 +1,197 @@
+<Page
+    x:Class="Poise.App.UI.Pages.CleanupPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:c="using:Poise.App.UI.Controls"
+    xmlns:l="using:Poise.App.UI.Localization"
+    xmlns:vm="using:Poise.App.UI.ViewModels"
+    Background="Transparent">
+
+    <Page.Resources>
+        <!-- 列宽与列间距：分组标题行与每一行共用，保证对齐。列名居中，数值右对齐，状态居中 -->
+        <GridLength x:Key="MemoryColumn">140</GridLength>
+        <GridLength x:Key="CpuColumn">96</GridLength>
+        <GridLength x:Key="StatusColumn">208</GridLength>
+        <x:Double x:Key="TableColumnSpacing">32</x:Double>
+
+        <!-- 分组标题行：左边是分组名，右边是三列的列名（居中）；右边距 = 行的内边距 + 描边 -->
+        <DataTemplate x:Key="SectionHeaderTemplate" x:DataType="x:String">
+            <Grid Padding="1,0,17,8" ColumnSpacing="{StaticResource TableColumnSpacing}">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="{StaticResource MemoryColumn}" />
+                    <ColumnDefinition Width="{StaticResource CpuColumn}" />
+                    <ColumnDefinition Width="{StaticResource StatusColumn}" />
+                </Grid.ColumnDefinitions>
+                <TextBlock Text="{x:Bind}" Style="{StaticResource SectionTextStyle}" Margin="0" VerticalAlignment="Bottom" />
+                <TextBlock Grid.Column="1" Text="{l:L Key=cleanup.col.memory}" Style="{StaticResource ColumnHeaderTextStyle}"
+                           HorizontalAlignment="Center" VerticalAlignment="Bottom" />
+                <TextBlock Grid.Column="2" Text="{l:L Key=cleanup.col.cpu}" Style="{StaticResource ColumnHeaderTextStyle}"
+                           HorizontalAlignment="Center" VerticalAlignment="Bottom" />
+                <TextBlock Grid.Column="3" Text="{l:L Key=cleanup.col.status}" Style="{StaticResource ColumnHeaderTextStyle}"
+                           HorizontalAlignment="Center" VerticalAlignment="Bottom" />
+            </Grid>
+        </DataTemplate>
+
+        <DataTemplate x:Key="ProcessRowTemplate" x:DataType="vm:ProcessRowItem">
+            <Grid Style="{StaticResource ListRowStyle}" Margin="0,0,0,4" Padding="16,8" ColumnSpacing="{StaticResource TableColumnSpacing}">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="{StaticResource MemoryColumn}" />
+                    <ColumnDefinition Width="{StaticResource CpuColumn}" />
+                    <ColumnDefinition Width="{StaticResource StatusColumn}" />
+                </Grid.ColumnDefinitions>
+
+                <!-- 图标 + 名称（与设置行一致：图标 20，间距 16） -->
+                <Grid ColumnSpacing="16" VerticalAlignment="Center">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="20" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <Grid Width="20" Height="20" VerticalAlignment="Center">
+                        <Image Source="{x:Bind Icon, Mode=OneWay}" />
+                        <FontIcon FontFamily="{StaticResource IconFont}" Glyph="&#xE7C4;" FontSize="16"
+                                  Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                  Visibility="{x:Bind FallbackIconVisibility, Mode=OneWay}" />
+                    </Grid>
+                    <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                        <TextBlock Text="{x:Bind Name, Mode=OneWay}" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" />
+                        <TextBlock Text="{x:Bind ProcessCount, Mode=OneWay}" Style="{StaticResource CaptionSecondaryTextStyle}"
+                                   Visibility="{x:Bind CountVisibility, Mode=OneWay}" TextWrapping="NoWrap" />
+                    </StackPanel>
+                </Grid>
+
+                <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="4">
+                    <TextBlock Text="{x:Bind Memory, Mode=OneWay}" HorizontalAlignment="Right" Style="{StaticResource TableNumberTextStyle}" />
+                    <c:MeterBar Fraction="{x:Bind MemoryFraction, Mode=OneWay}" Attention="{x:Bind NeedsAttention, Mode=OneWay}" />
+                </StackPanel>
+
+                <TextBlock Grid.Column="2" Text="{x:Bind Cpu, Mode=OneWay}" VerticalAlignment="Center" HorizontalAlignment="Right"
+                           Style="{StaticResource TableNumberTextStyle}" />
+
+                <StackPanel Grid.Column="3" VerticalAlignment="Center" Spacing="2">
+                    <c:StatusTag Text="{x:Bind Status, Mode=OneWay}" Tone="{x:Bind Tone, Mode=OneWay}" HorizontalAlignment="Center" />
+                    <TextBlock Text="{x:Bind Action, Mode=OneWay}" Style="{StaticResource CaptionSecondaryTextStyle}"
+                               HorizontalAlignment="Center" TextAlignment="Center" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap"
+                               ToolTipService.ToolTip="{x:Bind Action, Mode=OneWay}"
+                               Visibility="{x:Bind ActionVisibility, Mode=OneWay}" />
+                </StackPanel>
+            </Grid>
+        </DataTemplate>
+    </Page.Resources>
+
+    <Grid MaxWidth="{StaticResource PageMaxWidth}" Padding="{StaticResource PagePadding}">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <c:PageHeader x:Name="Header" />
+
+        <!-- 摘要：可释放 / 需要处理 / 一键清理与自动清理；下方是内存条 -->
+        <Border Grid.Row="1" Style="{StaticResource LargeCardStyle}">
+            <Grid ColumnSpacing="32" RowSpacing="16">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+
+                <StackPanel>
+                    <TextBlock Text="{l:L Key=cleanup.freeable}" Style="{StaticResource CaptionSecondaryTextStyle}" />
+                    <StackPanel Orientation="Horizontal" Spacing="4">
+                        <TextBlock x:Name="FreeableValue" Style="{StaticResource KpiValueTextStyle}" Text="—" />
+                        <TextBlock x:Name="FreeableUnit" Style="{StaticResource KpiUnitTextStyle}" />
+                    </StackPanel>
+                </StackPanel>
+
+                <StackPanel Grid.Column="1">
+                    <TextBlock Text="{l:L Key=cleanup.attention}" Style="{StaticResource CaptionSecondaryTextStyle}" />
+                    <StackPanel Orientation="Horizontal" Spacing="4">
+                        <TextBlock x:Name="AttentionValue" Style="{StaticResource KpiValueTextStyle}" Text="—" />
+                        <TextBlock Text="{l:L Key=cleanup.attention_unit}" Style="{StaticResource KpiUnitTextStyle}" />
+                    </StackPanel>
+                </StackPanel>
+
+                <StackPanel Grid.Column="2" HorizontalAlignment="Right" VerticalAlignment="Center" Spacing="8">
+                    <c:ActionButton x:Name="CleanButton" HorizontalAlignment="Right" />
+                    <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Right">
+                        <TextBlock Text="{l:L Key=home.auto_clean}" VerticalAlignment="Center" Style="{StaticResource CaptionSecondaryTextStyle}" />
+                        <c:InfoTip Text="{l:L Key=home.auto_clean.desc}" />
+                        <ToggleSwitch x:Name="AutoCleanToggle" Style="{StaticResource TrailingToggleSwitchStyle}" Toggled="OnAutoCleanToggled" />
+                    </StackPanel>
+                </StackPanel>
+
+                <StackPanel Grid.Row="1" Grid.ColumnSpan="3" Spacing="6">
+                    <Grid>
+                        <TextBlock x:Name="MemoryText" Style="{StaticResource CaptionSecondaryTextStyle}" />
+                        <StackPanel Orientation="Horizontal" Spacing="6" HorizontalAlignment="Right">
+                            <Border Width="10" Height="4" CornerRadius="2" VerticalAlignment="Center"
+                                    Background="{ThemeResource AccentFillColorDefaultBrush}" Opacity="0.35" />
+                            <TextBlock Text="{l:L Key=cleanup.legend_freeable}" Style="{StaticResource CaptionSecondaryTextStyle}" />
+                        </StackPanel>
+                    </Grid>
+                    <c:MeterBar x:Name="MemoryBar" Height="6" />
+                    <TextBlock x:Name="LastCleanText" Style="{StaticResource CaptionSecondaryTextStyle}" />
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <StackPanel Grid.Row="2" Margin="0,8,0,0" Spacing="8">
+            <InfoBar x:Name="RestartBar" Severity="Warning" IsOpen="False" IsClosable="False"
+                     Title="{l:L Key=status.restart}" Message="{l:L Key=status.restart.desc}">
+                <InfoBar.ActionButton>
+                    <HyperlinkButton Content="{l:L Key=status.restart.snooze}" Click="OnSnoozeRestart" />
+                </InfoBar.ActionButton>
+            </InfoBar>
+            <InfoBar x:Name="ErrorBar" Severity="Error" IsOpen="False" IsClosable="True" />
+        </StackPanel>
+
+        <ScrollViewer Grid.Row="3" Margin="0,12,-24,0" Padding="0,0,24,0">
+            <StackPanel>
+                <ProgressRing x:Name="LoadingRing" IsActive="True" Width="24" Height="24" HorizontalAlignment="Left" Margin="16,8" />
+
+                <StackPanel x:Name="AttentionSection" Visibility="Collapsed" Margin="0,0,0,20">
+                    <ContentControl Content="{l:L Key=cleanup.section.attention}" ContentTemplate="{StaticResource SectionHeaderTemplate}"
+                                    HorizontalContentAlignment="Stretch" IsTabStop="False" />
+                    <ItemsControl ItemsSource="{x:Bind Vm.Attention}" ItemTemplate="{StaticResource ProcessRowTemplate}">
+                        <ItemsControl.ItemContainerTransitions>
+                            <TransitionCollection>
+                                <RepositionThemeTransition />
+                            </TransitionCollection>
+                        </ItemsControl.ItemContainerTransitions>
+                    </ItemsControl>
+                </StackPanel>
+
+                <StackPanel x:Name="OthersSection" Visibility="Collapsed" Margin="0,0,0,20">
+                    <ContentControl Content="{l:L Key=cleanup.section.top}" ContentTemplate="{StaticResource SectionHeaderTemplate}"
+                                    HorizontalContentAlignment="Stretch" IsTabStop="False" />
+                    <ItemsControl ItemsSource="{x:Bind Vm.Others}" ItemTemplate="{StaticResource ProcessRowTemplate}">
+                        <ItemsControl.ItemContainerTransitions>
+                            <TransitionCollection>
+                                <RepositionThemeTransition />
+                            </TransitionCollection>
+                        </ItemsControl.ItemContainerTransitions>
+                    </ItemsControl>
+                </StackPanel>
+
+                <!-- 与开机时相比：整机总量的变化（只展示，不清理） -->
+                <StackPanel x:Name="SinceBootSection" Visibility="Collapsed">
+                    <StackPanel Orientation="Horizontal" Spacing="8" Margin="1,0,0,8">
+                        <TextBlock Text="{l:L Key=since_boot.title}" Style="{StaticResource SectionTextStyle}" Margin="0" />
+                        <c:InfoTip Text="{l:L Key=since_boot.note}" />
+                    </StackPanel>
+                    <c:SinceBootCard x:Name="SinceBoot" />
+                </StackPanel>
+            </StackPanel>
+        </ScrollViewer>
+
+        <c:ResultToast x:Name="Result" Grid.RowSpan="4" />
+    </Grid>
+</Page>

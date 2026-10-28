@@ -4,36 +4,18 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:c="using:Poise.App.UI.Controls"
     xmlns:l="using:Poise.App.UI.Localization"
+    xmlns:t="using:Poise.App.UI.Theme"
     xmlns:vm="using:Poise.App.UI.ViewModels"
     Background="Transparent">
 
     <Page.Resources>
-        <DataTemplate x:Key="AppRowTemplate" x:DataType="vm:AppItem">
-            <Grid Style="{StaticResource SettingsRowStyle}" Margin="0,0,0,4">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="Auto" />
-                    <ColumnDefinition Width="*" />
-                    <ColumnDefinition Width="Auto" />
-                </Grid.ColumnDefinitions>
-                <Image Source="{x:Bind Icon, Mode=OneWay}" Width="24" Height="24" VerticalAlignment="Center" />
-                <StackPanel Grid.Column="1" VerticalAlignment="Center">
-                    <TextBlock Text="{x:Bind Name}" TextTrimming="CharacterEllipsis" />
-                    <TextBlock Text="{x:Bind Path}" Style="{StaticResource CaptionSecondaryTextStyle}"
-                               TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" />
-                </StackPanel>
-                <!-- 选项顺序与 AppPreference 一致；写在 XAML 里，保证先有选项再绑定选中项。 -->
-                <ComboBox Grid.Column="2" MinWidth="148" VerticalAlignment="Center"
-                          SelectedIndex="{x:Bind PreferenceIndex, Mode=TwoWay}">
-                    <ComboBoxItem Content="{l:L Key=pref.auto}" />
-                    <ComboBoxItem Content="{l:L Key=pref.always_fast}" />
-                    <ComboBoxItem Content="{l:L Key=pref.background}" />
-                    <ComboBoxItem Content="{l:L Key=pref.game}" />
-                </ComboBox>
-            </Grid>
+        <!-- 一个程序一行（行的外观、展开动画、下拉框打开时暂停刷新都在 AppRow 里） -->
+        <DataTemplate x:Key="AppTemplate" x:DataType="vm:AppItem">
+            <c:AppRow Item="{x:Bind}" />
         </DataTemplate>
     </Page.Resources>
 
-    <Grid MaxWidth="960" Padding="{StaticResource PagePadding}">
+    <Grid MaxWidth="{StaticResource PageMaxWidth}" Padding="{StaticResource PagePadding}">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
@@ -42,41 +24,142 @@
         </Grid.RowDefinitions>
 
         <c:PageHeader x:Name="Header" />
-        <TextBox Grid.Row="1" Margin="0,0,0,12"
-                 PlaceholderText="{l:L Key=apps.search}"
-                 Text="{x:Bind Vm.Query, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
-        <InfoBar x:Name="ErrorBar" Grid.Row="2" Severity="Error" IsOpen="False" Margin="0,0,0,12" />
 
-        <ScrollViewer Grid.Row="3" Margin="0,0,-24,0" Padding="0,0,24,0">
-            <StackPanel Spacing="{StaticResource SectionGap}">
-                <ProgressRing x:Name="LoadingRing" IsActive="True" HorizontalAlignment="Left" Width="24" Height="24" />
+        <!-- 智能调度开关；四种偏好的含义 + 搜索与添加 -->
+        <Border Grid.Row="1" Style="{StaticResource LargeCardStyle}">
+            <StackPanel Spacing="16">
+                <Grid ColumnSpacing="16">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <StackPanel Spacing="2" VerticalAlignment="Center">
+                        <TextBlock Text="{l:L Key=apps.smart_schedule}" Style="{StaticResource CardTitleTextStyle}" />
+                        <TextBlock Text="{l:L Key=apps.smart_schedule.desc}" Style="{StaticResource CaptionSecondaryTextStyle}" TextWrapping="Wrap" />
+                    </StackPanel>
+                    <ToggleSwitch Grid.Column="1" VerticalAlignment="Center"
+                                  Style="{StaticResource TrailingToggleSwitchStyle}"
+                                  IsOn="{x:Bind Vm.SmartSchedule, Mode=TwoWay}" />
+                </Grid>
+                <Rectangle Height="1" Fill="{ThemeResource DividerStrokeColorDefaultBrush}" />
+                <Grid ColumnSpacing="16">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Text="{l:L Key=apps.hint}" Style="{StaticResource BodyTextStyle}" VerticalAlignment="Center" />
+                    <TextBox Grid.Column="1" Width="220" VerticalAlignment="Center"
+                             PlaceholderText="{l:L Key=apps.search}"
+                             Text="{x:Bind Vm.Query, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                    <Button Grid.Column="2" Style="{StaticResource AccentButtonStyle}" MinHeight="32" Click="OnAdd">
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <FontIcon FontFamily="{StaticResource IconFont}" Glyph="&#xE710;" FontSize="14" />
+                            <TextBlock Text="{l:L Key=apps.add}" />
+                        </StackPanel>
+                    </Button>
+                </Grid>
+                <Grid x:Name="Legend" ColumnSpacing="24">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <StackPanel Spacing="2">
+                        <TextBlock Text="{l:L Key=pref.auto}" Style="{StaticResource CardTitleTextStyle}" FontSize="13" />
+                        <TextBlock Text="{l:L Key=pref.auto.desc}" Style="{StaticResource CaptionSecondaryTextStyle}" />
+                    </StackPanel>
+                    <StackPanel Grid.Column="1" Spacing="2">
+                        <TextBlock Text="{l:L Key=pref.always_fast}" Style="{StaticResource CardTitleTextStyle}" FontSize="13" />
+                        <TextBlock Text="{l:L Key=pref.always_fast.desc}" Style="{StaticResource CaptionSecondaryTextStyle}" />
+                    </StackPanel>
+                    <StackPanel Grid.Column="2" Spacing="2">
+                        <TextBlock Text="{l:L Key=pref.background}" Style="{StaticResource CardTitleTextStyle}" FontSize="13" />
+                        <TextBlock Text="{l:L Key=pref.background.desc}" Style="{StaticResource CaptionSecondaryTextStyle}" />
+                    </StackPanel>
+                    <StackPanel Grid.Column="3" Spacing="2">
+                        <TextBlock Text="{l:L Key=pref.game}" Style="{StaticResource CardTitleTextStyle}" FontSize="13" />
+                        <TextBlock Text="{l:L Key=pref.game.desc}" Style="{StaticResource CaptionSecondaryTextStyle}" />
+                    </StackPanel>
+                </Grid>
+            </StackPanel>
+        </Border>
 
-                <StackPanel x:Name="RunningSection" Visibility="Collapsed">
-                    <TextBlock Text="{l:L Key=apps.running}" Style="{StaticResource SectionTextStyle}" />
-                    <ItemsControl ItemsSource="{x:Bind Vm.Running}" ItemTemplate="{StaticResource AppRowTemplate}">
-                        <ItemsControl.ItemContainerTransitions>
-                            <TransitionCollection>
-                                <EntranceThemeTransition IsStaggeringEnabled="True" FromVerticalOffset="16" />
-                            </TransitionCollection>
-                        </ItemsControl.ItemContainerTransitions>
-                    </ItemsControl>
+        <InfoBar x:Name="ErrorBar" Grid.Row="2" Severity="Error" IsOpen="False" Margin="0,8,0,0" />
+
+        <ScrollViewer Grid.Row="3" Margin="0,20,-24,0" Padding="0,0,24,0">
+            <StackPanel Spacing="20">
+                <ProgressRing IsActive="{x:Bind Vm.IsLoading, Mode=OneWay}" Visibility="{x:Bind Vm.IsLoading, Mode=OneWay}"
+                              HorizontalAlignment="Left" Width="24" Height="24" />
+
+                <StackPanel Visibility="{x:Bind Vm.HasRunning, Mode=OneWay}">
+                    <TextBlock Text="{l:L Key=apps.running}" Style="{StaticResource SectionTextStyle}" Margin="1,0,0,4" />
+                    <!-- 列名，与行内各列对齐。点列名排序（"正在运行""系统"两栏一起）：换列按常用方向，再点同一列反向 -->
+                    <Grid Padding="9,0,17,4" ColumnSpacing="{StaticResource AppsColumnSpacing}">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="{StaticResource AppsChevronColumn}" />
+                            <ColumnDefinition Width="{StaticResource AppsIconColumn}" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="{StaticResource AppsCpuColumn}" />
+                            <ColumnDefinition Width="{StaticResource AppsMemoryColumn}" />
+                            <ColumnDefinition Width="{StaticResource AppsPreferenceColumn}" />
+                        </Grid.ColumnDefinitions>
+                        <!-- 列名按钮有内边距：向外挪出同样的距离，文字与下面的内容对齐 -->
+                        <c:SortHeader x:Name="NameHeader" Grid.Column="2" HorizontalAlignment="Left" Margin="-6,0,0,0"
+                                      Text="{l:L Key=apps.col.name}" />
+                        <c:SortHeader x:Name="CpuHeader" Grid.Column="3" HorizontalAlignment="Right" Margin="0,0,-6,0"
+                                      Text="{l:L Key=apps.col.cpu}" ArrowLeading="True" />
+                        <c:SortHeader x:Name="MemoryHeader" Grid.Column="4" HorizontalAlignment="Right" Margin="0,0,-6,0"
+                                      Text="{l:L Key=apps.col.memory}" ArrowLeading="True" />
+                        <!-- 与下拉框里的文字对齐：额外间距 + 下拉框的内边距 -->
+                        <TextBlock Grid.Column="5" Text="{l:L Key=apps.col.preference}" Style="{StaticResource ColumnHeaderTextStyle}"
+                                   VerticalAlignment="Center" Margin="40,0,0,0" />
+                    </Grid>
+                    <!-- 虚拟化：只创建滚动到可见范围附近的行；重新排序时行平滑移到新位置 -->
+                    <ItemsRepeater ItemsSource="{x:Bind Vm.Running}" ItemTemplate="{StaticResource AppTemplate}">
+                        <ItemsRepeater.Layout>
+                            <StackLayout Spacing="4" />
+                        </ItemsRepeater.Layout>
+                        <ItemsRepeater.ItemTransitionProvider>
+                            <t:ReorderTransitions />
+                        </ItemsRepeater.ItemTransitionProvider>
+                    </ItemsRepeater>
                 </StackPanel>
 
-                <StackPanel x:Name="ConfiguredSection" Visibility="Collapsed">
-                    <TextBlock Text="{l:L Key=apps.configured}" Style="{StaticResource SectionTextStyle}" />
-                    <ItemsControl ItemsSource="{x:Bind Vm.Configured}" ItemTemplate="{StaticResource AppRowTemplate}">
-                        <ItemsControl.ItemContainerTransitions>
-                            <TransitionCollection>
-                                <EntranceThemeTransition IsStaggeringEnabled="True" FromVerticalOffset="16" />
-                            </TransitionCollection>
-                        </ItemsControl.ItemContainerTransitions>
-                    </ItemsControl>
+                <StackPanel Visibility="{x:Bind Vm.HasSystem, Mode=OneWay}">
+                    <TextBlock Text="{l:L Key=apps.system}" Style="{StaticResource SectionTextStyle}" Margin="1,0,0,2" />
+                    <TextBlock Text="{l:L Key=apps.system.desc}" Style="{StaticResource CaptionSecondaryTextStyle}"
+                               TextWrapping="Wrap" Margin="1,0,0,8" />
+                    <!-- 虚拟化：只创建滚动到可见范围附近的行；重新排序时行平滑移到新位置 -->
+                    <ItemsRepeater ItemsSource="{x:Bind Vm.System}" ItemTemplate="{StaticResource AppTemplate}">
+                        <ItemsRepeater.Layout>
+                            <StackLayout Spacing="4" />
+                        </ItemsRepeater.Layout>
+                        <ItemsRepeater.ItemTransitionProvider>
+                            <t:ReorderTransitions />
+                        </ItemsRepeater.ItemTransitionProvider>
+                    </ItemsRepeater>
                 </StackPanel>
 
-                <TextBlock x:Name="EmptyText" Text="{l:L Key=apps.empty}"
+                <StackPanel Visibility="{x:Bind Vm.HasNotRunning, Mode=OneWay}">
+                    <TextBlock Text="{l:L Key=apps.not_running}" Style="{StaticResource SectionTextStyle}" Margin="1,0,0,2" />
+                    <TextBlock Text="{l:L Key=apps.not_running.desc}" Style="{StaticResource CaptionSecondaryTextStyle}"
+                               TextWrapping="Wrap" Margin="1,0,0,8" />
+                    <!-- 虚拟化：只创建滚动到可见范围附近的行；重新排序时行平滑移到新位置 -->
+                    <ItemsRepeater ItemsSource="{x:Bind Vm.NotRunning}" ItemTemplate="{StaticResource AppTemplate}">
+                        <ItemsRepeater.Layout>
+                            <StackLayout Spacing="4" />
+                        </ItemsRepeater.Layout>
+                        <ItemsRepeater.ItemTransitionProvider>
+                            <t:ReorderTransitions />
+                        </ItemsRepeater.ItemTransitionProvider>
+                    </ItemsRepeater>
+                </StackPanel>
+
+                <TextBlock Text="{l:L Key=apps.empty}" Visibility="{x:Bind Vm.IsEmpty, Mode=OneWay}"
                            Style="{StaticResource BodyTextStyle}"
-                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                           Visibility="Collapsed" />
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
             </StackPanel>
         </ScrollViewer>
     </Grid>

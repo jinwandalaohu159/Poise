@@ -28,4 +28,8 @@ foreach ($exe in 'poise-service.exe', 'poise-agent.exe') {
 }
 Remove-Item $staging -Recurse -Force
 
+# 版本号只在一处维护（服务的 Cargo 工作区）；安装时写进"设置 → 应用"。
+$version = (Select-String -Path $cargo -Pattern '^version\s*=\s*"([^"]+)"').Matches[0].Groups[1].Value
+Set-Content -Path (Join-Path $dist 'version.txt') -Value $version -Encoding ascii
+
 Write-Host "完成：$dist"

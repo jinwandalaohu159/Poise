@@ -1,0 +1,48 @@
+<UserControl
+    x:Class="Poise.App.UI.Controls.LineChart"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <Grid ColumnSpacing="8" RowSpacing="6">
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="Auto" />
+            <ColumnDefinition Width="*" />
+        </Grid.ColumnDefinitions>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <!-- 纵轴刻度：100 / 50 / 0 -->
+        <Grid>
+            <TextBlock Text="100" VerticalAlignment="Top" Margin="0,-7,0,0" Style="{StaticResource AxisTextStyle}" />
+            <TextBlock Text="50" VerticalAlignment="Center" Style="{StaticResource AxisTextStyle}" />
+            <TextBlock Text="0" VerticalAlignment="Bottom" Margin="0,0,0,-7" Style="{StaticResource AxisTextStyle}" />
+        </Grid>
+
+        <!-- 取色用（不显示）：ThemeResource 跟随控件自身的深浅色 -->
+        <Border x:Name="GridBrush" Visibility="Collapsed" Background="{ThemeResource DividerStrokeColorDefaultBrush}" />
+
+        <!-- 网格线固定不动；曲线层随时间匀速左移，超出绘图区的部分裁掉 -->
+        <Grid x:Name="PlotArea" Grid.Column="1" SizeChanged="OnPlotSizeChanged">
+            <Canvas x:Name="GridLayer" />
+            <!-- 平移（Slider，逐像素）与淡入（Plot，XAML 过渡）分开挂在两个元素上 -->
+            <Grid x:Name="Slider">
+                <Canvas x:Name="Plot">
+                    <!-- 高负载区间（性能核负载达到 80% 的时段） -->
+                    <Canvas x:Name="Bands" />
+                    <Polygon x:Name="LoadArea" Fill="{ThemeResource ChartPerformanceBrush}" Opacity="0.12" />
+                    <Polyline x:Name="MemoryLine" Stroke="{ThemeResource ChartMemoryBrush}" StrokeThickness="1.5" StrokeLineJoin="Round" />
+                    <Polyline x:Name="TempLine" Stroke="{ThemeResource ChartTemperatureBrush}" StrokeThickness="1.5" StrokeLineJoin="Round" />
+                    <Polyline x:Name="EfficiencyLine" Stroke="{ThemeResource ChartEfficiencyBrush}" StrokeThickness="1.5" StrokeLineJoin="Round" />
+                    <Polyline x:Name="LoadLine" Stroke="{ThemeResource ChartPerformanceBrush}" StrokeThickness="1.5" StrokeLineJoin="Round" />
+                </Canvas>
+            </Grid>
+        </Grid>
+
+        <Grid Grid.Row="1" Grid.Column="1">
+            <TextBlock x:Name="StartLabel" Style="{StaticResource AxisTextStyle}" HorizontalAlignment="Left" />
+            <TextBlock x:Name="EndLabel" Style="{StaticResource AxisTextStyle}" HorizontalAlignment="Right" />
+        </Grid>
+    </Grid>
+</UserControl>

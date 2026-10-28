@@ -1,7 +1,8 @@
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
-using Microsoft.UI.Xaml.Media.Animation;
 using Microsoft.UI.Xaml.Navigation;
+using Poise.Core;
+using Poise.Core.Ipc;
 using Poise.Core.Localization;
 using Poise.Core.Presentation;
 using Poise.App.UI.Theme;
@@ -12,16 +13,19 @@ namespace Poise.App.UI.Pages;
 /// <summary>主页：只负责把 <see cref="HomeViewModel"/> 的结果画出来，以及转发用户操作。</summary>
 public sealed partial class HomePage : Page
 {
-    private static readonly TimeSpan ResultAutoClose = TimeSpan.FromSeconds(8);
-
     private readonly HomeViewModel _vm = new(AppHost.Current);
-    private readonly DispatcherTimer _resultTimer = new() { Interval = ResultAutoClose };
+    private readonly NumberRoller _freeable;
+    private readonly NumberRoller _optimized;
     private bool _rendering;
-    private string? _shownTitle;
+    /// <summary>"游戏时使用"下拉框当前列出的选项对应的机型极限模式（变化时重建选项）。</summary>
+    private string? _gameOptionsVendor = "";
 
     public HomePage()
     {
         InitializeComponent();
+        _freeable = new NumberRoller(ShowFreeable, minStep: 1024 * 1024);
+        _optimized = new NumberRoller(v => OptimizedValue.Text = v.ToString("0"));
+
         CleanButton.Label = Loc.Get("home.clean");
         CleanButton.BusyLabel = Loc.Get("home.cleaning");
         CleanButton.Glyph = "\uE74D";
@@ -31,123 +35,122 @@ public sealed partial class HomePage : Page
         OptimizeButton.BusyLabel = Loc.Get("home.optimizing");
         OptimizeButton.Glyph = "\uE945";
         OptimizeButton.Action = () => RunAsync(_vm.OptimizeAsync);
+        MemoryBar.SetNeutral();
         Modes.ModeChosen += mode => _ = _vm.SetModeAsync(mode);
-        Motion.EnableTransitions(HeroText);
-        _resultTimer.Tick += (_, _) =>
-        {
-            _resultTimer.Stop();
-            ResultBar.IsOpen = false;
-        };
+        Fan.BoostChosen += percent => _ = _vm.SetFanBoostAsync(percent);
+        Trend.DetailsRequested += () => Open(typeof(DiagnosePage));
+
         _vm.Updated += Render;
-        _vm.OpenOptimizations += () => Frame.Navigate(typeof(OptimizePage), null, new DrillInNavigationTransitionInfo());
-        Render(_vm.Current);
+        _vm.OptimizeUpdated += RenderOptimize;
+        _vm.OpenOptimizations += () => Open(typeof(OptimizePage));
+        if (_vm.Ready)
+        {
+            Render(_vm.Current);
+        }
+        Loaded += async (_, _) => await _vm.LoadOptimizeSummaryAsync();
     }
 
     protected override void OnNavigatedFrom(NavigationEventArgs e)
     {
-        _resultTimer.Stop();
         _vm.Updated -= Render;
+        _vm.OptimizeUpdated -= RenderOptimize;
         _vm.Dispose();
     }
 
     private void Render(HomeView v)
     {
         _rendering = true;
-        Dot.Show(v.Level);
-        if (_shownTitle is null)
+        Metrics.Show(v);
+        ShowNotice(v);
+
+        Modes.Show(v.Selected, v.Effective, v.InUse, v.VendorMode);
+        ShowGameMode(v.GameMode, v.VendorMode);
+        Fan.Visibility = v.Fan is null ? Visibility.Collapsed : Visibility.Visible;
+        if (v.Fan is { } fan)
         {
-            StatusTitle.Text = v.Title;
+            Fan.Show(fan);
         }
-        else if (_shownTitle != v.Title)
-        {
-            // 状态词变化：上移淡出，新词从下方淡入。
-            _ = Motion.SwapAsync(HeroText, () => StatusTitle.Text = v.Title);
-        }
-        _shownTitle = v.Title;
-        StatusDescription.Text = v.Description;
-        ObserveBadge.Visibility = v.DryRun ? Visibility.Visible : Visibility.Collapsed;
-        SnoozeButton.Visibility = v.CanSnoozeRestart ? Visibility.Visible : Visibility.Collapsed;
-        AutoCleanDetail.Text = v.AutoCleanDetail;
-        CpuTile.Label = v.Cpu.Label;
-        CpuTile.Set(v.Cpu.Value, v.Cpu.Format, v.Cpu.Level, v.Cpu.Tooltip);
-        GpuTile.Label = v.Gpu.Label;
-        GpuTile.Set(v.Gpu.Value, v.Gpu.Format, v.Gpu.Level, v.Gpu.Tooltip);
-        MemoryTile.Label = v.Memory.Label;
-        MemoryTile.Set(v.Memory.Value, v.Memory.Format, v.Memory.Level, v.Memory.Tooltip);
-        Modes.Show(v.Selected, v.Effective);
-        AutoFullToggle.IsOn = v.AutoFullForGames;
-        AutoCleanToggle.IsOn = v.AutoClean;
-        Modes.IsEnabled = CleanButton.IsEnabled = OptimizeButton.IsEnabled = v.Connected;
+
+        _freeable.RollTo(v.Cleanup.FreeableBytes);
+        MemoryBar.Fraction = v.Cleanup.MemoryFraction;
+        MemoryBar.SecondaryFraction = v.Cleanup.FreeableFraction;
+        CleanupDetail.Text = v.Cleanup.Detail;
+
+        Modes.IsEnabled = GameModeBox.IsEnabled = Fan.IsEnabled = CleanButton.IsEnabled = OptimizeButton.IsEnabled = v.Connected;
         _rendering = false;
+    }
+
+    /// <summary>少见的提醒：需要重启（可稍后提醒）优先，其次是观察模式。都没有时收起。</summary>
+    private void ShowNotice(HomeView v)
+    {
+        if (v.CanSnoozeRestart)
+        {
+            NoticeBar.Severity = InfoBarSeverity.Warning;
+            NoticeBar.Title = Loc.Get("status.restart");
+            NoticeBar.Message = Loc.Get("status.restart.desc");
+        }
+        else if (v.DryRun)
+        {
+            NoticeBar.Severity = InfoBarSeverity.Informational;
+            NoticeBar.Title = Loc.Get("status.observe");
+            NoticeBar.Message = Loc.Get("status.observe.desc");
+        }
+        SnoozeButton.Visibility = v.CanSnoozeRestart ? Visibility.Visible : Visibility.Collapsed;
+        NoticeBar.IsOpen = v.CanSnoozeRestart || v.DryRun;
+    }
+
+    private void ShowGameMode(GameMode mode, string? vendor)
+    {
+        if (vendor != _gameOptionsVendor)
+        {
+            _gameOptionsVendor = vendor;
+            GameModeBox.ItemsSource = ModeText.GameOptions(vendor);
+        }
+        var options = (IReadOnlyList<GameModeOption>)GameModeBox.ItemsSource;
+        // 机型不支持极限模式时，服务按全力处理；下拉框也显示全力。
+        var shown = options.FirstOrDefault(o => o.Mode == mode) ?? options.First(o => o.Mode == GameMode.Full);
+        if (!ReferenceEquals(GameModeBox.SelectedItem, shown))
+        {
+            GameModeBox.SelectedItem = shown;
+        }
+    }
+
+    private void OnGameModeChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (!_rendering && GameModeBox.SelectedItem is GameModeOption option)
+        {
+            _ = _vm.SetGameModeAsync(option.Mode);
+        }
+    }
+
+    /// <summary>"1.1 GB" 拆成数字和单位分别显示。</summary>
+    private void ShowFreeable(double bytes)
+    {
+        var text = Format.Bytes((ulong)Math.Max(0, bytes));
+        var space = text.LastIndexOf(' ');
+        FreeableValue.Text = text[..space];
+        FreeableUnit.Text = text[(space + 1)..];
+    }
+
+    private void RenderOptimize(OptimizeSummary s)
+    {
+        _optimized.RollTo(s.Optimized);
+        OptimizedUnit.Text = $"/ {s.Total}";
+        OptimizeBar.Fraction = s.Fraction;
+        OptimizeDetail.Text = s.Detail;
     }
 
     private void OnSnoozeRestart(object sender, RoutedEventArgs e) => _ = _vm.SnoozeRestartAsync();
 
-    private void OnAutoFullToggled(object sender, RoutedEventArgs e)
-    {
-        if (!_rendering)
-        {
-            _ = _vm.SetAutoFullForGamesAsync(AutoFullToggle.IsOn);
-        }
-    }
+    private async Task RunAsync(Func<Task<Feedback>> action) => Result.Show(await action());
 
-    private void OnAutoCleanToggled(object sender, RoutedEventArgs e)
-    {
-        if (!_rendering)
-        {
-            _ = _vm.SetAutoCleanAsync(AutoCleanToggle.IsOn);
-        }
-    }
+    private void Open(Type page) => Frame.DrillInto(page);
 
-    private async Task RunAsync(Func<Task<Feedback>> action)
-    {
-        ResultBar.IsOpen = false;
-        var feedback = await action();
-        ShowFeedback(feedback);
-    }
+    private void OnOpenCleanup(object sender, RoutedEventArgs e) => Open(typeof(CleanupPage));
 
-    private void ShowFeedback(Feedback f)
-    {
-        ResultBar.Severity = f.Kind switch
-        {
-            FeedbackKind.Success => InfoBarSeverity.Success,
-            FeedbackKind.Warning => InfoBarSeverity.Warning,
-            FeedbackKind.Error => InfoBarSeverity.Error,
-            _ => InfoBarSeverity.Informational,
-        };
-        ResultBar.Title = f.Message;
-        ResultBar.Message = string.Join(Environment.NewLine, f.Details);
-        ResultBar.ActionButton = f is { ActionLabel: { } label, Action: { } act }
-            ? new HyperlinkButton { Content = label, Command = new CommunityToolkit.Mvvm.Input.RelayCommand(act) }
-            : null;
-        ResultBar.IsOpen = true;
-        _resultTimer.Stop();
-        _resultTimer.Start();
-    }
+    private void OnOpenOptimize(object sender, RoutedEventArgs e) => Open(typeof(OptimizePage));
 
-    private void OnOpenApps(object sender, RoutedEventArgs e) =>
-        Frame.Navigate(typeof(AppsPage), null, new DrillInNavigationTransitionInfo());
+    private void OnOpenApps(object sender, RoutedEventArgs e) => Open(typeof(AppsPage));
 
-    private void OnOpenOptimize(object sender, RoutedEventArgs e) =>
-        Frame.Navigate(typeof(OptimizePage), null, new DrillInNavigationTransitionInfo());
-
-    private async void OnDiagnoseOpening(object? sender, object e)
-    {
-        DiagnoseProgress.IsActive = true;
-        DiagnoseProgress.Visibility = Visibility.Visible;
-        DiagnoseConclusion.Text = "";
-        DiagnoseDetails.Visibility = Visibility.Collapsed;
-        var view = await _vm.DiagnoseAsync();
-        DiagnoseProgress.IsActive = false;
-        DiagnoseProgress.Visibility = Visibility.Collapsed;
-        if (view is null)
-        {
-            DiagnoseConclusion.Text = Loc.Get("status.disconnected.desc");
-            return;
-        }
-        DiagnoseConclusion.Text = view.Conclusion;
-        DiagnoseCpu.Text = string.Join(Environment.NewLine, view.TopCpu);
-        DiagnoseMemory.Text = string.Join(Environment.NewLine, view.TopMemory);
-        DiagnoseDetails.Visibility = Visibility.Visible;
-    }
+    private void OnOpenDiagnose(object sender, RoutedEventArgs e) => Open(typeof(DiagnosePage));
 }

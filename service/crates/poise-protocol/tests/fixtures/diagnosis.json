@@ -2,14 +2,17 @@
   "cause": {
     "kind": "background_cpu",
     "name": "OneDrive",
-    "core_pct": 85.0
+    "path": "c:\\program files\\microsoft onedrive\\onedrive.exe",
+    "share_pct": 35.0
   },
-  "cpu_pct": 40.0,
+  "cpu_pct": 92.0,
   "mem_used_pct": 70.0,
+  "cpu_temp": 82.0,
+  "throttling": false,
   "top_cpu": [
     [
       "OneDrive",
-      12.0
+      35.0
     ],
     [
       "Chrome",
@@ -21,5 +24,6 @@
       "Chrome",
       3221225472
     ]
-  ]
+  ],
+  "smart_schedule": true
 }

@@ -1,0 +1,21 @@
+{
+  "window_secs": 300,
+  "points": [
+    {
+      "secs_ago": 4.5,
+      "cpu_pct": 40.0,
+      "performance_pct": 64.0,
+      "efficiency_pct": 18.5,
+      "mem_pct": 69.0,
+      "cpu_temp": 75.0
+    },
+    {
+      "secs_ago": 2.0,
+      "cpu_pct": 92.0,
+      "performance_pct": null,
+      "efficiency_pct": null,
+      "mem_pct": 70.0,
+      "cpu_temp": null
+    }
+  ]
+}

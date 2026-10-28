@@ -21,6 +21,7 @@ public sealed class AppHost : IDisposable
         Api = new PoiseApi(Client);
         Status = new StatusMonitor(Api);
         Presence = new UiPresence(Status, Api, dispatcher);
+        Trend = new TrendFeed(Api, Presence, dispatcher);
     }
 
     public static AppHost Current { get; private set; } = null!;
@@ -39,6 +40,9 @@ public sealed class AppHost : IDisposable
 
     public UiPresence Presence { get; }
 
+    /// <summary>走势图的数据（主页与卡顿诊断共用）。</summary>
+    public TrendFeed Trend { get; }
+
     /// <summary>在界面线程上调用。</summary>
     public static AppHost Start(DispatcherQueue dispatcher) => Current = new AppHost(dispatcher);
 
@@ -51,6 +55,7 @@ public sealed class AppHost : IDisposable
 
     public void Dispose()
     {
+        Trend.Dispose();
         Presence.Dispose();
         Status.Dispose();
         Client.Dispose();

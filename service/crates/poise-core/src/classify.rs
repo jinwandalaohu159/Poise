@@ -1,6 +1,7 @@
-//! 进程分类：按行为和系统属性判断一个进程"是什么"，不维护程序名单。
+//! 进程分类：按行为和系统属性判断一个进程"是什么"，以及调度可以对它做什么。
 //!
-//! 唯一的名单是安全用途的：反作弊与虚拟机进程，用来确保它们永远不被触碰。
+//! 角色只靠系统属性判断；用到的名单（反作弊、虚拟机、不参与调度、后台杂活、游戏目录）都在
+//! [`crate::known`]，只用于安全与识别。
 
 use std::collections::{HashMap, HashSet};
 
@@ -34,6 +35,17 @@ pub enum Role {
     SystemOther,
 }
 
+/// 调度可以对这个进程做什么。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScheduleScope {
+    /// 不调整：受保护进程、系统组件、输入/显示/声音/安全相关的程序，以及其他服务。
+    Excluded,
+    /// 用户程序：按类别调整核心、优先级和节能。
+    App,
+    /// 白名单里的后台杂活（索引、更新、遥测评估）：只挪到小核并开启节能，不改优先级。
+    Chore,
+}
+
 /// 分类结果：角色加上与用户感知相关的标记。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Classification {
@@ -54,6 +66,7 @@ pub struct Classification {
     pub anti_cheat_present: bool,
     /// 可以安全重启的服务：只承载一个服务、接受停止、没有正在运行的依赖者。
     pub restartable_service: Option<String>,
+    pub schedule: ScheduleScope,
 }
 
 impl Classification {
@@ -69,9 +82,14 @@ impl Classification {
         )
     }
 
-    /// 是否是调度可以调整的用户程序。
+    /// 是否是调度可以按类别调整的用户程序。
     pub fn is_schedulable(&self) -> bool {
-        self.role == Role::UserApp
+        self.schedule == ScheduleScope::App
+    }
+
+    /// 是否是白名单里的后台杂活。
+    pub fn is_chore(&self) -> bool {
+        self.schedule == ScheduleScope::Chore
     }
 }
 
@@ -112,17 +130,13 @@ impl Classifier {
 
     pub fn classify_all(&self, input: &ClassifyInput) -> HashMap<Pid, Classification> {
         let snap = input.snapshot;
-        let by_pid: HashMap<Pid, &ProcessSample> = snap
-            .processes
-            .iter()
-            .map(|p| (p.facts.key.pid, p))
-            .collect();
+        let by_pid = snap.by_pid();
         let anti_cheat_present = detect_anti_cheat(snap);
         let visible: HashSet<Pid> = input.session.visible_window_pids.iter().copied().collect();
         let audio: HashSet<Pid> = input.session.audio_pids.iter().copied().collect();
         let roots: HashMap<Pid, Pid> = by_pid
             .keys()
-            .map(|&pid| (pid, root_of(pid, &by_pid, input.session)))
+            .map(|&pid| (pid, root_of(pid, &by_pid, input.session, &visible)))
             .collect();
         let foreground_root = input
             .session
@@ -149,6 +163,7 @@ impl Classifier {
                             && input.session.fullscreen
                             && known::looks_like_game_path(p.facts.image_path.as_deref())));
                 let c = Classification {
+                    schedule: schedule_scope(p, &role),
                     root_pid,
                     in_foreground_tree,
                     has_visible_window,
@@ -206,16 +221,16 @@ fn role_of(
     if known::is_vm_process(&f.name) {
         return Role::VirtualMachine;
     }
-    if f.name == "dwm.exe" && f.session_id != 0 && f.is_in_windows_dir() {
+    if f.name == "dwm.exe" && f.session_id != 0 && f.in_windows_dir {
         return Role::Compositor;
     }
     if !f.services.is_empty() {
         return Role::ServiceHost;
     }
     if f.session_id == 0
-        && f.is_in_windows_dir()
+        && f.in_windows_dir
         && let Some(parent) = f.parent_pid.and_then(|pp| by_pid.get(&pp))
-        && is_parent_of(parent, p)
+        && parent.is_parent_of(p)
         && let [only] = parent.facts.services.as_slice()
     {
         return Role::ServiceChild {
@@ -244,6 +259,34 @@ fn preference_of(
     }
 }
 
+/// Windows 目录下的程序（桌面外壳、输入法、系统界面）与名单里的程序不参与调度；
+/// 会话 0 里只有白名单里的后台杂活（按程序名，或只承载一个白名单服务的服务进程）可以让到小核。
+fn schedule_scope(p: &ProcessSample, role: &Role) -> ScheduleScope {
+    let name = p.facts.name.as_str();
+    match role {
+        Role::UserApp
+            if !p.facts.in_windows_dir
+                && !known::is_never_scheduled(name)
+                && !p
+                    .facts
+                    .image_path
+                    .as_deref()
+                    .is_some_and(known::is_never_scheduled_path) =>
+        {
+            ScheduleScope::App
+        }
+        Role::ServiceHost | Role::ServiceChild { .. } | Role::SystemOther
+            if known::is_background_chore(name) =>
+        {
+            ScheduleScope::Chore
+        }
+        Role::ServiceHost if matches!(p.facts.services.as_slice(), [only] if known::is_background_chore_service(&only.name)) => {
+            ScheduleScope::Chore
+        }
+        _ => ScheduleScope::Excluded,
+    }
+}
+
 fn restartable_service(
     p: &ProcessSample,
     role: &Role,
@@ -260,13 +303,40 @@ fn restartable_service(
     }
 }
 
-/// 父进程必须比子进程更早创建，否则说明 PID 已被复用。
-fn is_parent_of(parent: &ProcessSample, child: &ProcessSample) -> bool {
-    parent.facts.key.created <= child.facts.key.created
+/// 子进程是不是一个独立的程序，而不是父程序的一部分：
+/// - 输入法、驱动助手等不参与调度的程序：它们常被正在输入的程序拉起，但不属于那个程序；
+/// - 自己有窗口、并且装在父程序目录之外的程序（例如从聊天软件里点链接打开的浏览器）；
+///   装在游戏目录里的程序也算（从启动器里打开的游戏）。
+///
+/// 同一个程序的界面进程（例如 Steam 的 steamwebhelper）装在同一目录下，仍归到主程序。
+fn is_independent(p: &ProcessSample, parent: &ProcessSample, visible: &HashSet<Pid>) -> bool {
+    let path = p.facts.image_path.as_deref();
+    if known::is_never_scheduled(&p.facts.name) || path.is_some_and(known::is_never_scheduled_path)
+    {
+        return true;
+    }
+    if !visible.contains(&p.facts.key.pid) || p.facts.name == parent.facts.name {
+        return false;
+    }
+    let parent_dir = parent
+        .facts
+        .image_path
+        .as_deref()
+        .and_then(|p| p.rfind('\\').map(|i| &p[..=i]));
+    let inside_parent = path
+        .zip(parent_dir)
+        .is_some_and(|(p, dir)| p.starts_with(dir));
+    !inside_parent || known::looks_like_game_path(path)
 }
 
-/// 沿父进程向上找到进程树的根：遇到桌面外壳、会话 0、跨会话或 PID 复用时停止。
-fn root_of(pid: Pid, by_pid: &HashMap<Pid, &ProcessSample>, session: &SessionState) -> Pid {
+/// 沿父进程向上找到进程树的根：遇到桌面外壳、会话 0、跨会话、PID 复用，
+/// 或者自己就是一个独立程序（见 [`is_independent`]）时停止。
+fn root_of(
+    pid: Pid,
+    by_pid: &HashMap<Pid, &ProcessSample>,
+    session: &SessionState,
+    visible: &HashSet<Pid>,
+) -> Pid {
     let mut current = pid;
     for _ in 0..32 {
         let Some(proc_) = by_pid.get(&current) else {
@@ -281,7 +351,8 @@ fn root_of(pid: Pid, by_pid: &HashMap<Pid, &ProcessSample>, session: &SessionSta
         let stop = Some(parent_pid) == session.shell_pid
             || parent.facts.session_id == 0
             || parent.facts.session_id != proc_.facts.session_id
-            || !is_parent_of(parent, proc_);
+            || !parent.is_parent_of(proc_)
+            || is_independent(proc_, parent, visible);
         if stop {
             break;
         }
@@ -314,6 +385,7 @@ pub(crate) mod tests {
 
     fn system(mut p: ProcessSample) -> ProcessSample {
         p.facts.image_path = Some(format!(r"c:\windows\system32\{}", p.facts.name));
+        p.facts.in_windows_dir = true;
         p
     }
 
@@ -375,7 +447,7 @@ pub(crate) mod tests {
         host.facts.services = vec![ServiceFacts {
             name: "Audiosrv".into(),
             accepts_stop: true,
-            running_dependents: 0,
+            ..Default::default()
         }];
         let child = system(proc_(601, Some(600), "audiodg.exe", 0));
         let c = World::new(vec![host, child]).classify();
@@ -422,6 +494,60 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn independent_programs_are_not_grouped_under_their_launcher() {
+        let at = |mut p: ProcessSample, path: &str| {
+            p.facts.image_path = Some(path.into());
+            p
+        };
+        let shell = proc_(100, None, "explorer.exe", 1);
+        let chat = at(
+            proc_(200, Some(100), "buzzdesk.exe", 1),
+            r"d:\buzzdesk\buzzdesk.exe",
+        );
+        // 聊天软件里点链接打开的浏览器（有窗口、装在别处）。
+        let browser = at(
+            proc_(201, Some(200), "chrome.exe", 1),
+            r"c:\chrome\chrome.exe",
+        );
+        let renderer = at(
+            proc_(202, Some(201), "chrome.exe", 1),
+            r"c:\chrome\chrome.exe",
+        );
+        // 聊天软件内嵌的网页视图（没有自己的顶层窗口）。
+        let webview = at(
+            proc_(203, Some(200), "msedgewebview2.exe", 1),
+            r"c:\webview\msedgewebview2.exe",
+        );
+        // 正在输入时被拉起的输入法。
+        let ime = at(
+            proc_(204, Some(203), "imewatchdog.exe", 1),
+            r"c:\ime\imewatchdog.exe",
+        );
+        let steam = at(proc_(300, Some(100), "steam.exe", 1), r"d:\steam\steam.exe");
+        // 同一程序的界面进程：有窗口，但装在主程序目录下。
+        let ui = at(
+            proc_(301, Some(300), "steamwebhelper.exe", 1),
+            r"d:\steam\bin\steamwebhelper.exe",
+        );
+        // 从启动器里打开的游戏：装在游戏目录里。
+        let game = at(
+            proc_(302, Some(300), "game.exe", 1),
+            r"d:\steam\steamapps\common\g\game.exe",
+        );
+        let mut w = World::new(vec![
+            shell, chat, browser, renderer, webview, ime, steam, ui, game,
+        ]);
+        w.session.visible_window_pids = vec![200, 201, 300, 301, 302];
+        let c = w.classify();
+        assert_eq!(c[&201].root_pid, 201);
+        assert_eq!(c[&202].root_pid, 201);
+        assert_eq!(c[&203].root_pid, 200);
+        assert_eq!(c[&204].root_pid, 204);
+        assert_eq!(c[&301].root_pid, 300);
+        assert_eq!(c[&302].root_pid, 302);
+    }
+
+    #[test]
     fn reused_pid_does_not_link_to_new_parent() {
         // 父 PID 500 被一个更晚创建的进程复用了。
         let mut child = proc_(400, Some(500), "app.exe", 1);
@@ -430,6 +556,48 @@ pub(crate) mod tests {
         impostor.facts.key.created = 20;
         let c = World::new(vec![child, impostor]).classify();
         assert_eq!(c[&400].root_pid, 400);
+    }
+
+    #[test]
+    fn schedule_scope_excludes_system_components_and_admits_chores() {
+        let app = proc_(900, None, "baidunetdisk.exe", 1);
+        let shell = system(proc_(901, None, "textinputhost.exe", 1));
+        let ime = proc_(902, None, "sogouimebroker.exe", 1);
+        let mut popup = proc_(905, None, "popblock.exe", 1);
+        popup.facts.image_path = Some(r"d:\program files\huorong\sysdiag\bin\popblock.exe".into());
+        let mut indexer = system(proc_(903, None, "searchindexer.exe", 0));
+        indexer.facts.services = vec![ServiceFacts {
+            name: "WSearch".into(),
+            ..Default::default()
+        }];
+        let svchost = system(proc_(904, None, "svchost.exe", 0));
+        let service = |pid, names: &[&str]| {
+            let mut p = system(proc_(pid, None, "svchost.exe", 0));
+            p.facts.services = names
+                .iter()
+                .map(|n| ServiceFacts {
+                    name: (*n).into(),
+                    ..Default::default()
+                })
+                .collect();
+            p
+        };
+        let update = service(906, &["wuauserv"]);
+        let shared = service(907, &["wuauserv", "Audiosrv"]);
+        let prefetch = service(908, &["SysMain"]);
+        let c = World::new(vec![
+            app, shell, ime, indexer, svchost, popup, update, shared, prefetch,
+        ])
+        .classify();
+        assert!(c[&906].is_chore());
+        assert_eq!(c[&907].schedule, ScheduleScope::Excluded);
+        assert_eq!(c[&908].schedule, ScheduleScope::Excluded);
+        assert_eq!(c[&905].schedule, ScheduleScope::Excluded);
+        assert!(c[&900].is_schedulable());
+        assert_eq!(c[&901].schedule, ScheduleScope::Excluded);
+        assert_eq!(c[&902].schedule, ScheduleScope::Excluded);
+        assert!(c[&903].is_chore());
+        assert_eq!(c[&904].schedule, ScheduleScope::Excluded);
     }
 
     #[test]

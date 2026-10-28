@@ -11,7 +11,7 @@
     {
       "kind": "heavy_app",
       "name": "微信",
-      "private_bytes": 2147483648
+      "memory_bytes": 2147483648
     },
     {
       "kind": "restart_recommended"

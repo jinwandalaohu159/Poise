@@ -1,7 +1,16 @@
-﻿# 卸载 Poise（需要管理员权限）。服务卸载时还原 Poise 做过的所有系统修改。
+﻿# 卸载 Poise。服务卸载时还原 Poise 做过的所有系统修改。
 # 全部还原成功后才删除修改记录；有修改没能还原时保留程序和记录，可以稍后再运行本脚本重试。
-#Requires -RunAsAdministrator
+# 可以从"设置 → 应用"启动（普通权限）：会先请求管理员权限再继续。
 $ErrorActionPreference = 'Stop'
+$admin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
+    [Security.Principal.WindowsBuiltInRole]::Administrator)
+if (-not $admin) {
+    $elevated = Start-Process powershell.exe -Verb RunAs -Wait -PassThru -ArgumentList @(
+        '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$PSCommandPath`"")
+    exit $elevated.ExitCode
+}
+# 本脚本可能就在要删除的目录里：先离开它。
+Set-Location $env:TEMP
 $target = Join-Path $env:ProgramFiles 'Poise'
 $service = Join-Path $target 'poise-service.exe'
 
@@ -19,6 +28,7 @@ Remove-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' 
 Remove-Item (Join-Path $env:LOCALAPPDATA 'Poise') -Recurse -Force -ErrorAction SilentlyContinue
 
 Remove-Item (Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs\Poise.lnk') -ErrorAction SilentlyContinue
+Remove-Item 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Poise' -Recurse -ErrorAction SilentlyContinue
 # 修改已全部还原，记录不再需要。
 Remove-Item (Join-Path $env:ProgramData 'Poise') -Recurse -Force -ErrorAction SilentlyContinue
 Remove-Item $target -Recurse -Force

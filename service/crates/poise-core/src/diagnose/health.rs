@@ -38,6 +38,19 @@ pub struct Health {
     pub freeable_bytes: u64,
 }
 
+/// 还没有评估结果时（刚启动）：按"运行顺畅"显示。
+impl Default for Health {
+    fn default() -> Self {
+        Self {
+            code: HealthCode::Smooth,
+            level: Level::Good,
+            game: None,
+            cleanable: 0,
+            freeable_bytes: 0,
+        }
+    }
+}
+
 pub struct HealthInput<'a> {
     pub system: &'a SystemMetrics,
     pub cpu_pct: f32,
@@ -83,8 +96,7 @@ pub fn assess(cfg: &DiagnoseConfig, input: &HealthInput) -> Health {
         level,
         game: input.game.map(|g| g.name.clone()),
         cleanable,
-        freeable_bytes: plan.expected_free()
-            + plan.deferred.iter().map(|s| s.private_bytes).sum::<u64>(),
+        freeable_bytes: plan.total_freeable(),
     }
 }
 
@@ -103,7 +115,7 @@ mod tests {
             disruptive: false,
             reason: CleanupReason::Oversized,
             name: "x".into(),
-            private_bytes: 100,
+            memory_bytes: 100,
         }
     }
 

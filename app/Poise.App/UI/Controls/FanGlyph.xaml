@@ -1,0 +1,29 @@
+<UserControl
+    x:Class="Poise.App.UI.Controls.FanGlyph"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    Width="20" Height="20"
+    Foreground="{ThemeResource TextFillColorPrimaryBrush}"
+    IsHitTestVisible="False">
+    <!-- 风扇图标：图标字体里没有风扇，按 Fluent 线条风格画三片叶片 + 中心圆，颜色跟随前景色 -->
+    <Viewbox>
+        <Canvas Width="20" Height="20">
+            <Path Stroke="{x:Bind Foreground, Mode=OneWay}" StrokeThickness="1.3" StrokeLineJoin="Round"
+                  Data="M10,10 C7.2,7.4 7.6,2.6 10.6,2.4 C13.6,2.2 13.2,6.8 10,10 Z" />
+            <Path Stroke="{x:Bind Foreground, Mode=OneWay}" StrokeThickness="1.3" StrokeLineJoin="Round"
+                  Data="M10,10 C7.2,7.4 7.6,2.6 10.6,2.4 C13.6,2.2 13.2,6.8 10,10 Z">
+                <Path.RenderTransform>
+                    <RotateTransform Angle="120" CenterX="10" CenterY="10" />
+                </Path.RenderTransform>
+            </Path>
+            <Path Stroke="{x:Bind Foreground, Mode=OneWay}" StrokeThickness="1.3" StrokeLineJoin="Round"
+                  Data="M10,10 C7.2,7.4 7.6,2.6 10.6,2.4 C13.6,2.2 13.2,6.8 10,10 Z">
+                <Path.RenderTransform>
+                    <RotateTransform Angle="240" CenterX="10" CenterY="10" />
+                </Path.RenderTransform>
+            </Path>
+            <Ellipse Canvas.Left="8.3" Canvas.Top="8.3" Width="3.4" Height="3.4"
+                     Stroke="{x:Bind Foreground, Mode=OneWay}" StrokeThickness="1.3" />
+        </Canvas>
+    </Viewbox>
+</UserControl>

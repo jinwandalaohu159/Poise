@@ -6,126 +6,142 @@
     xmlns:l="using:Poise.App.UI.Localization"
     Background="Transparent">
 
-    <ScrollViewer x:Name="Scroller" VerticalScrollBarVisibility="Auto">
-        <StackPanel x:Name="Body" MaxWidth="960" Padding="{StaticResource PagePadding}" Spacing="{StaticResource SectionGap}">
+    <Grid>
+        <ScrollViewer x:Name="Scroller" VerticalScrollBarVisibility="Auto">
+            <StackPanel x:Name="Body" MaxWidth="{StaticResource PageMaxWidth}" Padding="{StaticResource PagePadding}">
 
-            <!-- 状态区 -->
-            <Border Style="{StaticResource CardStyle}" Padding="24">
-                <Grid x:Name="Hero" ColumnSpacing="24">
+                <!-- 一眼：四个指标，等宽均分；异常时数值变色，悬停看说明 -->
+                <Border Style="{StaticResource LargeCardStyle}">
+                    <c:MetricStrip x:Name="Metrics" />
+                </Border>
+
+                <!-- 少见的提醒（需要重启、观察模式）：出现时才显示 -->
+                <InfoBar x:Name="NoticeBar" Margin="0,8,0,0" IsOpen="False" IsClosable="False">
+                    <InfoBar.ActionButton>
+                        <HyperlinkButton x:Name="SnoozeButton" Content="{l:L Key=status.restart.snooze}" Click="OnSnoozeRestart" />
+                    </InfoBar.ActionButton>
+                </InfoBar>
+
+                <!-- 最近 5 分钟走势（与卡顿诊断共用），"详情"进入卡顿诊断 -->
+                <c:TrendCard x:Name="Trend" Margin="0,8,0,0" ChartHeight="120" ShowDetails="True" />
+
+                <!-- 模式：卡片 + 游戏时使用 + 风扇 -->
+                <StackPanel Margin="0,28,0,0" Spacing="8">
+                    <TextBlock Text="{l:L Key=mode.title}" Style="{StaticResource SectionTextStyle}" Margin="1,0,0,0" />
+                    <c:ModeSelector x:Name="Modes" />
+
+                    <Grid Style="{StaticResource SettingsRowStyle}">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="20" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <FontIcon FontFamily="{StaticResource IconFont}" Glyph="&#xE7FC;" FontSize="20" />
+                        <TextBlock Grid.Column="1" Text="{l:L Key=home.game_mode}" VerticalAlignment="Center" />
+                        <ComboBox x:Name="GameModeBox" Grid.Column="2" MinWidth="160" VerticalAlignment="Center"
+                                  DisplayMemberPath="Title"
+                                  AutomationProperties.Name="{l:L Key=home.game_mode}"
+                                  SelectionChanged="OnGameModeChanged" />
+                    </Grid>
+
+                    <!-- 风扇（本机不支持风扇加速时隐藏） -->
+                    <c:FanRow x:Name="Fan" Visibility="Collapsed" />
+                </StackPanel>
+
+                <!-- 一扫：清理与系统优化两张模块卡 -->
+                <Grid x:Name="Modules" Margin="0,28,0,0" ColumnSpacing="8">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*" />
-                        <ColumnDefinition x:Name="MetricsColumn" Width="Auto" />
+                        <ColumnDefinition x:Name="SecondModuleColumn" Width="*" />
                     </Grid.ColumnDefinitions>
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto" />
                         <RowDefinition Height="Auto" />
                     </Grid.RowDefinitions>
 
-                    <StackPanel x:Name="HeroText" Spacing="4" VerticalAlignment="Center">
-                        <Grid ColumnSpacing="12">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="Auto" />
-                                <ColumnDefinition Width="*" />
-                            </Grid.ColumnDefinitions>
-                            <c:StatusDot x:Name="Dot" VerticalAlignment="Top" Margin="0,24,0,0" />
-                            <TextBlock x:Name="StatusTitle" Grid.Column="1" Style="{StaticResource HeroTextStyle}" TextWrapping="WrapWholeWords" />
-                        </Grid>
-                        <TextBlock x:Name="StatusDescription" Style="{StaticResource BodyTextStyle}" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-                        <HyperlinkButton x:Name="SnoozeButton" Margin="-12,0,0,0" Padding="12,4"
-                                         Content="{l:L Key=status.restart.snooze}"
-                                         Visibility="Collapsed" Click="OnSnoozeRestart" />
-                        <Border x:Name="ObserveBadge"
-                                Margin="0,8,0,0" Padding="8,2"
-                                HorizontalAlignment="Left"
-                                Background="{ThemeResource SystemFillColorAttentionBackgroundBrush}"
-                                CornerRadius="4"
-                                Visibility="Collapsed">
-                            <TextBlock Text="{l:L Key=status.observe}" FontSize="12" Foreground="{ThemeResource SystemFillColorAttentionBrush}">
-                                <ToolTipService.ToolTip>
-                                    <ToolTip Content="{l:L Key=status.observe.desc}" />
-                                </ToolTipService.ToolTip>
-                            </TextBlock>
-                        </Border>
-                    </StackPanel>
-
-                    <StackPanel x:Name="MetricsPanel" Grid.Column="1" Orientation="Horizontal" Spacing="28" VerticalAlignment="Center">
-                        <c:MetricTile x:Name="CpuTile" />
-                        <c:MetricTile x:Name="GpuTile" />
-                        <c:MetricTile x:Name="MemoryTile" />
-                    </StackPanel>
-                </Grid>
-            </Border>
-
-            <!-- 模式 -->
-            <StackPanel Spacing="{StaticResource CardGap}">
-                <TextBlock Text="{l:L Key=mode.title}" Style="{StaticResource SectionTextStyle}" />
-                <c:ModeSelector x:Name="Modes" />
-                <Grid Style="{StaticResource SettingsRowStyle}">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="Auto" />
-                    </Grid.ColumnDefinitions>
-                    <TextBlock Text="{l:L Key=home.auto_full}" VerticalAlignment="Center" />
-                    <ToggleSwitch x:Name="AutoFullToggle" Grid.Column="1" MinWidth="0"
-                                  OnContent="{l:L Key=common.on}" OffContent="{l:L Key=common.off}"
-                                  Toggled="OnAutoFullToggled" />
-                </Grid>
-            </StackPanel>
-
-            <!-- 操作 -->
-            <StackPanel Spacing="12">
-                <StackPanel Orientation="Horizontal" Spacing="8">
-                    <c:ActionButton x:Name="CleanButton" />
-                    <c:ActionButton x:Name="OptimizeButton" />
-                </StackPanel>
-                <InfoBar x:Name="ResultBar" IsOpen="False" IsClosable="True" />
-            </StackPanel>
-
-            <!-- 设置行 -->
-            <StackPanel Spacing="{StaticResource CardGap}">
-                <Grid Style="{StaticResource SettingsRowStyle}">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="Auto" />
-                        <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="Auto" />
-                    </Grid.ColumnDefinitions>
-                    <FontIcon FontFamily="{StaticResource IconFont}" Glyph="&#xE74D;" FontSize="20" />
-                    <StackPanel Grid.Column="1" VerticalAlignment="Center">
-                        <TextBlock Text="{l:L Key=home.auto_clean}" />
-                        <TextBlock x:Name="AutoCleanDetail" Style="{StaticResource CaptionSecondaryTextStyle}" />
-                    </StackPanel>
-                    <ToggleSwitch x:Name="AutoCleanToggle" Grid.Column="2" MinWidth="0"
-                                  OnContent="{l:L Key=common.on}" OffContent="{l:L Key=common.off}"
-                                  Toggled="OnAutoCleanToggled" />
-                </Grid>
-
-                <c:NavigationRow Glyph="&#xE71D;" Title="{l:L Key=home.apps}" Description="{l:L Key=home.apps.desc}" Click="OnOpenApps" />
-                <c:NavigationRow Glyph="&#xE81C;" Title="{l:L Key=home.optimize_page}" Description="{l:L Key=home.optimize_page.desc}" Click="OnOpenOptimize" />
-                <c:NavigationRow Glyph="&#xE9D9;" Title="{l:L Key=home.diagnose}" Description="{l:L Key=home.diagnose.desc}">
-                    <c:NavigationRow.Flyout>
-                        <Flyout x:Name="DiagnoseFlyout" Opening="OnDiagnoseOpening" Placement="Top">
-                            <StackPanel Width="320" Spacing="12">
-                                <TextBlock Text="{l:L Key=diagnose.title}" Style="{StaticResource SectionTextStyle}" Margin="0" />
-                                <ProgressRing x:Name="DiagnoseProgress" Width="24" Height="24" HorizontalAlignment="Left" />
-                                <TextBlock x:Name="DiagnoseConclusion" Style="{StaticResource BodyTextStyle}" />
-                                <StackPanel x:Name="DiagnoseDetails" Spacing="4" Visibility="Collapsed">
-                                    <TextBlock Text="{l:L Key=diagnose.top_cpu}" Style="{StaticResource CaptionSecondaryTextStyle}" />
-                                    <TextBlock x:Name="DiagnoseCpu" Style="{StaticResource BodyTextStyle}" FontSize="13" />
-                                    <TextBlock Text="{l:L Key=diagnose.top_memory}" Style="{StaticResource CaptionSecondaryTextStyle}" Margin="0,8,0,0" />
-                                    <TextBlock x:Name="DiagnoseMemory" Style="{StaticResource BodyTextStyle}" FontSize="13" />
-                                </StackPanel>
+                    <Border Style="{StaticResource LargeCardStyle}">
+                        <Grid RowSpacing="4">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
+                            <StackPanel Orientation="Horizontal" Spacing="12">
+                                <FontIcon FontFamily="{StaticResource IconFont}" Glyph="&#xE74D;" FontSize="18" />
+                                <TextBlock Text="{l:L Key=home.cleanup.title}" Style="{StaticResource CardTitleTextStyle}" VerticalAlignment="Center" />
                             </StackPanel>
-                        </Flyout>
-                    </c:NavigationRow.Flyout>
-                </c:NavigationRow>
+                            <TextBlock Grid.Row="1" Margin="0,12,0,0" Text="{l:L Key=home.cleanup.freeable}" Style="{StaticResource CaptionSecondaryTextStyle}" />
+                            <StackPanel Grid.Row="2" Orientation="Horizontal" Spacing="4">
+                                <TextBlock x:Name="FreeableValue" Style="{StaticResource KpiValueTextStyle}" Text="0" />
+                                <TextBlock x:Name="FreeableUnit" Style="{StaticResource KpiUnitTextStyle}" Text="MB" />
+                            </StackPanel>
+                            <c:MeterBar x:Name="MemoryBar" Grid.Row="3" Margin="0,4,0,4" />
+                            <TextBlock x:Name="CleanupDetail" Grid.Row="4" Style="{StaticResource CaptionSecondaryTextStyle}" />
+                            <Grid Grid.Row="5" Margin="0,12,0,0">
+                                <c:ActionButton x:Name="CleanButton" HorizontalAlignment="Left" />
+                                <HyperlinkButton Style="{StaticResource DetailsLinkStyle}" HorizontalAlignment="Right" VerticalAlignment="Center" Click="OnOpenCleanup">
+                                    <StackPanel Orientation="Horizontal" Spacing="4">
+                                        <TextBlock Text="{l:L Key=home.details}" />
+                                        <FontIcon FontFamily="{StaticResource IconFont}" Glyph="&#xE76C;" FontSize="10" />
+                                    </StackPanel>
+                                </HyperlinkButton>
+                            </Grid>
+                        </Grid>
+                    </Border>
+
+                    <Border x:Name="OptimizeCard" Grid.Column="1" Style="{StaticResource LargeCardStyle}">
+                        <Grid RowSpacing="4">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
+                            <StackPanel Orientation="Horizontal" Spacing="12">
+                                <FontIcon FontFamily="{StaticResource IconFont}" Glyph="&#xE945;" FontSize="18" />
+                                <TextBlock Text="{l:L Key=home.optimize.title}" Style="{StaticResource CardTitleTextStyle}" VerticalAlignment="Center" />
+                            </StackPanel>
+                            <TextBlock Grid.Row="1" Margin="0,12,0,0" Text="{l:L Key=home.optimize.done}" Style="{StaticResource CaptionSecondaryTextStyle}" />
+                            <StackPanel Grid.Row="2" Orientation="Horizontal" Spacing="4">
+                                <TextBlock x:Name="OptimizedValue" Style="{StaticResource KpiValueTextStyle}" Text="—" />
+                                <TextBlock x:Name="OptimizedUnit" Style="{StaticResource KpiUnitTextStyle}" />
+                            </StackPanel>
+                            <c:MeterBar x:Name="OptimizeBar" Grid.Row="3" Margin="0,4,0,4" />
+                            <TextBlock x:Name="OptimizeDetail" Grid.Row="4" Style="{StaticResource CaptionSecondaryTextStyle}"
+                                       Text="{l:L Key=home.optimize.loading}" />
+                            <Grid Grid.Row="5" Margin="0,12,0,0">
+                                <c:ActionButton x:Name="OptimizeButton" HorizontalAlignment="Left" />
+                                <HyperlinkButton Style="{StaticResource DetailsLinkStyle}" HorizontalAlignment="Right" VerticalAlignment="Center" Click="OnOpenOptimize">
+                                    <StackPanel Orientation="Horizontal" Spacing="4">
+                                        <TextBlock Text="{l:L Key=home.details}" />
+                                        <FontIcon FontFamily="{StaticResource IconFont}" Glyph="&#xE76C;" FontSize="10" />
+                                    </StackPanel>
+                                </HyperlinkButton>
+                            </Grid>
+                        </Grid>
+                    </Border>
+                </Grid>
+
+                <!-- 其他入口 -->
+                <StackPanel Margin="0,20,0,0" Spacing="{StaticResource CardGap}">
+                    <c:NavigationRow Glyph="&#xE71D;" Title="{l:L Key=home.apps}" Description="{l:L Key=home.apps.desc}" Click="OnOpenApps" />
+                    <c:NavigationRow Glyph="&#xE9D9;" Title="{l:L Key=home.diagnose}" Description="{l:L Key=home.diagnose.desc}" Click="OnOpenDiagnose" />
+                </StackPanel>
             </StackPanel>
-        </StackPanel>
+        </ScrollViewer>
+
+        <c:ResultToast x:Name="Result" />
 
         <VisualStateManager.VisualStateGroups>
             <VisualStateGroup>
                 <VisualState x:Name="Wide">
                     <VisualState.StateTriggers>
-                        <AdaptiveTrigger MinWindowWidth="720" />
+                        <AdaptiveTrigger MinWindowWidth="760" />
                     </VisualState.StateTriggers>
                 </VisualState>
                 <VisualState x:Name="Narrow">
@@ -133,13 +149,13 @@
                         <AdaptiveTrigger MinWindowWidth="0" />
                     </VisualState.StateTriggers>
                     <VisualState.Setters>
-                        <Setter Target="MetricsPanel.(Grid.Column)" Value="0" />
-                        <Setter Target="MetricsPanel.(Grid.Row)" Value="1" />
-                        <Setter Target="MetricsColumn.Width" Value="0" />
-                        <Setter Target="Hero.RowSpacing" Value="16" />
+                        <Setter Target="OptimizeCard.(Grid.Column)" Value="0" />
+                        <Setter Target="OptimizeCard.(Grid.Row)" Value="1" />
+                        <Setter Target="Modules.RowSpacing" Value="8" />
+                        <Setter Target="SecondModuleColumn.Width" Value="0" />
                     </VisualState.Setters>
                 </VisualState>
             </VisualStateGroup>
         </VisualStateManager.VisualStateGroups>
-    </ScrollViewer>
+    </Grid>
 </Page>

@@ -1,5 +1,7 @@
 //! 进程与系统的观测数据模型。由平台层采集，业务逻辑只读不写。
 
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
 
 pub type Pid = u32;
@@ -53,6 +55,8 @@ impl PriorityClass {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ServiceFacts {
     pub name: String,
+    /// 服务的显示名称（系统语言，例如"Windows 更新"）。
+    pub display_name: String,
     pub accepts_stop: bool,
     /// 依赖它且正在运行的服务数量。
     pub running_dependents: u32,
@@ -69,6 +73,8 @@ pub struct ProcessFacts {
     pub image_path: Option<String>,
     /// 程序的友好名称（文件描述），用于界面展示。
     pub display_name: Option<String>,
+    /// 程序装在 Windows 目录下（系统自带的组件）。由采样时按系统实际的 Windows 目录判断。
+    pub in_windows_dir: bool,
     pub session_id: u32,
     pub is_critical: bool,
     pub protection: Protection,
@@ -78,30 +84,28 @@ pub struct ProcessFacts {
 }
 
 impl ProcessFacts {
-    pub fn pid(&self) -> Pid {
-        self.key.pid
-    }
-
-    /// 用于界面展示的名称：优先友好名称，否则去掉 .exe 的文件名。
+    /// 用于界面展示的名称：只承载一个服务的进程用服务的显示名称（svchost 都叫"Windows 服务主进程"，
+    /// 用服务名才分得清），其次是程序的文件描述，最后是去掉 .exe 的文件名。
     pub fn friendly_name(&self) -> String {
+        if let [only] = self.services.as_slice()
+            && !only.display_name.trim().is_empty()
+        {
+            return only.display_name.trim().to_string();
+        }
         match &self.display_name {
             Some(n) if !n.trim().is_empty() => n.trim().to_string(),
             _ => self.name.trim_end_matches(".exe").to_string(),
         }
-    }
-
-    pub fn is_in_windows_dir(&self) -> bool {
-        self.image_path
-            .as_deref()
-            .is_some_and(|p| p.starts_with(r"c:\windows\"))
     }
 }
 
 /// 进程的动态指标（每次采样都会变化）。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ProcessMetrics {
+    /// 专用提交（含已换出到页面文件的部分）。变化最敏感，用于泄漏、增长与过大的判断。
     pub private_bytes: u64,
-    pub working_set: u64,
+    /// 专用工作集：实际占用的物理内存，与任务管理器"内存"一列一致。界面显示与"可释放"的估算用它。
+    pub memory_bytes: u64,
     pub handles: u32,
     pub threads: u32,
     /// 累计 CPU 时间（内核 + 用户，100ns）。
@@ -116,6 +120,14 @@ pub struct ProcessSample {
     pub metrics: ProcessMetrics,
 }
 
+impl ProcessSample {
+    /// `self` 是否真的是 `child` 的父进程：父进程必须比子进程更早创建，否则说明 PID 已被复用。
+    pub fn is_parent_of(&self, child: &ProcessSample) -> bool {
+        child.facts.parent_pid == Some(self.facts.key.pid)
+            && self.facts.key.created <= child.facts.key.created
+    }
+}
+
 /// 系统级指标。CPU 时间为累计值，由 [`crate::activity::ActivityTracker`] 换算成百分比。
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct SystemMetrics {
@@ -128,12 +140,22 @@ pub struct SystemMetrics {
     pub commit_limit: u64,
     pub kernel_nonpaged: u64,
     pub kernel_paged: u64,
+    /// 系统文件缓存（备用内存里的文件数据，可随时让出，不是浪费）。
+    pub system_cache: u64,
+    /// 整机句柄、线程、进程总数。
+    pub handle_count: u32,
+    pub thread_count: u32,
+    pub process_count: u32,
     pub cpu_mhz_current: u32,
     pub cpu_mhz_max: u32,
     pub uptime_ms: u64,
 }
 
 impl SystemMetrics {
+    pub fn mem_used_bytes(&self) -> u64 {
+        self.mem_total.saturating_sub(self.mem_available)
+    }
+
     pub fn mem_used_pct(&self) -> f32 {
         if self.mem_total == 0 {
             return 0.0;
@@ -161,6 +183,14 @@ pub struct Snapshot {
 impl Snapshot {
     pub fn find(&self, pid: Pid) -> Option<&ProcessSample> {
         self.processes.iter().find(|p| p.facts.key.pid == pid)
+    }
+
+    /// 按 PID 索引所有进程。
+    pub fn by_pid(&self) -> HashMap<Pid, &ProcessSample> {
+        self.processes
+            .iter()
+            .map(|p| (p.facts.key.pid, p))
+            .collect()
     }
 }
 

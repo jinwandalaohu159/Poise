@@ -25,8 +25,10 @@ pub enum DenyReason {
     Untouchable,
     /// 存在反作弊时，游戏只允许任务管理器等价的操作。
     AntiCheatGame,
-    /// 只调度用户会话里的普通程序。
+    /// 只调度用户会话里的普通程序和白名单里的后台杂活。
     NotUserApp,
+    /// 后台杂活只挪到小核、开启节能，不改优先级。
+    ChoreKeepsPriority,
     /// 正在被使用（前台、可见窗口、正在发声、用户要求保持快）。
     InUse,
     /// 最近几分钟在干活。
@@ -45,6 +47,7 @@ impl fmt::Display for DenyReason {
             Self::Untouchable => "受保护进程，永不触碰",
             Self::AntiCheatGame => "反作弊游戏只允许任务管理器等价的操作",
             Self::NotUserApp => "不是用户程序",
+            Self::ChoreKeepsPriority => "后台杂活不调整优先级",
             Self::InUse => "正在使用中",
             Self::RecentlyActive => "最近在干活",
             Self::NeedsManual => "会短暂打扰，只能手动触发",
@@ -79,20 +82,28 @@ impl SafetyGuard {
                     Err(DenyReason::NotUserApp)
                 }
             }
-            ActionKind::Demote => Self::check_demote(c),
+            ActionKind::Demote => Self::check_demote(action, c),
             ActionKind::Restart => Self::check_restart(action, c, trigger),
         }
     }
 
-    fn check_demote(c: &Classification) -> Result<(), DenyReason> {
+    /// 与调度策略（`schedule::policy`）的规则对应、互为把关：改其中一边时两边一起改。
+    fn check_demote(action: &Action, c: &Classification) -> Result<(), DenyReason> {
+        if c.is_chore() {
+            return if matches!(action, Action::SetPriority { .. }) {
+                Err(DenyReason::ChoreKeepsPriority)
+            } else {
+                Ok(())
+            };
+        }
         if !c.is_schedulable() {
             return Err(DenyReason::NotUserApp);
         }
-        let in_use = c.in_foreground_tree
-            || c.plays_audio
-            || c.is_game
-            || c.preference == AppPreference::AlwaysFast;
-        if in_use {
+        // 用户设为"低优先级"的程序在前台也留在小核；其他程序在前台不降级。
+        let foreground = c.in_foreground_tree && c.preference != AppPreference::Background;
+        // 正在发声的程序只允许挪到小核，不降优先级、不节能，避免爆音和通话卡顿。
+        let audio = c.plays_audio && !matches!(action, Action::SetCoreSet { .. });
+        if foreground || audio || c.is_game || c.preference == AppPreference::AlwaysFast {
             return Err(DenyReason::InUse);
         }
         Ok(())
@@ -175,10 +186,6 @@ impl GuardedExecutor {
         Self { inner, dry_run }
     }
 
-    pub fn is_dry_run(&self) -> bool {
-        self.dry_run
-    }
-
     pub fn execute(
         &self,
         action: &Action,
@@ -199,6 +206,7 @@ impl GuardedExecutor {
 mod tests {
     use super::*;
     use crate::action::{CoreSet, EcoQos};
+    use crate::classify::ScheduleScope;
 
     fn user_app() -> Classification {
         Classification {
@@ -213,6 +221,7 @@ mod tests {
             is_game: false,
             anti_cheat_present: false,
             restartable_service: None,
+            schedule: ScheduleScope::App,
         }
     }
 
@@ -303,10 +312,70 @@ mod tests {
         assert_eq!(check(DEMOTE, &user_app(), Trigger::Auto), Ok(()));
     }
 
+    const TO_SMALL_CORES: Action = Action::SetCoreSet {
+        pid: 1,
+        set: CoreSet::Efficiency,
+    };
+    const LOWER: Action = Action::SetPriority {
+        pid: 1,
+        class: PriorityClass::BelowNormal,
+    };
+
+    #[test]
+    fn audio_apps_may_only_move_to_small_cores() {
+        let c = Classification {
+            plays_audio: true,
+            ..user_app()
+        };
+        assert_eq!(check(TO_SMALL_CORES, &c, Trigger::Auto), Ok(()));
+        assert_eq!(check(LOWER, &c, Trigger::Auto), Err(DenyReason::InUse));
+    }
+
+    #[test]
+    fn low_priority_apps_stay_low_in_the_foreground() {
+        let c = Classification {
+            in_foreground_tree: true,
+            preference: AppPreference::Background,
+            ..user_app()
+        };
+        assert_eq!(check(TO_SMALL_CORES, &c, Trigger::Auto), Ok(()));
+        assert_eq!(check(LOWER, &c, Trigger::Auto), Ok(()));
+    }
+
+    #[test]
+    fn chores_move_to_small_cores_but_keep_priority() {
+        let c = Classification {
+            role: Role::ServiceHost,
+            schedule: ScheduleScope::Chore,
+            ..user_app()
+        };
+        assert_eq!(check(TO_SMALL_CORES, &c, Trigger::Auto), Ok(()));
+        assert_eq!(check(DEMOTE, &c, Trigger::Auto), Ok(()));
+        assert_eq!(
+            check(LOWER, &c, Trigger::Auto),
+            Err(DenyReason::ChoreKeepsPriority)
+        );
+        assert_eq!(check(BOOST, &c, Trigger::Auto), Err(DenyReason::NotUserApp));
+    }
+
+    #[test]
+    fn excluded_user_programs_are_not_scheduled() {
+        let c = Classification {
+            schedule: ScheduleScope::Excluded,
+            ..user_app()
+        };
+        assert_eq!(
+            check(DEMOTE, &c, Trigger::Auto),
+            Err(DenyReason::NotUserApp)
+        );
+        assert_eq!(check(BOOST, &c, Trigger::Auto), Err(DenyReason::NotUserApp));
+    }
+
     #[test]
     fn system_processes_are_not_scheduled() {
         let c = Classification {
             role: Role::SystemOther,
+            schedule: ScheduleScope::Excluded,
             ..user_app()
         };
         assert_eq!(

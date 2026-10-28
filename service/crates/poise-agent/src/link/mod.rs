@@ -15,10 +15,9 @@ use windows::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx};
 use crate::session;
 use pipe::{CallError, PipeClient};
 
-/// 会话心跳：前台变化时立即上报，平时每 3 秒一次。
+/// 会话心跳：前台变化时立即上报，平时每 3 秒一次。音频会话只在心跳里重新枚举
+/// （开始发声的后台程序最迟 3 秒内不再被节能和降优先级），前台变化时沿用上次的结果，上报更快。
 const HEARTBEAT: Duration = Duration::from_secs(3);
-/// 音频会话枚举相对较贵，只在每隔一段时间的心跳里做。
-const AUDIO_EVERY: Duration = Duration::from_secs(6);
 /// 托盘图标的状态刷新间隔。
 const STATUS_EVERY: Duration = Duration::from_secs(10);
 /// 服务没在运行时，重新连接的最小间隔。
@@ -35,55 +34,49 @@ pub enum Job {
     },
 }
 
-/// 最近一次从服务得到的状态（服务没连上时为 None）。
-#[derive(Clone, Default)]
-pub struct Snapshot {
-    pub status: Option<Status>,
-}
-
 pub struct Link {
     tx: Sender<Job>,
-    shared: Arc<Mutex<Snapshot>>,
+    /// 最近一次从服务得到的状态（服务没连上时为 None）。
+    latest: Arc<Mutex<Option<Status>>>,
 }
 
 impl Link {
     /// 启动后台线程。状态有变化时调用 `notify`（在后台线程上调用，应只投递消息）。
     pub fn start(notify: impl Fn() + Send + 'static) -> Self {
         let (tx, rx) = mpsc::channel();
-        let shared = Arc::new(Mutex::new(Snapshot::default()));
+        let latest = Arc::new(Mutex::new(None));
         let worker = Worker {
             rx,
-            shared: shared.clone(),
+            latest: latest.clone(),
             notify: Box::new(notify),
             client: None,
             last_connect: None,
             audio: Vec::new(),
-            audio_at: None,
         };
         std::thread::Builder::new()
             .name("service-link".into())
             .spawn(move || worker.run())
             .expect("创建后台线程失败");
-        Self { tx, shared }
+        Self { tx, latest }
     }
 
     pub fn send(&self, job: Job) {
         let _ = self.tx.send(job);
     }
 
-    pub fn snapshot(&self) -> Snapshot {
-        self.shared.lock().map(|s| s.clone()).unwrap_or_default()
+    /// 最近一次从服务得到的状态（服务没连上时为 None）。
+    pub fn status(&self) -> Option<Status> {
+        self.latest.lock().ok().and_then(|s| s.clone())
     }
 }
 
 struct Worker {
     rx: Receiver<Job>,
-    shared: Arc<Mutex<Snapshot>>,
+    latest: Arc<Mutex<Option<Status>>>,
     notify: Box<dyn Fn() + Send>,
     client: Option<PipeClient>,
     last_connect: Option<Instant>,
     audio: Vec<Pid>,
-    audio_at: Option<Instant>,
 }
 
 impl Worker {
@@ -140,19 +133,17 @@ impl Worker {
     }
 
     fn report(&mut self, heartbeat: bool) {
-        let refresh_audio = heartbeat && self.audio_at.is_none_or(|t| t.elapsed() >= AUDIO_EVERY);
-        let state = session::capture((!refresh_audio).then_some(self.audio.as_slice()));
-        if refresh_audio {
+        let state = session::capture((!heartbeat).then_some(self.audio.as_slice()));
+        if heartbeat {
             self.audio = state.audio_pids.clone();
-            self.audio_at = Some(Instant::now());
         }
         let _ = self.call::<serde_json::Value>(Request::ReportSession(state));
     }
 
     fn refresh_status(&mut self) {
         let status = self.call::<Status>(Request::GetStatus).ok();
-        if let Ok(mut s) = self.shared.lock() {
-            *s = Snapshot { status };
+        if let Ok(mut s) = self.latest.lock() {
+            *s = status;
         }
         (self.notify)();
     }

@@ -1,29 +1,37 @@
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Poise.App.UI.Controls;
 using Poise.Core.Localization;
+using Poise.Core.Presentation;
 using Poise.App.UI.ViewModels;
 
 namespace Poise.App.UI.Pages;
 
-/// <summary>优化记录页：固定项 + 逐个开关的项，以及"全部还原"。</summary>
+/// <summary>系统优化页：顶部进度与一键优化；下方是固定项与逐个开关的项。</summary>
 public sealed partial class OptimizePage : Page
 {
     public OptimizePage()
     {
         InitializeComponent();
         Header.Title = Loc.Get("optimize.title");
-        Vm.Error += message =>
-        {
-            ErrorBar.Title = message;
-            ErrorBar.IsOpen = true;
-        };
+        OptimizeButton.Label = Loc.Get("home.optimize");
+        OptimizeButton.BusyLabel = Loc.Get("home.optimizing");
+        OptimizeButton.Glyph = "\uE945";
+        OptimizeButton.IsAccent = true;
+        OptimizeButton.Action = async () => Result.Show(await Vm.OptimizeAllAsync());
+        Vm.SummaryChanged += ShowSummary;
+        Vm.Error += ErrorBar.ShowError;
         Loaded += async (_, _) => await Vm.LoadAsync();
     }
 
     public OptimizeViewModel Vm { get; } = new(AppHost.Current);
 
-    public static Visibility VisibleIf(string? text) =>
-        string.IsNullOrEmpty(text) ? Visibility.Collapsed : Visibility.Visible;
+    private void ShowSummary(OptimizeSummary s)
+    {
+        SummaryText.Text = s.Text;
+        SummaryBar.Fraction = s.Fraction;
+    }
+
 
     private async void OnRevertAll(object sender, RoutedEventArgs e)
     {

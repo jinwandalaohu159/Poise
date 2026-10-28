@@ -102,10 +102,13 @@ fn enumerate() -> windows::core::Result<HashMap<Pid, Vec<ServiceFacts>>> {
         }
         // SAFETY: 名称指针指向缓冲区内的 NUL 结尾字符串。
         let name = unsafe { e.lpServiceName.to_string() }.unwrap_or_default();
+        // SAFETY: 同上。
+        let display_name = unsafe { e.lpDisplayName.to_string() }.unwrap_or_default();
         map.entry(status.dwProcessId)
             .or_default()
             .push(ServiceFacts {
                 name,
+                display_name,
                 accepts_stop: status.dwControlsAccepted & SERVICE_ACCEPT_STOP != 0,
                 running_dependents: 0,
             });

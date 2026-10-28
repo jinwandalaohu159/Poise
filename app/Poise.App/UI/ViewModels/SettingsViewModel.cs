@@ -6,7 +6,7 @@ using Poise.Core.Settings;
 
 namespace Poise.App.UI.ViewModels;
 
-/// <summary>设置页：语言、外观、开机启动；这台电脑的硬件读数；服务信息。</summary>
+/// <summary>设置页：语言、外观、开机启动、托盘图标提醒；这台电脑的硬件读数；服务信息。</summary>
 public sealed partial class SettingsViewModel : ObservableObject, IDisposable
 {
     private readonly AppHost _host;
@@ -18,6 +18,7 @@ public sealed partial class SettingsViewModel : ObservableObject, IDisposable
         LanguageIndex = host.Settings.Language switch { Loc.Chinese => 1, Loc.English => 2, _ => 0 };
         ThemeIndex = (int)host.Theme.Choice;
         AutostartEnabled = Autostart.IsEnabled;
+        TrayAlertEnabled = host.Settings.TrayAlert;
         RefreshHardware();
         host.Status.Changed += RefreshHardware;
         _ready = true;
@@ -36,6 +37,10 @@ public sealed partial class SettingsViewModel : ObservableObject, IDisposable
 
     [ObservableProperty]
     public partial bool AutostartEnabled { get; set; }
+
+    /// <summary>托盘图标上的提醒圆点（托盘代理下次刷新图标时生效）。</summary>
+    [ObservableProperty]
+    public partial bool TrayAlertEnabled { get; set; }
 
     /// <summary>找不到托盘代理（开发时单独运行界面）时不能设置开机启动。</summary>
     public bool AutostartAvailable => Autostart.IsAvailable;
@@ -93,6 +98,15 @@ public sealed partial class SettingsViewModel : ObservableObject, IDisposable
         if (_ready)
         {
             Autostart.Set(value);
+        }
+    }
+
+    partial void OnTrayAlertEnabledChanged(bool value)
+    {
+        if (_ready)
+        {
+            _host.Settings.TrayAlert = value;
+            _host.Settings.Save();
         }
     }
 

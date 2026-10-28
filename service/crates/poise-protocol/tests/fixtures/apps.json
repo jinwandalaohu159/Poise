@@ -1,0 +1,166 @@
+[
+  {
+    "pid": 100,
+    "name": "netdisk",
+    "path": "c:/apps/netdisk.exe",
+    "preference": "background",
+    "running": true,
+    "is_game": false,
+    "schedule": {
+      "state": "scheduled",
+      "foreground": false,
+      "small_cores": true,
+      "priority": "lower"
+    },
+    "kind": "app",
+    "cpu_pct": 0.0,
+    "memory_bytes": 0,
+    "processes": []
+  },
+  {
+    "pid": 100,
+    "name": "browser",
+    "path": "c:/apps/browser.exe",
+    "preference": "auto",
+    "running": true,
+    "is_game": false,
+    "schedule": {
+      "state": "scheduled",
+      "foreground": true,
+      "small_cores": false,
+      "priority": "higher"
+    },
+    "kind": "app",
+    "cpu_pct": 6.5,
+    "memory_bytes": 3221225472,
+    "processes": [
+      {
+        "pid": 100,
+        "name": "browser.exe",
+        "cpu_pct": 4.0,
+        "memory_bytes": 2147483648,
+        "schedule": {
+          "state": "scheduled",
+          "foreground": true,
+          "small_cores": false,
+          "priority": "higher"
+        }
+      },
+      {
+        "pid": 101,
+        "name": "gpu-helper.exe",
+        "cpu_pct": 2.5,
+        "memory_bytes": 1073741824,
+        "schedule": {
+          "state": "self_managed",
+          "foreground": false,
+          "small_cores": null,
+          "priority": "normal"
+        }
+      }
+    ]
+  },
+  {
+    "pid": 100,
+    "name": "render",
+    "path": "c:/apps/render.exe",
+    "preference": "always_fast",
+    "running": true,
+    "is_game": false,
+    "schedule": {
+      "state": "scheduled",
+      "foreground": false,
+      "small_cores": null,
+      "priority": "high"
+    },
+    "kind": "app",
+    "cpu_pct": 0.0,
+    "memory_bytes": 0,
+    "processes": []
+  },
+  {
+    "pid": 100,
+    "name": "ime",
+    "path": "c:/apps/ime.exe",
+    "preference": "auto",
+    "running": true,
+    "is_game": false,
+    "schedule": {
+      "state": "excluded",
+      "foreground": false,
+      "small_cores": null,
+      "priority": "normal"
+    },
+    "kind": "excluded",
+    "cpu_pct": 0.0,
+    "memory_bytes": 0,
+    "processes": []
+  },
+  {
+    "pid": 100,
+    "name": "indexer",
+    "path": "c:/apps/indexer.exe",
+    "preference": "auto",
+    "running": true,
+    "is_game": false,
+    "schedule": {
+      "state": "scheduled",
+      "foreground": false,
+      "small_cores": true,
+      "priority": "normal"
+    },
+    "kind": "chore",
+    "cpu_pct": 0.0,
+    "memory_bytes": 0,
+    "processes": []
+  },
+  {
+    "pid": 100,
+    "name": "tool",
+    "path": "c:/apps/tool.exe",
+    "preference": "auto",
+    "running": true,
+    "is_game": false,
+    "schedule": {
+      "state": "self_managed",
+      "foreground": false,
+      "small_cores": null,
+      "priority": "normal"
+    },
+    "kind": "app",
+    "cpu_pct": 0.0,
+    "memory_bytes": 0,
+    "processes": []
+  },
+  {
+    "pid": 100,
+    "name": "editor",
+    "path": "c:/apps/editor.exe",
+    "preference": "auto",
+    "running": true,
+    "is_game": false,
+    "schedule": {
+      "state": "off",
+      "foreground": false,
+      "small_cores": null,
+      "priority": "normal"
+    },
+    "kind": "app",
+    "cpu_pct": 0.0,
+    "memory_bytes": 0,
+    "processes": []
+  },
+  {
+    "pid": null,
+    "name": "stopped",
+    "path": "c:/apps/stopped.exe",
+    "preference": "game",
+    "running": false,
+    "is_game": false,
+    "schedule": null,
+    "kind": "app",
+    "cpu_pct": 0.0,
+    "memory_bytes": 0,
+    "processes": []
+  }
+]

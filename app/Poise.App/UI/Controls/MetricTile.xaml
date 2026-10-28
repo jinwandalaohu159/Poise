@@ -1,11 +1,16 @@
 <UserControl
     x:Class="Poise.App.UI.Controls.MetricTile"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:c="using:Poise.App.UI.Controls">
 
-    <StackPanel x:Name="Root" MinWidth="64" Spacing="0">
+    <!-- 标签 / 数值 + 单位 / 细进度条，三行左对齐 -->
+    <StackPanel x:Name="Root" Spacing="2">
         <VisualStateManager.VisualStateGroups>
             <VisualStateGroup x:Name="LevelStates">
+                <VisualStateGroup.Transitions>
+                    <VisualTransition GeneratedDuration="0:0:0.25" />
+                </VisualStateGroup.Transitions>
                 <VisualState x:Name="Good" />
                 <VisualState x:Name="Notice">
                     <VisualState.Setters>
@@ -20,7 +25,11 @@
             </VisualStateGroup>
         </VisualStateManager.VisualStateGroups>
 
-        <TextBlock x:Name="ValueText" Style="{StaticResource MetricValueTextStyle}" Text="—" />
-        <TextBlock x:Name="LabelText" Style="{StaticResource CaptionSecondaryTextStyle}" />
+        <TextBlock x:Name="LabelText" Style="{StaticResource CaptionSecondaryTextStyle}" TextWrapping="NoWrap" />
+        <StackPanel Orientation="Horizontal" Spacing="2">
+            <TextBlock x:Name="ValueText" Style="{StaticResource MetricValueTextStyle}" Text="—" />
+            <TextBlock x:Name="UnitText" Style="{StaticResource MetricUnitTextStyle}" />
+        </StackPanel>
+        <c:MeterBar x:Name="Bar" Margin="0,4,0,0" />
     </StackPanel>
 </UserControl>

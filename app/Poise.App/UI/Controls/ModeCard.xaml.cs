@@ -10,22 +10,32 @@ using Windows.System;
 
 namespace Poise.App.UI.Controls;
 
-/// <summary>一张模式卡。颜色由视觉状态里的 ThemeResource 决定，深浅色切换时自动正确。</summary>
+/// <summary>
+/// 一张模式卡。选中框由 <see cref="ModeSelector"/> 画在卡片上方并滑动；卡片自身的颜色不随选中变化，
+/// 滑动途中不会出现文字与底色对比错乱。
+/// </summary>
 public sealed partial class ModeCard : UserControl
 {
+    private const double Hovered = 1;
+    private const double Pressed = 0.5;
+
     private bool _selected;
     private bool _compact;
 
     public ModeCard()
     {
         InitializeComponent();
-        Motion.AddPressFeedback(Card);
         Motion.EnableTransitions(HoverLayer, Motion.Instant);
         Motion.EnableTransitions(Badge, Motion.Fast);
-        PointerEntered += (_, _) => HoverLayer.Opacity = 1;
+        PointerEntered += (_, _) => HoverLayer.Opacity = Hovered;
         PointerExited += (_, _) => HoverLayer.Opacity = 0;
+        AddHandler(PointerPressedEvent, new PointerEventHandler((_, _) => HoverLayer.Opacity = Pressed), true);
+        AddHandler(PointerReleasedEvent, new PointerEventHandler((_, _) => HoverLayer.Opacity = Hovered), true);
+        PointerCaptureLost += (_, _) => HoverLayer.Opacity = 0;
         Tapped += (_, _) => Invoke();
         KeyDown += OnKeyDown;
+        // 卡片可能在加入界面之前就设好了尺寸；加入后再应用一次。
+        Loaded += (_, _) => ApplySize();
     }
 
     public event Action<ModeCard>? Invoked;
@@ -72,7 +82,6 @@ public sealed partial class ModeCard : UserControl
                 return;
             }
             _selected = value;
-            VisualStateManager.GoToState(this, value ? "Selected" : "Unselected", true);
             FrameworkElementAutomationPeer.FromElement(this)?.RaisePropertyChangedEvent(
                 SelectionItemPatternIdentifiers.IsSelectedProperty, !value, value);
         }
@@ -84,9 +93,11 @@ public sealed partial class ModeCard : UserControl
         set
         {
             _compact = value;
-            VisualStateManager.GoToState(this, value ? "Compact" : "Full", false);
+            ApplySize();
         }
     }
+
+    private void ApplySize() => VisualStateManager.GoToState(this, _compact ? "Compact" : "Full", false);
 
     /// <summary>"自动"标记：以 0.8 → 1 的缩放弹入。</summary>
     public bool ShowBadge

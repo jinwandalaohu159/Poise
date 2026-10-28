@@ -1,26 +1,19 @@
 <UserControl
     x:Class="Poise.App.UI.Controls.ModeSelector"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-    xmlns:c="using:Poise.App.UI.Controls">
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
 
-    <Grid x:Name="Root" ColumnSpacing="8" SizeChanged="OnSizeChanged">
-        <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="*" />
-            <ColumnDefinition Width="*" />
-            <ColumnDefinition Width="*" />
-        </Grid.ColumnDefinitions>
-
-        <!-- 选中的强调色底块：在三张卡片之间滑动 -->
-        <Border x:Name="Pill"
-                Grid.Column="0"
-                HorizontalAlignment="Left"
-                VerticalAlignment="Stretch"
-                Background="{ThemeResource AccentFillColorDefaultBrush}"
-                CornerRadius="{StaticResource CardCorner}" />
-
-        <c:ModeCard x:Name="QuietCard" Grid.Column="0" Glyph="&#xE708;" />
-        <c:ModeCard x:Name="BalancedCard" Grid.Column="1" Glyph="&#xE9E9;" />
-        <c:ModeCard x:Name="FullCard" Grid.Column="2" Glyph="&#xE945;" />
+    <!-- 模式卡片由代码按可用模式生成（四张或五张，等宽）；选中框放在选中卡片所在的列（随列宽自动对齐），画在卡片上方 -->
+    <Grid x:Name="Root" ColumnSpacing="8">
+        <Grid x:Name="Pill"
+              IsHitTestVisible="False"
+              Canvas.ZIndex="1">
+            <Border Background="{ThemeResource AccentFillColorDefaultBrush}"
+                    CornerRadius="{StaticResource CardCorner}"
+                    Opacity="0.08" />
+            <Border BorderBrush="{ThemeResource AccentFillColorDefaultBrush}"
+                    BorderThickness="2"
+                    CornerRadius="{StaticResource CardCorner}" />
+        </Grid>
     </Grid>
 </UserControl>

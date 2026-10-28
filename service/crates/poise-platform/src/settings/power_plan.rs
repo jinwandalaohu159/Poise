@@ -68,6 +68,17 @@ pub fn read(subgroup: &GUID, setting: &GUID, ac: bool) -> Result<u32, WIN32_ERRO
 
 /// 写入后重新激活当前计划，让修改立即生效。
 pub fn write(subgroup: &GUID, setting: &GUID, ac: bool, value: u32) -> Result<(), WIN32_ERROR> {
+    write_value(subgroup, setting, ac, value)?;
+    activate()
+}
+
+/// 只写入，不重新激活（连续写多项时最后调用一次 [`activate`]；重新激活一次要几百毫秒）。
+pub fn write_value(
+    subgroup: &GUID,
+    setting: &GUID,
+    ac: bool,
+    value: u32,
+) -> Result<(), WIN32_ERROR> {
     let scheme = active_scheme()?;
     // SAFETY: 同上。
     let code = unsafe {
@@ -79,7 +90,12 @@ pub fn write(subgroup: &GUID, setting: &GUID, ac: bool, value: u32) -> Result<()
     };
     WIN32_ERROR(code)
         .ok()
-        .map_err(|e| WIN32_ERROR::from_error(&e).unwrap_or_default())?;
+        .map_err(|e| WIN32_ERROR::from_error(&e).unwrap_or_default())
+}
+
+/// 重新激活当前计划，让已写入的修改生效。
+pub fn activate() -> Result<(), WIN32_ERROR> {
+    let scheme = active_scheme()?;
     // SAFETY: 重新激活同一个计划。
     unsafe { PowerSetActiveScheme(None, Some(&scheme)) }
         .ok()

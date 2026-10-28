@@ -134,7 +134,7 @@ fn to_raw(info: &SystemProcessInformation) -> RawProcess {
         base_priority: priority_from_base(info.base_priority),
         metrics: ProcessMetrics {
             private_bytes: info.private_page_count as u64,
-            working_set: info.working_set_size as u64,
+            memory_bytes: info.working_set_private_size.max(0) as u64,
             handles: info.handle_count,
             threads: info.number_of_threads,
             cpu_time: (info.user_time + info.kernel_time) as u64,

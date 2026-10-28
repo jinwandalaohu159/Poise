@@ -11,7 +11,7 @@ use poise_platform::win::registry;
 use poise_protocol::ErrorCode;
 
 use super::Engine;
-use super::changes::{GAME_PREFIX, HARDWARE_PREFIX};
+use super::changes::{self, GAME_PREFIX};
 use super::error::RequestError;
 
 const IFEO_KEY: &str = r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options";
@@ -50,7 +50,7 @@ impl Engine {
     }
 
     pub fn revert_optimization(&mut self, id: &str) -> Result<(), RequestError> {
-        if id.starts_with(GAME_PREFIX) || id.starts_with(HARDWARE_PREFIX) {
+        if !changes::is_optimization(id) {
             return Err(RequestError::new(
                 ErrorCode::NotFound,
                 "这项修改不属于系统优化",
