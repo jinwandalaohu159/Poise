@@ -6,8 +6,6 @@
 
 use poise_platform::win::wmi::{WmiError, WmiNamespace, WmiResult};
 
-use super::FanReading;
-
 const NAMESPACE: &str = r"root\WMI";
 const CLASS: &str = "AWCCWmiMethodFunction";
 const READ: &str = "Thermal_Information";
@@ -147,17 +145,13 @@ impl Awcc {
             .map(|t| t as f32)
     }
 
-    pub fn fans(&self) -> Vec<FanReading> {
-        self.layout
-            .fans
-            .iter()
-            .filter_map(|&fan| {
-                Some(FanReading {
-                    rpm: self.read(info::FAN_RPM, fan).ok()?,
-                    max_rpm: self.read(info::FAN_MAX_RPM, fan).ok()?,
-                })
-            })
-            .collect()
+    pub fn fan_rpm(&self, fan: u8) -> Option<u32> {
+        self.read(info::FAN_RPM, fan).ok()
+    }
+
+    /// 风扇的最高转速（不会变，读一次即可）。
+    pub fn fan_max_rpm(&self, fan: u8) -> Option<u32> {
+        self.read(info::FAN_MAX_RPM, fan).ok()
     }
 
     pub fn power_mode(&self) -> Option<u8> {

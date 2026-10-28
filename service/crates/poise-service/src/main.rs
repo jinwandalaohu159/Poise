@@ -9,6 +9,7 @@
 
 mod config;
 mod engine;
+mod gpu_feed;
 mod host;
 mod install;
 mod ipc_server;

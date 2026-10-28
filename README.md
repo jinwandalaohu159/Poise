@@ -1,6 +1,6 @@
 # Poise
 
-让正在操作的程序始终反应迅速的 Windows 11 性能工具：前台优先调度、一键清理、可还原的系统优化、按机型定制的硬件模式。需求见 [PRD.md](PRD.md)，界面规范见 [DESIGN.md](DESIGN.md)。
+让正在操作的程序始终反应迅速的 Windows 11 性能工具：后台让路的智能调度、一键清理、可还原的系统优化、按机型定制的硬件模式。
 
 ## 组成
 
@@ -47,7 +47,16 @@ dotnet test app\Poise.Core.Tests    # 界面逻辑与契约测试
 
 改了服务返回给界面的数据结构时，先运行 `$env:POISE_UPDATE_FIXTURES=1; cargo test -p poise-protocol --test contract` 重新生成契约样本，再运行界面测试确认界面能读取。
 
-日志：服务 `ProgramData\Poise\poise.log`（开发时 `%LOCALAPPDATA%\Poise\dev`），托盘代理 `%LOCALAPPDATA%\Poise\agent.log`，界面 `%LOCALAPPDATA%\Poise\app.log`。
+日志：服务 `ProgramData\Poise\poise.log`（开发时 `%LOCALAPPDATA%\Poise\dev`），托盘代理 `%LOCALAPPDATA%\Poise\agent.log`，界面 `%LOCALAPPDATA%\Poise\app.log`。服务的一轮采样超过 150 毫秒时，日志会写明最慢的是哪一步。
+
+帧时间测量（判断 Poise 对游戏帧数的影响，管理员 PowerShell，首次运行自动下载 PresentMon）：同一游戏、同一场景各录一次，对比 `%LOCALAPPDATA%\Poise\frametime\summary.txt` 里的 1% 低帧、帧时间标准差和卡顿次数。
+
+```powershell
+.\scripts\frametime.ps1 -Process "game.exe" -Label off   # 先在托盘里退出 Poise
+.\scripts\frametime.ps1 -Process "game.exe" -Label on    # 再打开 Poise
+```
+
+Poise 自身的原则：服务和托盘代理以低于正常的优先级、效率模式运行在能效核上；界面不显示（包括被全屏游戏挡住）时停止刷新并进入效率模式；玩游戏时尽量少调用机型接口（BIOS 的 WMI 方法，可能让所有核心短暂停顿）；慢的系统调用（硬件读数、显卡占用）都在独立线程里，不占用调度引擎。
 
 ## 构建与安装
 

@@ -1,3 +1,4 @@
+using Microsoft.UI.Dispatching;
 using Microsoft.UI.Input;
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
@@ -19,12 +20,19 @@ public sealed partial class MainWindow : Window
     private const int MinWidth = 640;
     private const int MinHeight = 560;
 
+    /// <summary>前台没有变化时，隔一会儿再看一次是否被全屏程序挡住（程序切到全屏不一定伴随前台变化）。</summary>
+    private static readonly TimeSpan CoverRecheck = TimeSpan.FromSeconds(5);
+
     private readonly AppHost _host;
+    private readonly IntPtr _hwnd;
+    private readonly ForegroundWatcher _foreground = new();
+    private readonly DispatcherQueueTimer _coverCheck;
 
     public MainWindow(AppHost host)
     {
         _host = host;
         InitializeComponent();
+        _hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
         Title = "Poise";
         SystemBackdrop = new MicaBackdrop();
         ExtendsContentIntoTitleBar = true;
@@ -44,14 +52,20 @@ public sealed partial class MainWindow : Window
         Root.SizeChanged += (_, _) => UpdatePassthrough();
         _host.Theme.Changed += OnThemeChanged;
         Loc.Changed += OnLanguageChanged;
-        Activated += (_, _) => SetVisible(!IsMinimized);
+        Activated += (_, _) => UpdateVisible();
         AppWindow.Changed += (_, args) =>
         {
             if (args.DidPresenterChange || args.DidSizeChange)
             {
-                SetVisible(!IsMinimized);
+                UpdateVisible();
             }
         };
+        _foreground.Changed += _ => UpdateVisible();
+        _foreground.Start();
+        _coverCheck = DispatcherQueue.CreateTimer();
+        _coverCheck.Interval = CoverRecheck;
+        _coverCheck.Tick += (_, _) => UpdateVisible();
+        _coverCheck.Start();
         Closed += OnClosed;
 
         ContentFrame.Navigate(typeof(HomePage), null, new SuppressNavigationTransitionInfo());
@@ -128,12 +142,17 @@ public sealed partial class MainWindow : Window
         }
     }
 
+    /// <summary>最小化或被前台的全屏程序挡住时按"不显示"处理：停止刷新和动画，不打扰游戏。</summary>
+    private void UpdateVisible() => SetVisible(!IsMinimized && !FullscreenCover.Covers(_hwnd));
+
     private void SetVisible(bool visible) => _host.Presence.SetMainVisible(visible);
 
     private void OnClosed(object sender, WindowEventArgs args)
     {
         _host.Theme.Changed -= OnThemeChanged;
         Loc.Changed -= OnLanguageChanged;
+        _coverCheck.Stop();
+        _foreground.Dispose();
         SetVisible(false);
         // 释放页面，让页面里的 ViewModel 取消订阅。
         ContentFrame.Content = null;

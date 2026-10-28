@@ -8,8 +8,9 @@ use poise_core::classify::{Classification, ClassifyInput};
 use poise_core::diagnose::{self, DiagnoseConfig, Health, HealthInput, Sample};
 use poise_core::model::{Millis, Pid, Snapshot};
 use poise_core::safety::Trigger;
-use poise_hardware::HardwareReading;
+use poise_hardware::{HardwareReading, SensorLevel};
 
+use super::phases::Phases;
 use super::schedule::ScheduleOutcome;
 use super::{Engine, View};
 
@@ -18,6 +19,7 @@ pub const TICK: Duration = Duration::from_secs(2);
 
 impl Engine {
     pub fn tick(&mut self) {
+        let mut phases = Phases::start();
         let now = self.now();
         let snapshot = match self.snapshotter.take(now) {
             Ok(s) => s,
@@ -26,18 +28,25 @@ impl Engine {
                 return;
             }
         };
+        phases.done("采集进程");
         self.observe(&snapshot, now);
+        phases.done("观察趋势");
         let active = self.ensure_presence(now);
+        phases.done("托盘代理状态");
         let classes = self.classify(&snapshot, now);
+        phases.done("分类");
         let outcome = self.schedule_if(active, &snapshot, &classes);
+        phases.done("调度");
         let reading = self.read_sensors(outcome.game.is_some(), now);
         let health = self.assess(&snapshot, &classes, &outcome, &reading, now);
         self.record_history(&snapshot, &reading, now);
+        phases.done("健康评估");
         let effective_mode = if active {
             self.apply_modes(outcome.effective_mode, now)
         } else {
             outcome.effective_mode
         };
+        phases.done("硬件模式");
         self.view = Some(View {
             snapshot,
             classes,
@@ -47,10 +56,13 @@ impl Engine {
             health,
         });
         self.remember_running_apps();
+        phases.done("记录运行的程序");
         if active {
             self.run_deferred_cleanup();
             self.auto_clean(now);
         }
+        phases.done("清理");
+        phases.finish();
     }
 
     /// 前台切换、用户改模式时立即重新调度并落到硬件，不等下一次采样。
@@ -90,16 +102,12 @@ impl Engine {
     }
 
     /// 前台全屏时测量它的显卡 3D 占用（识别游戏用）；不全屏时停止测量。
-    /// 立即重新调度时沿用上次的结果，不额外测量。
+    /// 测量在独立线程里进行，这里只取最近一次的结果；立即重新调度时沿用上次的结果。
     fn measure_foreground_gpu(&mut self, now: Millis) {
         let session = self.session.current(now);
-        self.foreground_gpu = match session.foreground_pid.filter(|_| session.fullscreen) {
-            Some(pid) => self.gpu.usage_3d(pid).map(|pct| (pid, pct)),
-            None => {
-                self.gpu.stop();
-                None
-            }
-        };
+        self.gpu
+            .measure(session.foreground_pid.filter(|_| session.fullscreen));
+        self.foreground_gpu = self.gpu.latest();
     }
 
     pub(super) fn classify(
@@ -121,11 +129,16 @@ impl Engine {
         })
     }
 
-    /// 取采集线程最近一次的读数（不等待）。界面显示着或在玩游戏时才读显卡和风扇
-    /// （在 Optimus 笔记本上读显卡会唤醒休眠中的独显）。
+    /// 取采集线程最近一次的读数（不等待），并告诉它需要的详细程度：界面显示着时全读；
+    /// 玩游戏时尽量少调用机型接口；其余时候不访问显卡（在 Optimus 笔记本上读显卡会唤醒休眠中的独显）。
     fn read_sensors(&mut self, gaming: bool, now: Millis) -> HardwareReading {
-        self.sensors
-            .set_detailed(gaming || self.session.ui_visible(now));
+        self.sensors.set_level(if self.session.ui_visible(now) {
+            SensorLevel::Full
+        } else if gaming {
+            SensorLevel::Gaming
+        } else {
+            SensorLevel::Basic
+        });
         self.sensors.latest()
     }
 

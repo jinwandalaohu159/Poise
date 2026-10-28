@@ -22,7 +22,7 @@ use poise_core::prefs::Mode;
 
 use memory::MemoryInfo;
 use profiles::MachineProfile;
-pub use sensors::{HardwareReading, Sensors};
+pub use sensors::{HardwareReading, SensorLevel, Sensors};
 
 /// 传感器读数是否是合理的摄氏温度（排除 0 和明显的错误值）。
 fn plausible_celsius(t: u64) -> bool {

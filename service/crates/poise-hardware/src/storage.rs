@@ -52,6 +52,11 @@ pub struct StorageMonitor {
 }
 
 impl StorageMonitor {
+    /// 上次的结果（不读取）。
+    pub fn latest(&self) -> &StorageReading {
+        &self.latest
+    }
+
     /// 到时间才重新读取，否则返回上次的结果。
     pub fn read(&mut self, now: Millis) -> &StorageReading {
         let due = self

@@ -4,11 +4,13 @@
 //! "均衡"不强加任何模式，而是回到 Poise 启动时 BIOS 所处的模式（用户在 AWCC 里的选择）。
 //! G 模式（机型极限模式）需要 BIOS 提供 G 模式开关；离开 G 模式时先关开关，再切到目标模式。
 
+use std::collections::HashMap;
+
 use poise_core::prefs::Mode;
 
 use super::awcc::{Awcc, G_MODE};
 use super::bios::BiosInfo;
-use super::{MachineProfile, MachineReading, MachineSensors};
+use super::{FanReading, MachineNeed, MachineProfile, MachineReading, MachineSensors};
 
 /// G15 5520 BIOS 列出的散热模式（实测：A0、A1、A3、A5）。
 const BALANCED: u8 = 0xA0;
@@ -164,30 +166,57 @@ impl MachineProfile for DellG15 {
                 None
             }
         });
-        Box::new(DellSensors { awcc })
+        Box::new(DellSensors {
+            awcc,
+            max_rpm: HashMap::new(),
+        })
     }
 }
 
 /// 戴尔的只读传感器：独立的 AWCC 连接，只读温度和风扇。
 struct DellSensors {
     awcc: Option<Awcc>,
+    /// 各风扇的最高转速：不会变，第一次读到后记住，之后不再调用。
+    max_rpm: HashMap<u8, u32>,
 }
 
 impl MachineSensors for DellSensors {
-    fn read(&mut self, include_fans: bool) -> MachineReading {
+    fn read(&mut self, need: MachineNeed) -> MachineReading {
         let Some(awcc) = &self.awcc else {
             return MachineReading::default();
         };
         // BIOS 报告的传感器顺序：CPU、显卡。
         let sensors = &awcc.layout().sensors;
+        let fans = if need.fans {
+            let max_rpm = &mut self.max_rpm;
+            awcc.layout()
+                .fans
+                .iter()
+                .filter_map(|&fan| {
+                    let max = match max_rpm.get(&fan) {
+                        Some(&m) => m,
+                        None => {
+                            let m = awcc.fan_max_rpm(fan)?;
+                            max_rpm.insert(fan, m);
+                            m
+                        }
+                    };
+                    Some(FanReading {
+                        rpm: awcc.fan_rpm(fan)?,
+                        max_rpm: max,
+                    })
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
         MachineReading {
             cpu_temp: sensors.first().and_then(|&s| awcc.temperature(s)),
-            gpu_temp: sensors.get(1).and_then(|&s| awcc.temperature(s)),
-            fans: if include_fans {
-                awcc.fans()
-            } else {
-                Vec::new()
-            },
+            gpu_temp: need
+                .gpu_temp
+                .then(|| sensors.get(1).and_then(|&s| awcc.temperature(s)))
+                .flatten(),
+            fans,
         }
     }
 }

@@ -82,7 +82,8 @@ public sealed partial class AppsViewModel(AppHost host) : ObservableObject
             _live.Tick += async (_, _) =>
             {
                 // 下拉框打开时不刷新：重新排序会移动甚至重建它所在的行。
-                if (!_holding)
+                // 主窗口最小化或被全屏程序挡住时也不刷新（见 UiPresence）。
+                if (!_holding && host.Presence.MainVisible)
                 {
                     await LoadAsync();
                 }

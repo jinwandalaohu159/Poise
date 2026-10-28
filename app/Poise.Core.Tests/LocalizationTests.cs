@@ -3,7 +3,7 @@ using Poise.Core.Localization;
 
 namespace Poise.Core.Tests;
 
-/// <summary>两种语言的文案表：键一致、占位符一致、符合文案规范（书面、中性，见 DESIGN.md）。</summary>
+/// <summary>两种语言的文案表：键一致、占位符一致、符合文案规范（书面、中性）。</summary>
 public sealed partial class LocalizationTests
 {
     private static readonly Dictionary<string, string> Zh = TestSupport.StringTable(Loc.Chinese);

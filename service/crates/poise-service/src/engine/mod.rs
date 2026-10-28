@@ -23,6 +23,7 @@ mod game_prefs;
 mod growth;
 mod mode;
 mod optimizer;
+mod phases;
 mod presence;
 mod requests;
 mod schedule;
@@ -52,7 +53,6 @@ use poise_platform::act::executor::WinExecutor;
 use poise_platform::act::launcher::{DirectLauncher, Launcher, UserSessionLauncher};
 use poise_platform::act::self_tune;
 use poise_platform::observe::core_load::CoreLoadMeter;
-use poise_platform::observe::gpu::GpuMeter;
 use poise_platform::observe::process::snapshot::Snapshotter;
 use poise_platform::observe::system;
 use poise_platform::observe::topology::CpuTopology;
@@ -62,6 +62,7 @@ use poise_platform::settings::user::UserContext;
 use poise_protocol::LastCleanup;
 
 use crate::config::{RunConfig, RunMode};
+use crate::gpu_feed::GpuFeed;
 use crate::sensor_feed::SensorFeed;
 
 use changes::Changes;
@@ -94,8 +95,8 @@ pub struct Engine {
     snapshotter: Snapshotter,
     /// 托盘代理不在（Poise 已退出）：不调度、不切换模式，影响已全部撤销。
     paused: bool,
-    /// 前台全屏程序的显卡占用（识别游戏用）。
-    gpu: GpuMeter,
+    /// 前台全屏程序的显卡占用（识别游戏用），在独立线程里测量。
+    gpu: GpuFeed,
     /// 最近一次测到的前台全屏程序及其 3D 占用。
     foreground_gpu: Option<(Pid, f32)>,
     activity: ActivityTracker,
@@ -175,7 +176,7 @@ impl Engine {
             started: Instant::now(),
             snapshotter: Snapshotter::default(),
             paused: true,
-            gpu: GpuMeter::default(),
+            gpu: GpuFeed::start(TICK),
             foreground_gpu: None,
             activity: ActivityTracker::new(ActivityConfig::default()),
             classifier: Classifier::new(ClassifyConfig::default()),

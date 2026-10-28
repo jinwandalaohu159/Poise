@@ -64,17 +64,24 @@ pub trait MachineProfile: Send {
     }
 }
 
+/// 这一次要从机型接口读哪些项。机型接口（BIOS 的 WMI 方法）每次调用都可能让所有处理器核心
+/// 短暂停顿，玩游戏时会表现为掉帧，所以只读需要的项。处理器温度总是读。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MachineNeed {
+    pub gpu_temp: bool,
+    pub fans: bool,
+}
+
 /// 机型传感器：只读。
 pub trait MachineSensors: Send {
-    /// 读取温度和风扇。`include_fans` 为假时跳过风扇，减少调用。
-    fn read(&mut self, include_fans: bool) -> MachineReading;
+    fn read(&mut self, need: MachineNeed) -> MachineReading;
 }
 
 /// 机型没有传感器接口时使用。
 struct NoSensors;
 
 impl MachineSensors for NoSensors {
-    fn read(&mut self, _include_fans: bool) -> MachineReading {
+    fn read(&mut self, _need: MachineNeed) -> MachineReading {
         MachineReading::default()
     }
 }

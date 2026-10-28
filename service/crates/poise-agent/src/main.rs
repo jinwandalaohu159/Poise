@@ -16,6 +16,8 @@ mod tray;
 mod ui_app;
 mod update;
 
+use poise_platform::act::self_tune;
+use poise_platform::observe::topology::CpuTopology;
 use poise_platform::win::wide::WideString;
 use windows::Win32::Foundation::{ERROR_ALREADY_EXISTS, GetLastError};
 use windows::Win32::System::Threading::CreateMutexW;
@@ -37,6 +39,7 @@ fn main() {
     // SAFETY: 进程启动时设置一次。
     let _ = unsafe { SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) };
     logging::init();
+    self_tune::apply(&CpuTopology::detect());
     log::info!("Poise 托盘代理启动");
     app::run();
     log::info!("Poise 托盘代理退出");

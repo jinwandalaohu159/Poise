@@ -26,7 +26,14 @@ public sealed partial class CleanupViewModel : ObservableObject, IDisposable
     public CleanupViewModel(AppHost host)
     {
         _host = host;
-        _timer.Tick += async (_, _) => await RefreshAsync();
+        // 主窗口最小化或被全屏程序挡住时不刷新（见 UiPresence）。
+        _timer.Tick += async (_, _) =>
+        {
+            if (_host.Presence.MainVisible)
+            {
+                await RefreshAsync();
+            }
+        };
     }
 
     public ObservableCollection<ProcessRowItem> Attention { get; } = [];

@@ -3,6 +3,7 @@ using Microsoft.UI.Xaml;
 using Poise.Core.Diagnostics;
 using Poise.Core.Lifecycle;
 using Poise.Core.Updates;
+using Poise.App.UI.Services;
 using Poise.App.UI.Windows;
 
 namespace Poise.App;
@@ -54,8 +55,16 @@ public partial class App : Application
         _idleExit.Interval = IdleExit;
         _idleExit.IsRepeating = false;
         _idleExit.Tick += (_, _) => QuitIfIdle();
-        _host.Presence.AllHidden += () => _idleExit.Start();
-        _host.Presence.AnyShown += () => _idleExit.Stop();
+        _host.Presence.AllHidden += () =>
+        {
+            EfficiencyMode.Set(true);
+            _idleExit.Start();
+        };
+        _host.Presence.AnyShown += () =>
+        {
+            EfficiencyMode.Set(false);
+            _idleExit.Stop();
+        };
         // 安装程序会替换正在运行的 Poise：它启动后界面立即退出，不占用文件。
         _host.Updates.InstallerStarted += () => dispatcher.TryEnqueue(Quit);
         _instance.OnRequest(r => dispatcher.TryEnqueue(() => Handle(r)));
