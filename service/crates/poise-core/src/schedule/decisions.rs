@@ -39,6 +39,10 @@ impl Verdict {
 pub enum Cause {
     /// 在前台。
     Foreground,
+    /// 程序自己把优先级调到了"高"（录屏、串流等）。
+    SelfElevated,
+    /// 用户设为低优先级（让路的原因）。
+    MarkedLow,
     /// 刚用过（离开前台不久）。
     RecentlyUsed,
     /// 正在发声。

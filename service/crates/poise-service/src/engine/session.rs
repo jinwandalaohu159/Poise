@@ -92,13 +92,18 @@ impl Engine {
     pub(super) fn on_session_changed(&mut self, session_id: u32) {
         if self.cfg.mode == RunMode::Service {
             let user = UserContext::for_session(session_id);
-            if user != self.changes.store.user() {
-                log::info!(
-                    "交互会话 {session_id}，用户：{:?}",
-                    user.as_ref().and_then(|u| u.sid.clone())
-                );
+            if user == self.changes.store.user() {
+                return;
             }
+            log::info!(
+                "交互会话 {session_id}，用户：{:?}",
+                user.as_ref().and_then(|u| u.sid.clone())
+            );
             self.changes.store.set_user(user);
+            // 服务开机就启动，那时还没人登录，按用户保存的设置（游戏的显卡偏好等）读写不了：现在补上。
+            self.resync_game_settings();
+            let now = self.now();
+            self.power_guard.check_soon(now);
         }
     }
 }

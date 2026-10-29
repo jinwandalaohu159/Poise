@@ -20,6 +20,7 @@
 //! | 正在发声的程序里的其他进程 | 不调整（不让路，也不替程序做主：浏览器会自己给后台标签页节能） |
 //! | 正在发声、玩游戏时又在后台忙 | 小核 · 不受系统节能限速（声音照样流畅，大核留给游戏） |
 //! | 前台、刚用过的程序 | 不调整（Windows 本来就照顾前台）；玩游戏时"刚用过"不再豁免，只有前台算 |
+//! | 自己把优先级调到"高"的程序（录屏、串流、音频工作站开工时会这样做）在后台忙 | 不调整；玩游戏时只让到小核，同发声的程序 |
 //! | 低优先级（用户指定） | 小核 · 低于正常 · 在后台节能 |
 //! | 自动，在后台持续占用处理器 | 小核 · 低于正常 · 节能（保持到它回到前台、发声或退出） |
 //! | 自动，在后台闲着 | 不调整（闲着的程序不和谁抢资源，不值得动它） |
@@ -122,6 +123,8 @@ pub struct ProcessView<'a> {
     pub audible: bool,
     /// 这个进程本身在输出声音，或刚停下不久。
     pub emitting: bool,
+    /// 程序的主进程自己把优先级调到了"高"或更高：它在声明自己的工作对时间敏感。
+    pub self_elevated: bool,
     /// 在后台持续占用处理器（由调度器跨周期判断）。
     pub busy: bool,
     /// 正在发声，玩游戏时又在后台忙（由调度器跨周期判断）：只让到小核。
@@ -192,6 +195,14 @@ fn decide_cores_freely(v: &ProcessView) -> Desired {
             Desired::YIELDED
         };
     }
+    if v.busy && v.self_elevated && !in_use(v) {
+        // 降优先级、节能限速都会让录像、串流掉帧；玩游戏时让到小核就够了，大核留给游戏。
+        return if v.gaming {
+            Desired::BACKSEAT
+        } else {
+            Desired::NEUTRAL
+        };
+    }
     if v.busy && !in_use(v) {
         Desired::YIELDED
     } else {
@@ -232,6 +243,7 @@ mod tests {
             boosted: false,
             audible: c.plays_audio,
             emitting: c.emits_audio,
+            self_elevated: false,
             busy,
             busy_with_audio: false,
         }
@@ -303,6 +315,30 @@ mod tests {
             ..bg
         };
         assert_eq!(decide(&view(&audio, true)), Desired::PROTECTED);
+    }
+
+    #[test]
+    fn programs_that_raised_their_own_priority_are_not_lowered() {
+        let c = class(AppPreference::Auto, false);
+        let elevated = ProcessView {
+            self_elevated: true,
+            ..view(&c, true)
+        };
+        assert_eq!(decide(&elevated), Desired::NEUTRAL);
+        let gaming = ProcessView {
+            gaming: true,
+            ..elevated
+        };
+        assert_eq!(decide(&gaming), Desired::BACKSEAT);
+        // 用户自己设为"低优先级"的，照用户的。
+        let low = class(AppPreference::Background, false);
+        assert_eq!(
+            decide(&ProcessView {
+                self_elevated: true,
+                ..view(&low, true)
+            }),
+            Desired::YIELDED
+        );
     }
 
     #[test]

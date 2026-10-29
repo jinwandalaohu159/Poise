@@ -6,7 +6,7 @@
 use std::ffi::c_void;
 use std::path::PathBuf;
 
-use poise_core::optimize::Value;
+use poise_core::setting::Value;
 use windows::Win32::Foundation::{HANDLE, HLOCAL, LocalFree};
 use windows::Win32::Security::Authorization::ConvertSidToStringSidW;
 use windows::Win32::Security::{GetTokenInformation, TOKEN_QUERY, TOKEN_USER, TokenUser};

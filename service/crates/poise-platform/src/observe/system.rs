@@ -122,7 +122,7 @@ fn read_frequency(m: &mut SystemMetrics) {
     if status.is_ok() {
         m.cpu_mhz_current =
             (info.iter().map(|i| i.current_mhz as u64).sum::<u64>() / n as u64) as u32;
-        m.cpu_mhz_max = info.iter().map(|i| i.max_mhz).max().unwrap_or(0);
+        m.cpu_mhz_base = info.iter().map(|i| i.max_mhz).max().unwrap_or(0);
     }
 }
 
@@ -171,6 +171,6 @@ mod tests {
         assert!(m.mem_total > m.mem_available);
         assert!(m.commit_limit >= m.commit_total);
         assert!(m.cpu_total_time >= m.cpu_busy_time);
-        assert!(m.cpu_mhz_max > 0);
+        assert!(m.cpu_mhz_base > 0);
     }
 }

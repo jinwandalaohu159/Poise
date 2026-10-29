@@ -13,9 +13,10 @@ use poise_hardware::{HardwareReading, SensorLevel, Sensors};
 /// 一次读取超过这个时间就记一条日志。
 const SLOW_READ: Duration = Duration::from_millis(500);
 
-/// 界面没显示时的读取间隔。机型接口（BIOS 的 WMI 方法）的调用可能让所有核心短暂停顿，
-/// 没人看的时候少读：温度只用于健康状态和走势记录，10 秒一次足够。界面显示时按 `every` 读。
-const QUIET_EVERY: Duration = Duration::from_secs(10);
+/// 界面没显示时的读取间隔。机型接口（BIOS 的 WMI 方法）的调用可能让所有核心短暂停顿，系统服务还要
+/// 为它花掉不少处理器时间；没人看的时候少读：温度只用于健康状态和走势（是否被限速由处理器自己报告），
+/// 30 秒一次足够。界面显示时按 `every` 读。
+const QUIET_EVERY: Duration = Duration::from_secs(30);
 
 enum Signal {
     /// 需要的详细程度变了（界面打开、开始玩游戏）：按新的要求立即读一次。

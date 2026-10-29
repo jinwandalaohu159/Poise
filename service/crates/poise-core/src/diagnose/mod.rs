@@ -1,10 +1,12 @@
 //! 诊断：把指标归结成结论：当前状态（health）和卡顿原因（stutter）。
 
+mod headroom;
 mod health;
 mod heat;
 mod history;
 mod stutter;
 
+pub use headroom::{Headroom, HeadroomWatch};
 pub use health::{Health, HealthCode, HealthInput, Level, assess};
 pub use heat::{Heat, HeatWatch};
 pub use history::{HISTORY_WINDOW_MS, HistoryPoint, MetricHistory, Sample};
@@ -37,6 +39,8 @@ pub struct DiagnoseConfig {
     pub throttle_load_pct: f32,
     /// 频率低于基础频率的这个比例视为降频。
     pub throttle_ratio: f32,
+    /// 固件允许的性能上限低于这个百分比，视为正被限速。
+    pub limited_below_pct: f32,
     /// 系统盘剩余低于这个比例，或低于下面的绝对值，视为快满了。
     pub storage_low_ratio: f64,
     pub storage_low_bytes: u64,
@@ -52,6 +56,7 @@ impl Default for DiagnoseConfig {
             commit_tired_pct: 85.0,
             throttle_load_pct: 60.0,
             throttle_ratio: 0.85,
+            limited_below_pct: 90.0,
             storage_low_ratio: 0.10,
             storage_low_bytes: 15 * 1024 * 1024 * 1024,
         }
@@ -64,9 +69,17 @@ pub fn is_storage_low(cfg: &DiagnoseConfig, free: u64, total: u64) -> bool {
         && (free < cfg.storage_low_bytes || (free as f64) < total as f64 * cfg.storage_low_ratio)
 }
 
-/// 高负载下频率掉到基础频率以下，说明散热或功耗墙在限制性能。
+/// 高负载下实际频率掉到基础频率以下，说明散热或功耗墙在限制性能。
 pub fn is_throttling(cfg: &DiagnoseConfig, system: &SystemMetrics, cpu_pct: f32) -> bool {
-    system.cpu_mhz_max > 0
+    system.cpu_mhz_base > 0
         && cpu_pct >= cfg.throttle_load_pct
-        && (system.cpu_mhz_current as f32) < system.cpu_mhz_max as f32 * cfg.throttle_ratio
+        && (system.cpu_mhz_current as f32) < system.cpu_mhz_base as f32 * cfg.throttle_ratio
+}
+
+/// 处理器正被固件限速（温度墙、功耗墙）：直接来自处理器自己的报告，不靠温度门槛推测，
+/// 也不依赖机型能不能读到温度。
+pub fn is_limited(cfg: &DiagnoseConfig, system: &SystemMetrics) -> bool {
+    system
+        .cpu_perf_limit_pct
+        .is_some_and(|p| p < cfg.limited_below_pct)
 }

@@ -211,7 +211,10 @@ impl MachineSensors for DellSensors {
             Vec::new()
         };
         MachineReading {
-            cpu_temp: sensors.first().and_then(|&s| awcc.temperature(s)),
+            cpu_temp: need
+                .cpu_temp
+                .then(|| sensors.first().and_then(|&s| awcc.temperature(s)))
+                .flatten(),
             gpu_temp: need
                 .gpu_temp
                 .then(|| sensors.get(1).and_then(|&s| awcc.temperature(s)))

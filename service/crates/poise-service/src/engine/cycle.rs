@@ -1,13 +1,12 @@
-//! 采样周期：采集 → 观察趋势 → 分类 → 调度 → 读取传感器 → 健康评估 → 硬件模式 → 自动清理。
+//! 采样周期：采集 → 观察趋势 → 分类 → 调度 → 读取传感器 → 健康评估 → 硬件模式 → 检查电源设置 → 自动清理。
 //! 托盘代理不在时（Poise 已退出）只采样，不调度、不切换模式、不清理（见 `presence`）。
 
 use std::collections::HashMap;
 use std::time::Duration;
 
 use poise_core::classify::{Classification, ClassifyInput};
-use poise_core::diagnose::{self, DiagnoseConfig, Health, HealthInput, Heat, Sample};
+use poise_core::diagnose::{self, DiagnoseConfig, Health, HealthInput, Sample};
 use poise_core::model::{Millis, Pid, Snapshot};
-use poise_core::safety::Trigger;
 use poise_hardware::{HardwareReading, SensorLevel};
 
 use super::phases::Phases;
@@ -63,6 +62,8 @@ impl Engine {
         });
         self.remember_running_apps(now);
         phases.done("记录运行的程序");
+        self.guard_power(now);
+        phases.done("检查电源设置");
         if active {
             self.run_deferred_cleanup();
             self.auto_clean(now);
@@ -142,15 +143,16 @@ impl Engine {
     }
 
     pub(super) fn classify(
-        &self,
+        &mut self,
         snapshot: &Snapshot,
         now: Millis,
     ) -> HashMap<Pid, Classification> {
         let own: Vec<Pid> = self.own_pids.iter().copied().collect();
         let games = self.scheduler.active_games();
+        let session = self.session.current(now);
         self.classifier.classify_all(&ClassifyInput {
             snapshot,
-            session: &self.session.current(now),
+            session: &session,
             activity: &self.activity,
             preferences: &self.settings.preferences,
             own_pids: &own,
@@ -181,19 +183,27 @@ impl Engine {
         reading: &HardwareReading,
         now: Millis,
     ) -> Health {
-        let heat = self
-            .heat
-            .observe(&DiagnoseConfig::default(), reading.thermals, now);
-        self.hot = heat != Heat::Normal;
-        let preview = self.plan_cleanup(snapshot, classes, Trigger::Manual, false);
+        let cfg = DiagnoseConfig::default();
+        let (headroom, limited_changed) =
+            self.headroom
+                .observe(&cfg, reading.thermals, &snapshot.system, now);
+        match (limited_changed, headroom.limit_pct) {
+            (Some(true), Some(p)) => {
+                log::info!("处理器正被限速（性能上限 {p:.0}%），后台更早让路")
+            }
+            (Some(false), _) => log::info!("处理器不再被限速"),
+            _ => {}
+        }
+        let cpu_pct = self.activity.system_cpu_pct();
+        let preview = self.cleanup_preview(snapshot, classes, now);
         diagnose::assess(
-            &DiagnoseConfig::default(),
+            &cfg,
             &HealthInput {
                 system: &snapshot.system,
-                cpu_pct: self.activity.system_cpu_pct(),
-                heat,
+                cpu_pct,
+                heat: headroom.heat,
                 game: outcome.game.as_ref(),
-                manual_plan: &preview,
+                manual_plan: preview,
                 system_drive: reading.storage.system_drive,
             },
         )

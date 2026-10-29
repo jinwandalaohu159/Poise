@@ -1,9 +1,9 @@
 //! Windows 服务表：哪个进程承载了哪些服务（只读观测）。
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
-use poise_core::model::{Pid, ServiceFacts};
+use poise_core::model::{Pid, ProcessKey, ServiceFacts};
 use windows::Win32::System::Services::{
     CloseServiceHandle, ENUM_SERVICE_STATUS_PROCESSW, EnumDependentServicesW,
     EnumServicesStatusExW, OpenSCManagerW, OpenServiceW, SC_ENUM_PROCESS_INFO, SC_HANDLE,
@@ -40,26 +40,40 @@ pub(crate) fn open_service(
     unsafe { OpenServiceW(scm.0, w.as_pcwstr(), access) }.map(ScHandle)
 }
 
-/// 进程 → 服务 的映射，定期刷新。
+/// 进程 → 服务 的映射。
+///
+/// 枚举一次要对服务管理器做几十毫秒的远程调用，所以不按固定间隔刷新，而是看服务管理器拉起的进程：
+/// 有服务启动（新进程）或退出（进程没了）就立即重新枚举，比按间隔刷新更及时。服务也可能在已有的
+/// 共享宿主进程里启动，看不出进程变化，所以另外隔一段时间兜底刷新一次。
 #[derive(Default)]
 pub struct ServiceMap {
     by_pid: HashMap<Pid, Vec<ServiceFacts>>,
     refreshed_at: Option<Instant>,
+    /// 上次枚举时服务管理器拉起的进程。
+    hosts: Option<HashSet<ProcessKey>>,
 }
 
 impl ServiceMap {
-    pub const REFRESH_EVERY: Duration = Duration::from_secs(30);
+    /// 兜底刷新的间隔；找不到服务管理器进程时（看不到服务进程的变化）按短间隔刷新。
+    const BACKSTOP_EVERY: Duration = Duration::from_secs(120);
+    const BLIND_EVERY: Duration = Duration::from_secs(30);
 
-    pub fn refresh_if_stale(&mut self) {
-        let stale = self
-            .refreshed_at
-            .is_none_or(|t| t.elapsed() >= Self::REFRESH_EVERY);
-        if stale {
+    /// `hosts`：服务管理器拉起的进程；找不到服务管理器时为 None。
+    pub fn refresh(&mut self, hosts: Option<HashSet<ProcessKey>>) {
+        let every = if hosts.is_some() {
+            Self::BACKSTOP_EVERY
+        } else {
+            Self::BLIND_EVERY
+        };
+        let stale = self.refreshed_at.is_none_or(|t| t.elapsed() >= every);
+        let changed = hosts.is_some() && hosts != self.hosts;
+        if stale || changed {
             match enumerate() {
                 Ok(m) => self.by_pid = m,
                 Err(e) => log::warn!("枚举服务失败：{e}"),
             }
             self.refreshed_at = Some(Instant::now());
+            self.hosts = hosts;
         }
     }
 
@@ -152,9 +166,21 @@ mod tests {
     use super::*;
 
     #[test]
+    fn re_enumerates_only_when_the_service_processes_change() {
+        let key = |pid| ProcessKey { pid, created: 1 };
+        let mut m = ServiceMap::default();
+        m.refresh(Some(HashSet::from([key(1)])));
+        let first = m.refreshed_at;
+        m.refresh(Some(HashSet::from([key(1)])));
+        assert_eq!(m.refreshed_at, first);
+        m.refresh(Some(HashSet::from([key(1), key(2)])));
+        assert_ne!(m.refreshed_at, first);
+    }
+
+    #[test]
     fn finds_services_hosted_in_svchost() {
         let mut m = ServiceMap::default();
-        m.refresh_if_stale();
+        m.refresh(None);
         assert!(!m.by_pid.is_empty());
         assert!(
             m.by_pid

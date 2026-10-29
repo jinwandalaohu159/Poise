@@ -1,4 +1,4 @@
-//! 系统优化项：列出状态、应用、还原。项目本身来自目录（[`super::catalog`]）。
+//! 系统优化项：列出状态、应用、还原。项目本身来自目录（[`super::catalog`]）；电源项被别处改回时由 [`super::power_guard`] 补回。
 
 use std::sync::Arc;
 
@@ -44,7 +44,7 @@ impl Engine {
         let now = self.now();
         Ok(self
             .changes
-            .apply(&item.id, &item.target, &item.optimized, now)?)
+            .edit(|s, j| optimize::apply(&item, s, j, now))?)
     }
 
     /// 还原一项：Poise 改过的回到修改前，别处改的（用户自己或其他工具）回到系统默认。

@@ -3,7 +3,7 @@
 //! 用户自己调整过（设置里已有 IsPromoted）就不再改动。设置按程序路径区分，
 //! 所以不另做"已处理"标记：换了安装位置的图标是新图标，同样处理一次。
 
-use poise_core::optimize::Value;
+use poise_core::setting::Value;
 use poise_platform::win::registry;
 use windows::Win32::System::Com::CoTaskMemFree;
 use windows::Win32::System::Registry::HKEY_CURRENT_USER;

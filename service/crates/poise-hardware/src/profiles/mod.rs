@@ -65,11 +65,19 @@ pub trait MachineProfile: Send {
 }
 
 /// 这一次要从机型接口读哪些项。机型接口（BIOS 的 WMI 方法）每次调用都可能让所有处理器核心
-/// 短暂停顿，玩游戏时会表现为掉帧，所以只读需要的项。处理器温度总是读。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// 短暂停顿（玩游戏时表现为掉帧），系统服务和 WMI 宿主进程还要为它花掉几百毫秒处理器时间
+/// （实测是 Poise 自身占用的好几倍），所以只读需要的项。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct MachineNeed {
+    pub cpu_temp: bool,
     pub gpu_temp: bool,
     pub fans: bool,
+}
+
+impl MachineNeed {
+    pub fn nothing(&self) -> bool {
+        !(self.cpu_temp || self.gpu_temp || self.fans)
+    }
 }
 
 /// 机型传感器：只读。

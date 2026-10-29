@@ -98,6 +98,8 @@ fn accept_loop(
         let spawned = std::thread::Builder::new()
             .name(format!("ipc-{pid}"))
             .spawn(move || {
+                // 界面的请求（前台切换的通知也走这里）要及时处理。
+                poise_platform::act::self_tune::responsive_thread();
                 serve(conn, pid, &engine);
                 active.fetch_sub(1, Ordering::SeqCst);
             });

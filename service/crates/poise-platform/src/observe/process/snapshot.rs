@@ -1,12 +1,13 @@
-//! 把进程表、静态属性缓存、友好名称、服务表、系统指标组装成 poise-core 的 [`Snapshot`]。
+//! 把进程表、静态属性缓存、友好名称、服务表、系统指标（含处理器实际性能）组装成 poise-core 的 [`Snapshot`]。
 
 use std::collections::HashSet;
 
 use poise_core::model::{Millis, ProcessFacts, ProcessKey, ProcessSample, Snapshot};
 
-use super::enumerate::ProcessTable;
+use super::enumerate::{ProcessTable, RawProcess};
 use super::facts::FactsCache;
 use super::names::NameResolver;
+use crate::observe::cpu_performance::CpuPerformanceMeter;
 use crate::observe::services::ServiceMap;
 use crate::observe::system;
 use crate::persist::paths;
@@ -17,12 +18,13 @@ pub struct Snapshotter {
     facts: FactsCache,
     names: NameResolver,
     services: ServiceMap,
+    cpu: CpuPerformanceMeter,
 }
 
 impl Snapshotter {
     pub fn take(&mut self, at: Millis) -> windows::core::Result<Snapshot> {
         let raw = self.table.read()?;
-        self.services.refresh_if_stale();
+        self.services.refresh(service_hosts(&raw));
         self.names.collect();
         let alive: HashSet<ProcessKey> = raw.iter().map(|r| r.key).collect();
         self.facts.retain(|k| alive.contains(k));
@@ -53,12 +55,33 @@ impl Snapshotter {
                 }
             })
             .collect();
+        let mut system = system::read_metrics();
+        if let Some(p) = self.cpu.sample() {
+            system.cpu_mhz_current =
+                (system.cpu_mhz_base as f32 * p.performance_pct / 100.0).round() as u32;
+            system.cpu_perf_limit_pct = Some(p.limit_pct);
+        }
         Ok(Snapshot {
             at,
             processes,
-            system: system::read_metrics(),
+            system,
         })
     }
+}
+
+/// 服务管理器（services.exe）拉起的进程，也就是各个服务的宿主进程；找不到服务管理器时为 None。
+fn service_hosts(raw: &[RawProcess]) -> Option<HashSet<ProcessKey>> {
+    let scm = raw
+        .iter()
+        .find(|r| r.session_id == 0 && r.name == "services.exe")?
+        .key
+        .pid;
+    Some(
+        raw.iter()
+            .filter(|r| r.parent_pid == scm)
+            .map(|r| r.key)
+            .collect(),
+    )
 }
 
 #[cfg(test)]
@@ -75,5 +98,13 @@ mod tests {
         assert!(snap.system.mem_total > 0);
         // 第二次采样走缓存，不应出错。
         assert!(s.take(2).is_ok());
+        // 服务宿主进程：服务管理器拉起的进程里有承载服务的。
+        let raw = s.table.read().unwrap();
+        let hosts = super::service_hosts(&raw).expect("找不到服务管理器");
+        assert!(
+            snap.processes
+                .iter()
+                .any(|p| hosts.contains(&p.facts.key) && !p.facts.services.is_empty())
+        );
     }
 }

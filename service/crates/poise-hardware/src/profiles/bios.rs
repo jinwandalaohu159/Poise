@@ -1,6 +1,6 @@
 //! 从注册表读取主板/整机型号（不依赖 WMI）。
 
-use poise_core::optimize::Value;
+use poise_core::setting::Value;
 use poise_platform::win::registry;
 use windows::Win32::System::Registry::HKEY_LOCAL_MACHINE;
 

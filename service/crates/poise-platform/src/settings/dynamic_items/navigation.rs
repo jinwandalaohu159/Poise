@@ -1,8 +1,7 @@
 //! 资源管理器导航栏里的第三方入口（网盘等）：取消固定即不再显示。
 
-use poise_core::optimize::{
-    Group, Hive, Matcher, OptimizationItem, SystemDefault, TakesEffect, Target, Text, Value,
-};
+use poise_core::optimize::{Group, Matcher, OptimizationItem, SystemDefault, TakesEffect, Text};
+use poise_core::setting::{Hive, Target, Value};
 use windows::Win32::System::Registry::HKEY_LOCAL_MACHINE;
 
 use super::{class_roots, is_guid};
@@ -57,11 +56,11 @@ pub fn navigation_items(user: Option<&UserContext>) -> Vec<OptimizationItem> {
                 group: Group::NavigationPane,
                 title: Text::Plain(name),
                 description: Text::Key("opt.nav.desc".into()),
-                target: Target::Registry {
+                targets: vec![Target::Registry {
                     hive: Hive::CurrentUser,
                     key: format!(r"Software\Classes\CLSID\{clsid}"),
                     name: "System.IsPinnedToNameSpaceTree".into(),
-                },
+                }],
                 optimized: Value::Dword(0),
                 matcher: Matcher::Exact,
                 in_one_click: false,

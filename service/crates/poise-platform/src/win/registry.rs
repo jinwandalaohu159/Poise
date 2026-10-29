@@ -1,6 +1,6 @@
 //! 注册表读写的薄封装。
 
-use poise_core::optimize::Value;
+use poise_core::setting::Value;
 use windows::Win32::Foundation::{ERROR_FILE_NOT_FOUND, ERROR_NO_MORE_ITEMS, WIN32_ERROR};
 use windows::Win32::System::Registry::{
     HKEY, KEY_READ, KEY_WOW64_64KEY, KEY_WRITE, REG_BINARY, REG_DWORD, REG_EXPAND_SZ,

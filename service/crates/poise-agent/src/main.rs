@@ -40,6 +40,8 @@ fn main() {
     let _ = unsafe { SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) };
     logging::init();
     self_tune::apply(&CpuTopology::detect());
+    // 前台切换的通知在这个线程（消息循环）里收到，要及时转给服务。
+    self_tune::responsive_thread();
     log::info!("Poise 托盘代理启动");
     app::run();
     log::info!("Poise 托盘代理退出");

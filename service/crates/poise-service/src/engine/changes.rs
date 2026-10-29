@@ -3,9 +3,10 @@
 
 use std::path::Path;
 
-use poise_core::journal::{Journal, JournalError, JournalStorage};
+use poise_core::journal::{Journal, JournalEntry, JournalError, JournalStorage};
 use poise_core::model::Millis;
-use poise_core::optimize::{self, OptimizationItem, SettingStore, Target, Value};
+use poise_core::optimize::{self, OptimizationItem};
+use poise_core::setting::{SettingStore, Target, Value};
 use poise_platform::persist::storage::FileJournal;
 use poise_platform::settings::store::WinSettingStore;
 use poise_platform::settings::user::UserContext;
@@ -50,9 +51,15 @@ impl From<JournalError> for ChangeError {
 impl Changes {
     pub fn new(data_dir: &Path, user: Option<UserContext>, dry_run: bool) -> Self {
         let file = FileJournal::new(data_dir);
+        let store = WinSettingStore::new(user);
+        let mut journal = Journal::from_entries(file.load());
+        // 旧版本记的电源设置没写明是哪个计划（当时指当前计划）。
+        if journal.resolve_places(&store) {
+            file.save(journal.entries());
+        }
         Self {
-            store: WinSettingStore::new(user),
-            journal: Journal::from_entries(file.load()),
+            store,
+            journal,
             file,
             dry_run,
         }
@@ -83,6 +90,18 @@ impl Changes {
         now: Millis,
     ) -> Result<(), ChangeError> {
         self.edit(|s, j| j.apply(s, owner, target, value, now))
+    }
+
+    /// 重新写入被别处改掉的修改（一批写入，电源计划只重新激活一次）。
+    pub fn reassert(&mut self, entries: &[JournalEntry], now: Millis) -> Result<(), ChangeError> {
+        self.edit(|s, j| {
+            s.begin_batch();
+            let result = entries
+                .iter()
+                .try_for_each(|e| j.apply(s, &e.owner, &e.target, &e.applied, now));
+            s.end_batch();
+            result
+        })
     }
 
     pub fn revert(&mut self, owner: &str) -> Result<(), ChangeError> {

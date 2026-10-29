@@ -81,6 +81,11 @@ impl Reconciler {
         }
     }
 
+    /// 进程在 Poise 调整之前的优先级；没调整过时为 None。
+    pub fn original_priority(&self, key: &ProcessKey) -> Option<PriorityClass> {
+        self.applied.get(key).map(|a| a.original_priority)
+    }
+
     /// 这个进程的优先级是否被 Poise 降低了（它新建的子进程会继承"低于正常"）。
     /// 刚恢复不久的也算：恢复之前新建的子进程已经继承了"低于正常"。
     pub fn lowered(&self, key: &ProcessKey) -> bool {

@@ -1,84 +1,8 @@
 //! 优化项的数据模型：每一项都是"把某个设置改成某个值"，因此天然可还原。
 
 use serde::{Deserialize, Serialize};
-use thiserror::Error;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Hive {
-    LocalMachine,
-    /// 当前交互用户（服务以 SYSTEM 运行时，由平台层解析到该用户的配置单元）。
-    CurrentUser,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "type", content = "data", rename_all = "snake_case")]
-pub enum Value {
-    Dword(u32),
-    String(String),
-    Binary(Vec<u8>),
-}
-
-/// 用户目录下的配置文件。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum UserFile {
-    /// `%USERPROFILE%\.wslconfig`
-    WslConfig,
-}
-
-/// 一个可读写、可删除的设置位置。
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum Target {
-    Registry {
-        hive: Hive,
-        key: String,
-        name: String,
-    },
-    Ini {
-        file: UserFile,
-        section: String,
-        key: String,
-    },
-    /// 当前电源计划中的某个设置（GUID 字符串）。
-    PowerSetting {
-        subgroup: String,
-        setting: String,
-        ac: bool,
-    },
-}
-
-#[derive(Debug, Error, Clone, PartialEq, Eq)]
-pub enum StoreError {
-    #[error("没有权限")]
-    AccessDenied,
-    #[error("不支持的位置")]
-    Unsupported,
-    #[error("{0}")]
-    Io(String),
-}
-
-/// 平台层实现的设置读写。
-pub trait SettingStore {
-    fn read(&self, target: &Target) -> Result<Option<Value>, StoreError>;
-    fn write(&self, target: &Target, value: &Value) -> Result<(), StoreError>;
-    fn delete(&self, target: &Target) -> Result<(), StoreError>;
-
-    /// 开始一批写入：批内的修改可以推迟到 [`SettingStore::end_batch`] 时一起生效
-    /// （例如电源计划只重新激活一次，而不是每写一项激活一次）。默认无操作。
-    fn begin_batch(&self) {}
-
-    /// 结束一批写入，让推迟的修改生效。默认无操作。
-    fn end_batch(&self) {}
-
-    /// 结束一批写入，但不在这里让推迟的修改生效，而是返回是否还有待生效的修改：
-    /// 生效很慢时（重新激活电源计划约 200 毫秒），调用方可以放到别的线程里做。
-    fn end_batch_deferred(&self) -> bool {
-        self.end_batch();
-        false
-    }
-}
+use crate::setting::{Target, Value};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -121,7 +45,9 @@ pub struct OptimizationItem {
     pub group: Group,
     pub title: Text,
     pub description: Text,
-    pub target: Target,
+    /// 要修改的位置，每一处都写入同一个优化值。通常只有一处；电源设置按处理器效率等级分成几个版本，
+    /// 每个等级各一处（只改等级 0 的话，大小核处理器的大核不受影响）。
+    pub targets: Vec<Target>,
     /// 优化后的值。
     pub optimized: Value,
     /// 如何判断"已经是优化状态"。
@@ -168,6 +94,8 @@ pub enum Matcher {
     FirstByteOdd,
     /// 数值不超过给定值即可（例如最小处理器状态只要不强制高频就算已优化）。
     AtMost(u32),
+    /// 数值不低于给定值即可（例如睿频模式只要不是"禁用"就算已优化）。
+    AtLeast(u32),
 }
 
 impl Matcher {
@@ -179,8 +107,16 @@ impl Matcher {
             (Self::FirstByteOdd, Some(Value::Binary(b))) => b.first().is_some_and(|x| x % 2 == 1),
             (Self::FirstByteOdd, Some(_)) => false,
             (Self::AtMost(limit), Some(Value::Dword(v))) => *v <= limit,
-            (Self::AtMost(_), Some(_)) => false,
+            (Self::AtLeast(limit), Some(Value::Dword(v))) => *v >= limit,
+            (Self::AtMost(_) | Self::AtLeast(_), Some(_)) => false,
         }
+    }
+}
+
+impl OptimizationItem {
+    /// 这个值是否已是优化状态。
+    pub fn is_optimized(&self, current: Option<&Value>) -> bool {
+        self.matcher.is_optimized(current, &self.optimized)
     }
 }
 

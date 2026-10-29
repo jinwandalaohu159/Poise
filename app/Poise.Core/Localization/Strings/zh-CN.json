@@ -199,6 +199,8 @@
   "group.power": "电源",
   "opt.cpu_idle.title": "空闲时允许处理器降频",
   "opt.cpu_idle.desc": "当前电源计划让处理器始终以最高频率运行，空闲时也会持续发热。修改后空闲时自动降频，有负载时性能不变",
+  "opt.cpu_boost.title": "允许处理器睿频",
+  "opt.cpu_boost.desc": "当前电源计划关闭了睿频，处理器最高只能跑到基础频率，有负载时也升不上去。修改后恢复 Windows 默认的睿频方式，空闲时照常降频",
   "apps.add": "添加程序",
   "apps.add.title": "为 {0} 选择偏好",
   "apps.add.save": "保存",

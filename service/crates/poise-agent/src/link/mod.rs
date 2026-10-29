@@ -59,7 +59,11 @@ impl Link {
         };
         std::thread::Builder::new()
             .name("service-link".into())
-            .spawn(move || worker.run())
+            .spawn(move || {
+                // 前台切换的通知经这个线程发给服务。
+                poise_platform::act::self_tune::responsive_thread();
+                worker.run()
+            })
             .expect("创建后台线程失败");
         Self { tx, latest }
     }

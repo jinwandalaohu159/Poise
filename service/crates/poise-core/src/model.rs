@@ -148,8 +148,12 @@ pub struct SystemMetrics {
     pub handle_count: u32,
     pub thread_count: u32,
     pub process_count: u32,
+    /// 处理器实际的平均频率（相对基础频率的实际性能换算而来，睿频时高于基础频率）。
     pub cpu_mhz_current: u32,
-    pub cpu_mhz_max: u32,
+    /// 基础频率。
+    pub cpu_mhz_base: u32,
+    /// 固件允许的性能上限（百分比）：温度墙、功耗墙限速时低于 100。读不到时为空。
+    pub cpu_perf_limit_pct: Option<f32>,
     pub uptime_ms: u64,
 }
 

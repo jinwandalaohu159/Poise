@@ -17,6 +17,8 @@ use super::{Engine, convert, unix_now_ms};
 const AUTO_CLEAN_EVERY_MS: Millis = 10 * 60_000;
 /// 整机 CPU 超过这个比例时不做自动清理，避免清理本身造成卡顿。
 const AUTO_CLEAN_MAX_CPU: f32 = 50.0;
+/// 健康状态用的清理预演多久重新算一次。
+const PREVIEW_EVERY_MS: Millis = 10_000;
 /// 泄漏嫌疑与异常增长的重新计算间隔。
 const SUSPECTS_EVERY_MS: Millis = 60_000;
 
@@ -60,6 +62,26 @@ impl Engine {
                 restart_advised: self.kernel_pool.restart_advised(),
             },
         )
+    }
+
+    /// 健康状态用的"手动清理"预演：只用来统计可清理的项和是否建议重启。它依赖的泄漏嫌疑、异常增长
+    /// 每分钟才更新一次，内存变化也慢，所以每隔一会儿才重新预演，不是每轮都算。
+    pub(super) fn cleanup_preview(
+        &mut self,
+        snapshot: &Snapshot,
+        classes: &HashMap<Pid, Classification>,
+        now: Millis,
+    ) -> &CleanupPlan {
+        let stale = self
+            .cleanup
+            .preview
+            .as_ref()
+            .is_none_or(|(at, _)| now.saturating_sub(*at) >= PREVIEW_EVERY_MS);
+        if stale {
+            let plan = self.plan_cleanup(snapshot, classes, Trigger::Manual, false);
+            self.cleanup.preview = Some((now, plan));
+        }
+        &self.cleanup.preview.as_ref().expect("刚刚算过").1
     }
 
     /// 用户点了"一键清理"：立即执行全部可清理项；前台有游戏或全屏程序时，会打扰的项目留到之后。

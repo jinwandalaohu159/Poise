@@ -17,7 +17,7 @@ mod tree;
 use game::renders_fullscreen;
 use role::{AntiCheat, restartable_service, role_of};
 use scope::{preference_of, schedule_scope};
-use tree::{Marks, roots};
+use tree::{Marks, NeverScheduledPaths, roots};
 
 /// 进程的角色。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -135,18 +135,22 @@ pub struct ClassifyInput<'a> {
 
 pub struct Classifier {
     cfg: ClassifyConfig,
+    never_scheduled_paths: NeverScheduledPaths,
 }
 
 impl Classifier {
     pub fn new(cfg: ClassifyConfig) -> Self {
-        Self { cfg }
+        Self {
+            cfg,
+            never_scheduled_paths: NeverScheduledPaths::default(),
+        }
     }
 
-    pub fn classify_all(&self, input: &ClassifyInput) -> HashMap<Pid, Classification> {
+    pub fn classify_all(&mut self, input: &ClassifyInput) -> HashMap<Pid, Classification> {
         let snap = input.snapshot;
         let by_pid = snap.by_pid();
         let anti_cheat = AntiCheat::detect(snap);
-        let marks = Marks::new(snap, input.session);
+        let marks = Marks::new(snap, input.session, &mut self.never_scheduled_paths);
         let visible = &marks.visible;
         let audio: HashSet<Pid> = input.session.audio_pids.iter().copied().collect();
         let roots = roots(&by_pid, input, &marks);

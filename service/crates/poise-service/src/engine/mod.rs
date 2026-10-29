@@ -1,13 +1,16 @@
 //! 引擎：持有所有组件。各方面的行为分布在同目录的子模块中：
 //!
-//! - [`cycle`]：每个采样周期（采集 → 分类 → 调度 → 健康评估），并串起下面各部分；[`phases`] 给每轮分段计时
+//! - [`cycle`]：每个采样周期（采集 → 分类 → 调度 → 健康评估与处理器余量），并串起下面各部分；
+//!   [`phases`] 给每轮分段计时
 //! - [`schedule`]：按调度计划调整进程、临时全速、停止时撤销
 //! - [`presence`]：托盘代理在线时才起作用，退出时撤销全部影响
 //! - [`auto`]：把用户模式（含"自动"）换算成具体模式
 //! - [`mode`]：把实际模式落到电源计划与散热上（慢的硬件操作在硬件执行线程里），风扇加速
 //! - [`cleanup`]：一键清理、延后清理、自动清理
 //! - [`growth`]：与开机时、与进程稳定运行时相比的增长
-//! - [`optimizer`]：系统优化项；[`game_prefs`]：程序类别与游戏对应的系统设置
+//! - [`optimizer`]：系统优化项，[`catalog`] 是它们的目录（在请求线程里枚举）；
+//!   [`power_guard`]：守住 Poise 写入的电源设置（被别处改掉、换了计划）；
+//!   [`game_prefs`]：程序类别与游戏对应的系统设置
 //! - [`changes`]：持久修改的唯一出口（设置存储 + 变更日志）
 //! - [`session`]：用户会话、界面是否显示
 //! - [`status`]：给界面的状态、诊断；[`apps`]：程序列表与运行过的程序（保存在本机）
@@ -26,6 +29,7 @@ mod growth;
 mod mode;
 mod optimizer;
 mod phases;
+mod power_guard;
 mod presence;
 mod requests;
 mod schedule;
@@ -42,10 +46,10 @@ use poise_core::activity::{ActivityConfig, ActivityTracker};
 use poise_core::auto_mode::AutoMode;
 use poise_core::classify::{Classification, Classifier, ClassifyConfig};
 use poise_core::cleanup::{
-    BootBaseline, CleanupStep, Grown, GrowthConfig, GrowthWatch, KernelPoolConfig, KernelPoolWatch,
-    LeakConfig, LeakDetector, LeakSuspect,
+    BootBaseline, CleanupPlan, CleanupStep, Grown, GrowthConfig, GrowthWatch, KernelPoolConfig,
+    KernelPoolWatch, LeakConfig, LeakDetector, LeakSuspect,
 };
-use poise_core::diagnose::{Health, HeatWatch, MetricHistory};
+use poise_core::diagnose::{HeadroomWatch, Health, MetricHistory};
 use poise_core::model::{Millis, Pid, Snapshot};
 use poise_core::prefs::{Mode, Settings};
 use poise_core::safety::GuardedExecutor;
@@ -90,6 +94,8 @@ struct CleanupState {
     /// 与自身基线相比异常增长的进程，与泄漏嫌疑同时刷新。
     grown: Vec<Grown>,
     suspects_at: Option<Millis>,
+    /// 健康状态用的清理预演与时间（见 `cleanup::preview`）。
+    preview: Option<(Millis, CleanupPlan)>,
     last: Option<LastCleanup>,
 }
 
@@ -110,9 +116,8 @@ pub struct Engine {
     kernel_pool: KernelPoolWatch,
     growth: GrowthWatch,
     baseline_file: JsonFile<BootBaseline>,
-    heat: HeatWatch,
-    /// 处理器接近温度上限（最近一次健康评估的结果）：调度据此让后台更早让路。
-    hot: bool,
+    /// 处理器还有没有散热与功耗的余量（最近一次健康评估的结果）：没有时调度让后台更早让路。
+    headroom: HeadroomWatch,
     auto_mode: AutoMode,
     /// 最近几分钟的整机指标（主页与卡顿诊断的走势图）。
     history: MetricHistory,
@@ -127,6 +132,8 @@ pub struct Engine {
     changes: Changes,
     /// 系统优化项的目录（在请求线程里刷新，见 `catalog`）。
     catalog: Arc<Catalog>,
+    /// 守住 Poise 写入的电源设置（见 `power_guard`）。
+    power_guard: power_guard::PowerGuard,
     settings: Settings,
     settings_file: JsonFile<Settings>,
     session: SessionTracker,
@@ -198,8 +205,7 @@ impl Engine {
             kernel_pool: KernelPoolWatch::new(KernelPoolConfig::default()),
             growth,
             baseline_file,
-            heat: HeatWatch::default(),
-            hot: false,
+            headroom: HeadroomWatch::default(),
             auto_mode: AutoMode::default(),
             history: MetricHistory::default(),
             core_load_meter: CoreLoadMeter::new(&topology),
@@ -211,6 +217,7 @@ impl Engine {
             hardware,
             changes: Changes::new(&cfg.data_dir, user, cfg.dry_run),
             catalog: Arc::default(),
+            power_guard: power_guard::PowerGuard::default(),
             settings,
             settings_file,
             seen: seen_file.load().unwrap_or_default(),

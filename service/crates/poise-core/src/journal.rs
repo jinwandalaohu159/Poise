@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::model::Millis;
-use crate::optimize::{SettingStore, StoreError, Target, Value};
+use crate::setting::{SettingStore, StoreError, Target, Value};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct JournalEntry {
@@ -53,7 +53,11 @@ impl Journal {
         self.entries.iter().any(|e| e.owner == owner)
     }
 
-    /// 修改一个设置。同一位置已有记录时保留最初的原值，只更新新值。
+    /// 修改一个设置。
+    ///
+    /// 同一个位置可以有几层修改（例如系统优化项打底，硬件模式临时叠在上面），按修改的先后排列：
+    /// 上层记下的原值就是下层写入的值，撤销上层回到下层的值。同一来源再次修改同一位置时保留最初的原值；
+    /// 这时它上面还有别的层的话不写入（生效的仍是上层的值），只更新上层撤销后要回到的值。
     pub fn apply(
         &mut self,
         store: &dyn SettingStore,
@@ -62,19 +66,27 @@ impl Journal {
         value: &Value,
         now: Millis,
     ) -> Result<(), JournalError> {
-        match self.entries.iter_mut().find(|e| &e.target == target) {
-            Some(existing) => {
-                store.write(target, value).map_err(JournalError::Write)?;
-                existing.applied = value.clone();
-                existing.owner = owner.to_string();
-                existing.at = now;
+        let target = store.resolve(target).map_err(JournalError::Read)?;
+        let existing = self
+            .entries
+            .iter()
+            .position(|e| e.owner == owner && e.target.same_place(&target));
+        match existing {
+            Some(i) => {
+                match self.layer_above(i) {
+                    Some(above) => self.entries[above].original = Some(value.clone()),
+                    None => store.write(&target, value).map_err(JournalError::Write)?,
+                }
+                let e = &mut self.entries[i];
+                e.applied = value.clone();
+                e.at = now;
             }
             None => {
-                let original = store.read(target).map_err(JournalError::Read)?;
-                store.write(target, value).map_err(JournalError::Write)?;
+                let original = store.read(&target).map_err(JournalError::Read)?;
+                store.write(&target, value).map_err(JournalError::Write)?;
                 self.entries.push(JournalEntry {
                     owner: owner.to_string(),
-                    target: target.clone(),
+                    target,
                     original,
                     applied: value.clone(),
                     at: now,
@@ -84,28 +96,39 @@ impl Journal {
         Ok(())
     }
 
-    /// 还原某个来源的所有修改。
+    /// 同一位置上紧挨着的上一层。
+    fn layer_above(&self, i: usize) -> Option<usize> {
+        let place = &self.entries[i].target;
+        (i + 1..self.entries.len()).find(|&k| self.entries[k].target.same_place(place))
+    }
+
+    /// 还原某个来源的所有修改。上面还有别的层的位置不写入：把原值交给上一层，等它撤销时再回到原值。
     pub fn revert(&mut self, store: &dyn SettingStore, owner: &str) -> Result<(), JournalError> {
         if !self.owns(owner) {
             return Err(JournalError::NotFound);
         }
         let mut first_error = None;
-        self.entries.retain(|e| {
-            if e.owner != owner {
-                return true;
+        for i in (0..self.entries.len()).rev() {
+            if self.entries[i].owner != owner {
+                continue;
             }
-            match restore(store, e) {
-                Ok(()) => false,
-                Err(err) => {
-                    first_error.get_or_insert(err);
-                    true
+            match self.layer_above(i) {
+                Some(above) => {
+                    self.entries[above].original = self.entries[i].original.clone();
+                }
+                None => {
+                    if let Err(err) = restore(store, &self.entries[i]) {
+                        first_error.get_or_insert(err);
+                        continue;
+                    }
                 }
             }
-        });
+            self.entries.remove(i);
+        }
         first_error.map_or(Ok(()), |e| Err(JournalError::Revert(e)))
     }
 
-    /// 还原全部修改，返回失败的来源。按修改的相反顺序进行。
+    /// 还原全部修改，返回失败的来源。按修改的相反顺序进行（同一位置的几层逐层撤销）。
     pub fn revert_all(&mut self, store: &dyn SettingStore) -> Vec<(String, JournalError)> {
         let mut failures = Vec::new();
         let mut kept = Vec::new();
@@ -118,6 +141,38 @@ impl Journal {
         kept.reverse();
         self.entries = kept;
         failures
+    }
+
+    /// 被别处改掉的修改：`watch` 选中的记录里，处在最上层、当前值却已不是它写入的值的，连同当前值一起返回。
+    /// 读不到的跳过。
+    pub fn drifted(
+        &self,
+        store: &dyn SettingStore,
+        watch: impl Fn(&JournalEntry) -> bool,
+    ) -> Vec<(JournalEntry, Option<Value>)> {
+        self.entries
+            .iter()
+            .enumerate()
+            .filter(|(i, e)| watch(e) && self.layer_above(*i).is_none())
+            .filter_map(|(_, e)| match store.read(&e.target) {
+                Ok(current) if current.as_ref() != Some(&e.applied) => Some((e.clone(), current)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// 旧版本记下的位置可能是相对的（例如"当前电源计划"），换成具体的位置。返回是否有变化。
+    pub fn resolve_places(&mut self, store: &dyn SettingStore) -> bool {
+        let mut changed = false;
+        for e in &mut self.entries {
+            if let Ok(t) = store.resolve(&e.target)
+                && t != e.target
+            {
+                e.target = t;
+                changed = true;
+            }
+        }
+        changed
     }
 }
 
@@ -134,7 +189,7 @@ pub(crate) mod tests {
     use std::collections::HashMap;
 
     use super::*;
-    use crate::optimize::Hive;
+    use crate::setting::Hive;
 
     /// 内存里的设置存储，供测试使用。
     #[derive(Default)]
@@ -213,6 +268,84 @@ pub(crate) mod tests {
         assert!(j.revert_all(&store).is_empty());
         assert_eq!(store.read(&reg("x")).unwrap(), Some(Value::Dword(1)));
         assert_eq!(store.read(&reg("y")).unwrap(), None);
+    }
+
+    #[test]
+    fn layers_on_one_setting_unwind_in_any_order() {
+        let store = MemStore::default();
+        store.write(&reg("boost"), &Value::Dword(0)).unwrap();
+        let mut j = Journal::default();
+        // 优化项打底，模式叠在上面。
+        j.apply(&store, "opt", &reg("boost"), &Value::Dword(2), 1)
+            .unwrap();
+        j.apply(&store, "mode", &reg("boost"), &Value::Dword(3), 2)
+            .unwrap();
+        // 先撤销模式：回到优化项的值。
+        j.revert(&store, "mode").unwrap();
+        assert_eq!(store.read(&reg("boost")).unwrap(), Some(Value::Dword(2)));
+        assert!(j.owns("opt"));
+
+        // 再叠一次模式，这次先撤销下层的优化项：生效的仍是模式的值，模式撤销时回到最初的原值。
+        j.apply(&store, "mode", &reg("boost"), &Value::Dword(3), 3)
+            .unwrap();
+        j.revert(&store, "opt").unwrap();
+        assert_eq!(store.read(&reg("boost")).unwrap(), Some(Value::Dword(3)));
+        j.revert(&store, "mode").unwrap();
+        assert_eq!(store.read(&reg("boost")).unwrap(), Some(Value::Dword(0)));
+        assert!(j.entries().is_empty());
+    }
+
+    #[test]
+    fn a_lower_layer_reapplying_does_not_override_the_layer_above() {
+        let store = MemStore::default();
+        let mut j = Journal::default();
+        j.apply(&store, "opt", &reg("v"), &Value::Dword(5), 1)
+            .unwrap();
+        j.apply(&store, "mode", &reg("v"), &Value::Dword(9), 2)
+            .unwrap();
+        j.apply(&store, "opt", &reg("v"), &Value::Dword(6), 3)
+            .unwrap();
+        assert_eq!(store.read(&reg("v")).unwrap(), Some(Value::Dword(9)));
+        j.revert(&store, "mode").unwrap();
+        assert_eq!(store.read(&reg("v")).unwrap(), Some(Value::Dword(6)));
+    }
+
+    #[test]
+    fn places_that_differ_only_in_case_are_one_place() {
+        let store = MemStore::default();
+        let mut j = Journal::default();
+        let upper = Target::Registry {
+            hive: Hive::CurrentUser,
+            key: r"Software\Test".into(),
+            name: r"D:\Games\Game.exe".into(),
+        };
+        let lower = Target::Registry {
+            hive: Hive::CurrentUser,
+            key: r"software\test".into(),
+            name: r"d:\games\game.exe".into(),
+        };
+        j.apply(&store, "g", &upper, &Value::Dword(1), 1).unwrap();
+        j.apply(&store, "g", &lower, &Value::Dword(2), 2).unwrap();
+        assert_eq!(j.entries().len(), 1);
+    }
+
+    #[test]
+    fn only_the_top_layer_changed_elsewhere_counts_as_drifted() {
+        let store = MemStore::default();
+        let mut j = Journal::default();
+        j.apply(&store, "opt", &reg("a"), &Value::Dword(5), 1)
+            .unwrap();
+        j.apply(&store, "mode", &reg("a"), &Value::Dword(9), 2)
+            .unwrap();
+        j.apply(&store, "opt", &reg("b"), &Value::Dword(5), 3)
+            .unwrap();
+        assert!(j.drifted(&store, |_| true).is_empty());
+        store.write(&reg("a"), &Value::Dword(100)).unwrap();
+        store.write(&reg("b"), &Value::Dword(100)).unwrap();
+        let drifted = j.drifted(&store, |e| e.owner == "mode" || e.owner == "opt");
+        let owners: Vec<_> = drifted.iter().map(|(e, _)| e.owner.as_str()).collect();
+        assert_eq!(owners, ["mode", "opt"]);
+        assert_eq!(drifted[0].1, Some(Value::Dword(100)));
     }
 
     #[test]

@@ -21,8 +21,8 @@ use std::time::Duration;
 
 use poise_core::journal::{Journal, JournalError};
 use poise_core::model::Millis;
-use poise_core::optimize::SettingStore;
 use poise_core::prefs::Mode;
+use poise_core::setting::SettingStore;
 
 use actuator::Actuator;
 use memory::MemoryInfo;
@@ -56,6 +56,8 @@ pub struct Hardware {
     applied_boost: Option<u8>,
     /// 大核的效率等级（不是大小核时为 0），电源计划按它区分大小核。
     top_class: u8,
+    /// Windows 平衡计划在这台电脑上的出厂值（均衡模式与所有模式的底线按它设置）。
+    baseline: power::Baseline,
 }
 
 impl Hardware {
@@ -78,6 +80,7 @@ impl Hardware {
             applied: None,
             applied_boost: None,
             top_class,
+            baseline: power::Baseline::read(),
         }
     }
 
@@ -116,6 +119,17 @@ impl Hardware {
         self.sensors.take().expect("传感器只能取一次")
     }
 
+    /// 电源计划换了（用户或别的程序切换了计划）：下次应用模式时重新写入新计划。
+    /// 上一个计划里写过的值由变更日志写回那个计划。
+    pub fn power_plan_changed(&mut self) {
+        self.applied = None;
+    }
+
+    /// 处理器此刻实际的电源设置（日志用）。
+    pub fn describe_power(&self, store: &dyn SettingStore, on_battery: bool) -> String {
+        power::describe(store, self.top_class, !on_battery)
+    }
+
     /// 模式或供电状态是否与上次应用的不同。
     pub fn needs_apply(&self, mode: Mode, on_battery: bool) -> bool {
         self.applied != Some((mode, on_battery))
@@ -134,7 +148,8 @@ impl Hardware {
         if !self.needs_apply(mode, on_battery) {
             return Ok(());
         }
-        let (written, activate) = power::write(mode, self.top_class, store, journal, now);
+        let (written, activate) =
+            power::write(mode, self.top_class, &self.baseline, store, journal, now);
         if activate {
             self.actuator.activate_power();
         }
@@ -147,8 +162,8 @@ impl Hardware {
     }
 
     /// 还原到原始状态（服务停止、Poise 退出时调用），等硬件真正还原完成。
-    pub fn restore(&mut self, store: &dyn SettingStore, journal: &mut Journal, now: Millis) {
-        let (written, activate) = power::write(Mode::Balanced, self.top_class, store, journal, now);
+    pub fn restore(&mut self, store: &dyn SettingStore, journal: &mut Journal) {
+        let (written, activate) = power::revert(store, journal);
         if let Err(e) = written {
             log::warn!("还原电源设置失败：{e}");
         }

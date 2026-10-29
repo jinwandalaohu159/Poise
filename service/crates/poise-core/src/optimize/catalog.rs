@@ -1,38 +1,37 @@
 //! 固定的优化项目录。动态项（右键插件、导航栏入口、启动项）由平台层枚举。
 
-use super::model::{
-    Group, Hive, Matcher, OptimizationItem, SystemDefault, TakesEffect, Target, Text, UserFile,
-    Value,
-};
+use super::model::{Group, Matcher, OptimizationItem, SystemDefault, TakesEffect, Text};
+use crate::power_settings as power;
+use crate::setting::{Hive, Target, UserFile, Value};
 
 const EXPLORER_ADVANCED: &str = r"Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced";
-/// 电源计划：处理器电源管理子组、最小处理器状态。
-const SUB_PROCESSOR: &str = "54533251-82be-4824-96c1-47b60b740d00";
-const PROC_THROTTLE_MIN: &str = "893dee8e-2bef-41e0-89c6-b55d0929964c";
-/// Windows"平衡"方案的默认值。
-const IDLE_MIN_STATE_PCT: u32 = 5;
-/// 不超过这个值就不算"强制高频"。
-const IDLE_MIN_STATE_LIMIT: u32 = 50;
 
 fn key(k: &str) -> Text {
     Text::Key(k.to_string())
 }
 
 pub fn static_items(wsl_installed: bool) -> Vec<OptimizationItem> {
-    let mut items = vec![
+    let mut items = power_items();
+    items.extend(other_items(wsl_installed));
+    items
+}
+
+/// 电源计划里的项：处理器该降就降、该升就升。它们会被厂商工具、系统更新悄悄改回，
+/// 服务定期检查（见 [`super::reverted_power_items`]）。
+pub fn power_items() -> Vec<OptimizationItem> {
+    vec![
         OptimizationItem {
             // "高性能"等电源计划把插电时的最小处理器状态设为 100%：处理器从不降频，空闲时也一直发热。
             id: "cpu_idle_downclock".into(),
             group: Group::Power,
             title: key("opt.cpu_idle.title"),
             description: key("opt.cpu_idle.desc"),
-            target: Target::PowerSetting {
-                subgroup: SUB_PROCESSOR.into(),
-                setting: PROC_THROTTLE_MIN.into(),
-                ac: true,
-            },
-            optimized: Value::Dword(IDLE_MIN_STATE_PCT),
-            matcher: Matcher::AtMost(IDLE_MIN_STATE_LIMIT),
+            targets: power::MIN_STATE
+                .iter()
+                .map(|s| power::target(s, true))
+                .collect(),
+            optimized: Value::Dword(power::IDLE_MIN_STATE),
+            matcher: Matcher::AtMost(power::IDLE_MIN_STATE_LIMIT),
             in_one_click: true,
             slow_hint: false,
             takes_effect: TakesEffect::Immediately,
@@ -40,15 +39,35 @@ pub fn static_items(wsl_installed: bool) -> Vec<OptimizationItem> {
             system_default: SystemDefault::Unknown,
         },
         OptimizationItem {
+            // 睿频被关掉时处理器最高只跑到基础频率（i7-12700H 是 2.3 GHz，睿频可到 4.7 GHz），
+            // 有负载时也升不上去。只要不是"禁用"就算已优化，不改用户选的其他睿频方式。
+            id: "cpu_boost_allowed".into(),
+            group: Group::Power,
+            title: key("opt.cpu_boost.title"),
+            description: key("opt.cpu_boost.desc"),
+            targets: vec![power::target(power::BOOST_MODE, true)],
+            optimized: Value::Dword(power::BOOST_AGGRESSIVE),
+            matcher: Matcher::AtLeast(power::BOOST_DISABLED + 1),
+            in_one_click: true,
+            slow_hint: false,
+            takes_effect: TakesEffect::Immediately,
+            system_default: SystemDefault::Unknown,
+        },
+    ]
+}
+
+fn other_items(wsl_installed: bool) -> Vec<OptimizationItem> {
+    let mut items = vec![
+        OptimizationItem {
             id: "fast_startup_off".into(),
             group: Group::StartupBackground,
             title: key("opt.fast_startup.title"),
             description: key("opt.fast_startup.desc"),
-            target: Target::Registry {
+            targets: vec![Target::Registry {
                 hive: Hive::LocalMachine,
                 key: r"SYSTEM\CurrentControlSet\Control\Session Manager\Power".into(),
                 name: "HiberbootEnabled".into(),
-            },
+            }],
             optimized: Value::Dword(0),
             matcher: Matcher::Exact,
             in_one_click: true,
@@ -61,11 +80,11 @@ pub fn static_items(wsl_installed: bool) -> Vec<OptimizationItem> {
             group: Group::Explorer,
             title: key("opt.open_this_pc.title"),
             description: key("opt.open_this_pc.desc"),
-            target: Target::Registry {
+            targets: vec![Target::Registry {
                 hive: Hive::CurrentUser,
                 key: EXPLORER_ADVANCED.into(),
                 name: "LaunchTo".into(),
-            },
+            }],
             optimized: Value::Dword(1),
             matcher: Matcher::Exact,
             in_one_click: true,
@@ -78,11 +97,11 @@ pub fn static_items(wsl_installed: bool) -> Vec<OptimizationItem> {
             group: Group::Explorer,
             title: key("opt.separate_process.title"),
             description: key("opt.separate_process.desc"),
-            target: Target::Registry {
+            targets: vec![Target::Registry {
                 hive: Hive::CurrentUser,
                 key: EXPLORER_ADVANCED.into(),
                 name: "SeparateProcess".into(),
-            },
+            }],
             optimized: Value::Dword(1),
             matcher: Matcher::Exact,
             in_one_click: true,
@@ -97,11 +116,11 @@ pub fn static_items(wsl_installed: bool) -> Vec<OptimizationItem> {
             group: Group::Memory,
             title: key("opt.wsl_reclaim.title"),
             description: key("opt.wsl_reclaim.desc"),
-            target: Target::Ini {
+            targets: vec![Target::Ini {
                 file: UserFile::WslConfig,
                 section: "experimental".into(),
                 key: "autoMemoryReclaim".into(),
-            },
+            }],
             // 温和回收：用户平时会在后台运行 WSL/Docker，不用激进的缓存清除。
             optimized: Value::String("gradual".into()),
             matcher: Matcher::Exact,
@@ -143,6 +162,32 @@ mod tests {
         assert!(!optimized(100));
         assert!(optimized(5));
         assert!(optimized(0));
+    }
+
+    #[test]
+    fn idle_downclock_covers_every_core_class() {
+        let item = power_items()
+            .into_iter()
+            .find(|i| i.id == "cpu_idle_downclock")
+            .unwrap();
+        // 只改等级 0 时，大小核处理器的大核（等级 1）仍被"高性能"计划锁在最高频率。
+        let expected: Vec<Target> = power::MIN_STATE
+            .iter()
+            .map(|s| power::target(s, true))
+            .collect();
+        assert_eq!(item.targets, expected);
+        assert!(power_items().iter().all(|i| i.group == Group::Power));
+    }
+
+    #[test]
+    fn disabled_turbo_is_not_optimized_but_any_other_boost_mode_is() {
+        let item = power_items()
+            .into_iter()
+            .find(|i| i.id == "cpu_boost_allowed")
+            .unwrap();
+        assert!(!item.is_optimized(Some(&Value::Dword(0))));
+        assert!(item.is_optimized(Some(&Value::Dword(2))));
+        assert!(item.is_optimized(Some(&Value::Dword(4))));
     }
 
     #[test]

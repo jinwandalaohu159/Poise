@@ -1,8 +1,7 @@
 //! 开机启动项（Run 键）：用任务管理器同样的"已批准"标记启用 / 禁用，不删除注册。
 
-use poise_core::optimize::{
-    Group, Hive, Matcher, OptimizationItem, SystemDefault, TakesEffect, Target, Text, Value,
-};
+use poise_core::optimize::{Group, Matcher, OptimizationItem, SystemDefault, TakesEffect, Text};
+use poise_core::setting::{Hive, Target, Value};
 use windows::Win32::System::Registry::{HKEY, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE};
 
 use super::expand_env;
@@ -66,11 +65,11 @@ pub fn startup_items(user: Option<&UserContext>) -> Vec<OptimizationItem> {
                 group: Group::StartupApps,
                 title: Text::Plain(title),
                 description: Text::Plain(name.clone()),
-                target: Target::Registry {
+                targets: vec![Target::Registry {
                     hive,
                     key: format!(r"{APPROVED_KEY}\{approved}"),
                     name,
-                },
+                }],
                 optimized: Value::Binary(DISABLED_MARK.to_vec()),
                 matcher: Matcher::FirstByteOdd,
                 in_one_click: false,

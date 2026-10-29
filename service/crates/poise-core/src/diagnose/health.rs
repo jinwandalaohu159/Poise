@@ -219,10 +219,19 @@ mod tests {
         let cfg = DiagnoseConfig::default();
         let sys = SystemMetrics {
             cpu_mhz_current: 1500,
-            cpu_mhz_max: 2300,
+            cpu_mhz_base: 2300,
             ..Default::default()
         };
         assert!(is_throttling(&cfg, &sys, 90.0));
         assert!(!is_throttling(&cfg, &sys, 20.0));
+        // 处理器自己报告的限速：没有读数时不判断。
+        use crate::diagnose::is_limited;
+        assert!(!is_limited(&cfg, &sys));
+        let limited = |p| SystemMetrics {
+            cpu_perf_limit_pct: Some(p),
+            ..sys
+        };
+        assert!(is_limited(&cfg, &limited(70.0)));
+        assert!(!is_limited(&cfg, &limited(100.0)));
     }
 }

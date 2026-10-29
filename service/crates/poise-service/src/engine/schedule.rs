@@ -58,7 +58,7 @@ impl Engine {
             user_mode,
             game_mode: self.game_target(),
             on_battery: system::on_battery(),
-            hot: self.hot,
+            hot: self.headroom.exhausted(),
         });
         self.execute_plan(&plan.actions, classes);
         log_decisions(&plan.decisions, snapshot);
@@ -175,6 +175,7 @@ fn load_text(state: &ProgramState) -> String {
 fn what_text(from: Verdict, state: &ProgramState) -> String {
     let what = match state.verdict {
         Verdict::Playing => "按游戏调度",
+        Verdict::Yielded if state.cause == Some(Cause::MarkedLow) => "让路",
         Verdict::Yielded => "后台忙，让路",
         Verdict::Backseat => "玩游戏时后台忙，移到小核",
         Verdict::Normal if from == Verdict::Playing => "不再按游戏调度",
@@ -190,6 +191,8 @@ fn cause_text(cause: Cause) -> &'static str {
     match cause {
         Cause::Foreground => "在前台",
         Cause::RecentlyUsed => "刚用过",
+        Cause::SelfElevated => "程序自己设为高优先级",
+        Cause::MarkedLow => "设为低优先级",
         Cause::Audio => "在发声",
         Cause::Boosted => "临时全速",
         Cause::Marked => "设为始终优先或游戏",

@@ -52,20 +52,39 @@ pub(super) struct Marks {
     pub never_scheduled: HashSet<Pid>,
 }
 
+/// 按程序路径记住的"是否在不参与调度的目录里"：路径的结论不会变，同一个程序文件常有几十个进程
+/// （浏览器、聊天软件），每轮采样又都要判断，所以每个路径只查一次名单，跨轮次保留。
+#[derive(Debug, Default)]
+pub(super) struct NeverScheduledPaths(HashMap<String, bool>);
+
+impl NeverScheduledPaths {
+    /// 记住的路径太多时清空重来（程序装了又卸，路径不会无限增长，这只是兜底）。
+    const LIMIT: usize = 4096;
+
+    fn check(&mut self, path: &str) -> bool {
+        if let Some(&listed) = self.0.get(path) {
+            return listed;
+        }
+        if self.0.len() >= Self::LIMIT {
+            self.0.clear();
+        }
+        let listed = known::is_never_scheduled_path(path);
+        self.0.insert(path.to_string(), listed);
+        listed
+    }
+}
+
 impl Marks {
-    pub fn new(snap: &Snapshot, session: &SessionState) -> Self {
-        // 同一个程序文件常有几十个进程（浏览器、聊天软件），路径只查一次。
-        let mut by_path: HashMap<&str, bool> = HashMap::new();
+    pub fn new(snap: &Snapshot, session: &SessionState, paths: &mut NeverScheduledPaths) -> Self {
         let never_scheduled = snap
             .processes
             .iter()
             .filter(|p| {
                 known::is_never_scheduled(&p.facts.name)
-                    || p.facts.image_path.as_deref().is_some_and(|path| {
-                        *by_path
-                            .entry(path)
-                            .or_insert_with(|| known::is_never_scheduled_path(path))
-                    })
+                    || p.facts
+                        .image_path
+                        .as_deref()
+                        .is_some_and(|path| paths.check(path))
             })
             .map(|p| p.facts.key.pid)
             .collect();
@@ -126,4 +145,21 @@ fn parent_in_tree(
         || !parent.is_parent_of(proc_)
         || is_independent(proc_, parent, input, marks);
     (!stop).then_some(parent_pid)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn path_results_are_remembered_and_the_cache_stays_bounded() {
+        let mut paths = NeverScheduledPaths::default();
+        let normal = r"d:\apps\editor.exe";
+        assert!(!paths.check(normal));
+        assert_eq!(paths.0.get(normal), Some(&false));
+        for i in 0..NeverScheduledPaths::LIMIT + 10 {
+            paths.check(&format!(r"d:\apps\{i}.exe"));
+        }
+        assert!(paths.0.len() <= NeverScheduledPaths::LIMIT);
+    }
 }

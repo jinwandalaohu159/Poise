@@ -103,7 +103,7 @@ impl Scheduler {
     pub fn plan(&mut self, input: &ScheduleInput) -> SchedulePlan {
         let effective_mode = self.observe(input);
         let programs = if input.enabled {
-            self.judge_programs(input.classes, input.snapshot.at)
+            self.judge_programs(input.classes, input.snapshot)
         } else {
             HashMap::new()
         };

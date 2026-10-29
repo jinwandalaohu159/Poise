@@ -199,6 +199,8 @@
   "group.power": "Power",
   "opt.cpu_idle.title": "Let the CPU slow down when idle",
   "opt.cpu_idle.desc": "The current power plan keeps the CPU at full speed even when idle, producing constant heat. After this change the CPU slows down when idle; performance under load is unchanged.",
+  "opt.cpu_boost.title": "Allow CPU turbo boost",
+  "opt.cpu_boost.desc": "The current power plan disables turbo boost, so the CPU never runs above its base clock, even under load. After this change turbo works the Windows default way again; the CPU still slows down when idle.",
   "apps.add": "Add app",
   "apps.add.title": "Choose a preference for {0}",
   "apps.add.save": "Save",

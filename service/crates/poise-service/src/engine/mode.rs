@@ -7,8 +7,8 @@
 
 use poise_core::journal::{Journal, JournalError};
 use poise_core::model::Millis;
-use poise_core::optimize::SettingStore;
 use poise_core::prefs::Mode;
+use poise_core::setting::SettingStore;
 use poise_hardware::Hardware;
 use poise_platform::observe::system;
 
@@ -32,7 +32,12 @@ impl Engine {
             return mode;
         }
         match self.edit_hardware(|h, s, j| h.apply_mode(mode, on_battery, s, j, now)) {
-            Ok(()) => log::info!("模式切换为 {mode:?}（电池：{on_battery}）"),
+            // 读回实际的设置，确认真的写进去了。
+            Ok(()) => log::info!(
+                "模式切换为 {mode:?}（电池：{on_battery}）：{}",
+                self.hardware
+                    .describe_power(&self.changes.store, on_battery)
+            ),
             Err(e) => log::warn!("切换模式失败：{e}"),
         }
         mode
@@ -40,9 +45,8 @@ impl Engine {
 
     /// 服务停止：硬件模式回到 Poise 接管之前的状态。
     pub(super) fn restore_hardware(&mut self) {
-        let now = self.now();
         let _ = self.edit_hardware(|h, s, j| {
-            h.restore(s, j, now);
+            h.restore(s, j);
             Ok(())
         });
     }

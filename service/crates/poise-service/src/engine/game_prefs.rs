@@ -2,8 +2,8 @@
 
 use std::path::Path;
 
-use poise_core::optimize::{Hive, Target, Value};
 use poise_core::prefs::AppPreference;
+use poise_core::setting::{Hive, Target, Value};
 use poise_protocol::ErrorCode;
 
 use super::Engine;
@@ -28,6 +28,10 @@ impl Engine {
     /// 启动时按当前的偏好重新同步游戏的系统设置：旧版本写过、现在不再需要的设置
     /// （例如游戏启动时的"高"优先级预设），以及已经取消标记的游戏留下的设置都会被还原。
     pub(super) fn resync_game_settings(&mut self) {
+        // 游戏的设置都按用户保存；还没人登录时（服务开机就启动）等登录后再同步。
+        if self.changes.store.user().is_none() {
+            return;
+        }
         let mut paths: Vec<(String, AppPreference)> = self
             .settings
             .preferences
@@ -59,10 +63,12 @@ impl Engine {
         } else {
             Vec::new()
         };
-        let stale =
-            self.changes.journal().entries().iter().any(|e| {
-                e.owner == owner && !wanted.iter().any(|(t, _)| same_target(t, &e.target))
-            });
+        let stale = self
+            .changes
+            .journal()
+            .entries()
+            .iter()
+            .any(|e| e.owner == owner && !wanted.iter().any(|(t, _)| t.same_place(&e.target)));
         if stale {
             self.changes.revert(&owner)?;
         }
@@ -75,25 +81,6 @@ impl Engine {
             }
         }
         first_error.map_or(Ok(()), |e| Err(e.into()))
-    }
-}
-
-/// 注册表的键名和值名不区分大小写（路径来自文件选择框，大小写可能不同）。
-fn same_target(a: &Target, b: &Target) -> bool {
-    match (a, b) {
-        (
-            Target::Registry {
-                hive: h1,
-                key: k1,
-                name: n1,
-            },
-            Target::Registry {
-                hive: h2,
-                key: k2,
-                name: n2,
-            },
-        ) => h1 == h2 && k1.eq_ignore_ascii_case(k2) && n1.eq_ignore_ascii_case(n2),
-        _ => a == b,
     }
 }
 

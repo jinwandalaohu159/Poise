@@ -9,7 +9,7 @@ use super::policy::{self, Desired, ProcessView};
 use super::trackers::{Demand, Pressure};
 use crate::action::CoreSet;
 use crate::classify::Classification;
-use crate::model::{Millis, Pid};
+use crate::model::{Pid, PriorityClass, Snapshot};
 use crate::prefs::AppPreference;
 
 impl Scheduler {
@@ -17,9 +17,11 @@ impl Scheduler {
     pub(super) fn judge_programs(
         &mut self,
         classes: &HashMap<Pid, Classification>,
-        now: Millis,
+        snap: &Snapshot,
     ) -> HashMap<Pid, Program> {
+        let now = snap.at;
         let gaming = self.games.any_active();
+        let elevated = self.self_elevated_roots(classes, snap);
         let demand = Demand {
             now,
             pressure: self.pressure,
@@ -46,6 +48,7 @@ impl Scheduler {
                 recently_foreground: self.foreground.recently_foreground(root_pid),
                 boosted: boosted.contains(&root_pid),
                 audible: root_class.plays_audio || self.audio.audible(root_pid),
+                self_elevated: elevated.contains(&root_pid),
                 busy: false,
                 busy_with_audio: false,
             };
@@ -89,7 +92,13 @@ impl Scheduler {
                 let class = classes.get(root_pid)?;
                 let verdict = Verdict::of(self.desired(class, program, false));
                 let usage = self.load.of(&root);
-                let cause = (verdict == Verdict::Normal).then(|| self.cause(class, program));
+                let cause = match verdict {
+                    Verdict::Normal => Some(self.cause(class, program)),
+                    Verdict::Yielded if class.preference == AppPreference::Background => {
+                        Some(Cause::MarkedLow)
+                    }
+                    _ => None,
+                };
                 Some((
                     root,
                     ProgramState {
@@ -102,6 +111,27 @@ impl Scheduler {
             })
             .collect();
         self.decisions.update(self.pressure, states)
+    }
+
+    /// 主进程自己把优先级调到"高"或更高的程序（按 Poise 调整之前的优先级）。
+    fn self_elevated_roots(
+        &self,
+        classes: &HashMap<Pid, Classification>,
+        snap: &Snapshot,
+    ) -> HashSet<Pid> {
+        snap.processes
+            .iter()
+            .filter(|p| {
+                let key = p.facts.key;
+                classes.get(&key.pid).is_some_and(|c| c.root_pid == key.pid)
+                    && self
+                        .reconciler
+                        .original_priority(&key)
+                        .or(p.facts.priority)
+                        .is_some_and(|o| o.rank() >= PriorityClass::High.rank())
+            })
+            .map(|p| p.facts.key.pid)
+            .collect()
     }
 
     /// 程序没有让路的原因。
@@ -119,6 +149,8 @@ impl Scheduler {
             Cause::Marked
         } else if program.recently_foreground && !program.gaming {
             Cause::RecentlyUsed
+        } else if program.self_elevated && program.busy {
+            Cause::SelfElevated
         } else if self.pressure == Pressure::None {
             Cause::NoDemand
         } else {
@@ -149,6 +181,8 @@ pub(super) struct Program {
     recently_foreground: bool,
     boosted: bool,
     audible: bool,
+    /// 主进程自己把优先级调到了"高"或更高。
+    self_elevated: bool,
     busy: bool,
     busy_with_audio: bool,
 }
@@ -165,6 +199,7 @@ impl Program {
             boosted: self.boosted,
             audible: self.audible,
             emitting,
+            self_elevated: self.self_elevated,
             busy: self.busy,
             busy_with_audio: self.busy_with_audio,
         }

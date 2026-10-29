@@ -3,9 +3,8 @@
 
 use std::collections::BTreeMap;
 
-use poise_core::optimize::{
-    Group, Hive, Matcher, OptimizationItem, SystemDefault, TakesEffect, Target, Text, Value,
-};
+use poise_core::optimize::{Group, Matcher, OptimizationItem, SystemDefault, TakesEffect, Text};
+use poise_core::setting::{Hive, Target, Value};
 use windows::Win32::System::Registry::HKEY;
 
 use super::{class_roots, expand_env, is_guid, is_system_file};
@@ -101,11 +100,11 @@ pub fn context_menu_items(user: Option<&UserContext>) -> Vec<OptimizationItem> {
                 group: Group::ContextMenu,
                 title: Text::Plain(title),
                 description,
-                target: Target::Registry {
+                targets: vec![Target::Registry {
                     hive: Hive::LocalMachine,
                     key: BLOCKED_KEY.into(),
                     name: clsid.to_uppercase(),
-                },
+                }],
                 optimized: Value::String(String::new()),
                 matcher: Matcher::Present,
                 in_one_click: false,

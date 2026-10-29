@@ -32,6 +32,8 @@ struct Proc {
     preference: AppPreference,
     /// 全屏渲染时会被识别为游戏。
     renders_fullscreen: bool,
+    /// 程序自己设的优先级。
+    own_priority: PriorityClass,
 }
 
 fn app(pid: Pid) -> Proc {
@@ -44,6 +46,7 @@ fn app(pid: Pid) -> Proc {
         audio: false,
         preference: AppPreference::Auto,
         renders_fullscreen: false,
+        own_priority: PriorityClass::Normal,
     }
 }
 
@@ -113,8 +116,8 @@ impl Sim {
                     created: 1,
                 };
                 let priority = match self.scheduler.state(&key) {
-                    ProcessSchedule::Adjusted(d) => d.priority.unwrap_or(PriorityClass::Normal),
-                    _ => PriorityClass::Normal,
+                    ProcessSchedule::Adjusted(d) => d.priority.unwrap_or(p.own_priority),
+                    _ => p.own_priority,
                 };
                 ProcessSample {
                     facts: ProcessFacts {

@@ -281,3 +281,63 @@ fn heavy_disk_users_yield_when_someone_needs_the_machine() {
         Some(ResourcePriority::Low)
     );
 }
+
+/// 复盘"录屏、串流软件在后台干活"：它自己把优先级设成了"高"，声明自己的工作对时间敏感。
+/// - 用户在忙别的：它不让路（降优先级、节能都会让录像掉帧）；
+/// - 开始玩游戏：只让到小核，不降优先级、不节能，大核留给游戏。
+///
+/// 同样在忙、优先级正常的程序照常让路。
+#[test]
+fn replay_a_recorder_that_raised_its_own_priority_keeps_it() {
+    const USER_APP: Pid = 1;
+    const RECORDER: Pid = 50;
+    const UPDATER: Pid = 60;
+    const GAME: Pid = 70;
+    let mut sim = Sim::new(vec![
+        Proc {
+            cpu_pct: 80.0,
+            ..app(USER_APP)
+        },
+        Proc {
+            cpu_pct: 40.0,
+            own_priority: PriorityClass::High,
+            ..app(RECORDER)
+        },
+        Proc {
+            cpu_pct: 40.0,
+            ..app(UPDATER)
+        },
+        Proc {
+            cpu_pct: 0.0,
+            ..app(GAME)
+        },
+    ]);
+    sim.foreground = Some(USER_APP);
+    sim.run_for(2 * 60_000);
+    assert!(sim.is_yielded(UPDATER));
+    assert!(
+        sim.actions_on(RECORDER).is_empty(),
+        "{:?}",
+        sim.actions_on(RECORDER)
+    );
+
+    let game = sim.proc_mut(GAME);
+    game.cpu_pct = 300.0;
+    game.renders_fullscreen = true;
+    sim.foreground = Some(GAME);
+    sim.run_for(60_000);
+    assert_eq!(sim.state_of(RECORDER), Some(Desired::BACKSEAT));
+    // 只换了核心（并且明确不让系统节能限速）：没降优先级，内存与磁盘优先级照旧。
+    assert!(
+        sim.actions_on(RECORDER).iter().all(|a| matches!(
+            a,
+            Action::SetCoreSet { .. }
+                | Action::SetEcoQos {
+                    state: EcoQos::Off,
+                    ..
+                }
+        )),
+        "{:?}",
+        sim.actions_on(RECORDER)
+    );
+}
