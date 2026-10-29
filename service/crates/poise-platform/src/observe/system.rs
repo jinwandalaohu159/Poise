@@ -11,7 +11,7 @@ use windows::Win32::System::ProcessStatus::{GetPerformanceInfo, PERFORMANCE_INFO
 use windows::Win32::System::SystemInformation::{
     GetSystemInfo, GetTickCount64, GlobalMemoryStatusEx, MEMORYSTATUSEX, SYSTEM_INFO,
 };
-use windows::Win32::System::Threading::GetSystemTimes;
+use windows::Win32::System::Threading::{GetCurrentThread, GetSystemTimes, GetThreadTimes};
 
 /// CallNtPowerInformation(ProcessorInformation) 返回的每核结构。
 #[repr(C)]
@@ -23,6 +23,19 @@ struct ProcessorPowerInformation {
     mhz_limit: u32,
     max_idle_state: u32,
     current_idle_state: u32,
+}
+
+/// 当前线程累计用掉的处理器时间（内核 + 用户）。与经过的时间比较，可以分清一段工作是真的耗时，
+/// 还是在等处理器（Poise 以低优先级运行，整机很忙时会排队）。
+pub fn thread_cpu_time() -> std::time::Duration {
+    let mut times = [FILETIME::default(); 4];
+    let [created, exited, kernel, user] = &mut times;
+    // SAFETY: 当前线程的伪句柄，输出到本地变量。
+    if unsafe { GetThreadTimes(GetCurrentThread(), created, exited, kernel, user) }.is_err() {
+        return std::time::Duration::ZERO;
+    }
+    let ticks = |t: &FILETIME| (u64::from(t.dwHighDateTime) << 32) | u64::from(t.dwLowDateTime);
+    std::time::Duration::from_nanos((ticks(kernel) + ticks(user)) * 100)
 }
 
 pub fn logical_cpus() -> u32 {

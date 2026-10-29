@@ -112,6 +112,8 @@ pub struct ProcessMetrics {
     pub cpu_time: u64,
     /// 累计 IO 字节数（读 + 写 + 其他）。
     pub io_bytes: u64,
+    /// 其中读写的字节数（文件与管道；不含网络和设备控制等"其他"IO）。
+    pub disk_bytes: u64,
 }
 
 #[derive(Debug, Clone, Default)]

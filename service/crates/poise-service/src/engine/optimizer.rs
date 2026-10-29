@@ -1,24 +1,26 @@
-//! 系统优化项（静态 + 动态枚举）。
+//! 系统优化项：列出状态、应用、还原。项目本身来自目录（[`super::catalog`]）。
+
+use std::sync::Arc;
 
 use poise_core::optimize::{self, ApplyReport, ItemStatus, OptimizationItem};
-use poise_platform::settings::dynamic_items;
 use poise_platform::settings::user::UserContext;
-use poise_platform::win::registry;
 
 use poise_protocol::ErrorCode;
 
 use super::Engine;
+use super::catalog::Catalog;
 use super::changes;
 use super::error::RequestError;
 
 impl Engine {
-    fn optimization_items(&self) -> Vec<OptimizationItem> {
-        let user = self.changes.store.user();
-        let mut items = optimize::static_items(wsl_installed(user.as_ref()));
-        items.extend(dynamic_items::context_menu_items(user.as_ref()));
-        items.extend(dynamic_items::navigation_items(user.as_ref()));
-        items.extend(dynamic_items::startup_items(user.as_ref()));
-        items
+    /// 优化项目录（请求线程通常已经刷新过，见 [`super::catalog`]）。
+    fn optimization_items(&self) -> Arc<Vec<OptimizationItem>> {
+        self.catalog.items(self.changes.store.user().as_ref())
+    }
+
+    /// 刷新目录所需的：目录本身与当前用户。请求线程短暂持有引擎锁取得它们，之后在锁外枚举。
+    pub fn catalog_handle(&self) -> (Arc<Catalog>, Option<UserContext>) {
+        (self.catalog.clone(), self.changes.store.user())
     }
 
     pub fn list_optimizations(&self) -> Vec<ItemStatus> {
@@ -31,8 +33,9 @@ impl Engine {
 
     fn optimization_item(&self, id: &str) -> Result<OptimizationItem, RequestError> {
         self.optimization_items()
-            .into_iter()
+            .iter()
             .find(|i| i.id == id)
+            .cloned()
             .ok_or_else(|| RequestError::new(ErrorCode::NotFound, "没有这个优化项"))
     }
 
@@ -70,15 +73,4 @@ impl Engine {
     pub fn revert_optimizations(&mut self) -> Result<Vec<String>, RequestError> {
         Ok(self.changes.revert_optimizations()?)
     }
-}
-
-fn wsl_installed(user: Option<&UserContext>) -> bool {
-    let Some(user) = user else { return false };
-    let (root, prefix) = user.registry_root();
-    registry::open(
-        root,
-        &format!(r"{prefix}Software\Microsoft\Windows\CurrentVersion\Lxss"),
-        false,
-    )
-    .is_ok()
 }

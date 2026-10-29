@@ -257,6 +257,27 @@ fn anti_cheat_and_vm_are_untouchable() {
     assert!(c[&700].anti_cheat_present);
 }
 
+/// 同一套反作弊的其他程序（不在名单上）也不碰：与名单里的程序同目录，或装在已知的反作弊目录里。
+#[test]
+fn every_program_of_an_anti_cheat_suite_is_untouchable() {
+    let in_dir = |pid, name: &str, dir: &str| {
+        let mut p = proc_(pid, None, name, 1);
+        p.facts.image_path = Some(format!(r"{dir}\{name}"));
+        p
+    };
+    let c = World::new(vec![
+        in_dir(700, "vgc.exe", r"c:\program files\riot vanguard"),
+        in_dir(701, "vgx.exe", r"c:\program files\riot vanguard"),
+        in_dir(702, "helper.exe", r"d:\games\some game\easyanticheat"),
+        in_dir(703, "vgx.exe", r"c:\apps"),
+    ])
+    .classify();
+    assert!(c[&701].is_untouchable());
+    assert!(c[&702].is_untouchable());
+    // 同名但装在别处的程序不受影响。
+    assert!(!c[&703].is_untouchable());
+}
+
 #[test]
 fn fullscreen_window_that_renders_is_a_game_wherever_it_is_installed() {
     let mut game = proc_(800, Some(100), "anything.exe", 1);

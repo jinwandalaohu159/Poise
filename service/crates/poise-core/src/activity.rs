@@ -11,6 +11,8 @@ pub struct Usage {
     pub core_pct: f32,
     /// IO 速率（字节/秒）。
     pub io_rate: f64,
+    /// 其中读写的速率（字节/秒，见 [`crate::model::ProcessMetrics::disk_bytes`]）。
+    pub disk_rate: f64,
     /// 最近一次超过活跃阈值的时间。
     pub last_active_at: Option<Millis>,
 }
@@ -44,6 +46,7 @@ struct Counters {
     at: Millis,
     cpu_time: u64,
     io_bytes: u64,
+    disk_bytes: u64,
 }
 
 #[derive(Debug, Default)]
@@ -88,6 +91,7 @@ impl ActivityTracker {
                 at: snap.at,
                 cpu_time: p.metrics.cpu_time,
                 io_bytes: p.metrics.io_bytes,
+                disk_bytes: p.metrics.disk_bytes,
             };
             let prev_usage = self.usage.get(&key).copied().unwrap_or_default();
             let usage = match self.last.get(&key) {
@@ -96,11 +100,13 @@ impl ActivityTracker {
                     let cpu_secs = now.cpu_time.saturating_sub(prev.cpu_time) as f64 / 1e7;
                     let core_pct = (cpu_secs / secs * 100.0) as f32;
                     let io_rate = now.io_bytes.saturating_sub(prev.io_bytes) as f64 / secs;
+                    let disk_rate = now.disk_bytes.saturating_sub(prev.disk_bytes) as f64 / secs;
                     let active =
                         core_pct >= self.cfg.active_core_pct || io_rate >= self.cfg.active_io_rate;
                     Usage {
                         core_pct,
                         io_rate,
+                        disk_rate,
                         last_active_at: if active {
                             Some(snap.at)
                         } else {

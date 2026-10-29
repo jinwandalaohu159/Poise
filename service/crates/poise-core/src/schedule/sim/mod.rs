@@ -26,6 +26,8 @@ struct Proc {
     root: Pid,
     /// 单核占用百分比。
     cpu_pct: f32,
+    /// 磁盘读写（MB/s）。
+    disk_mb_s: f64,
     audio: bool,
     preference: AppPreference,
     /// 全屏渲染时会被识别为游戏。
@@ -38,6 +40,7 @@ fn app(pid: Pid) -> Proc {
         parent: None,
         root: pid,
         cpu_pct: 0.2,
+        disk_mb_s: 0.0,
         audio: false,
         preference: AppPreference::Auto,
         renders_fullscreen: false,
@@ -57,6 +60,7 @@ struct Sim {
     activity: ActivityTracker,
     procs: Vec<Proc>,
     cpu_time: HashMap<Pid, u64>,
+    disk_bytes: HashMap<Pid, u64>,
     now: Millis,
     /// 前台程序（进程树的根）。
     foreground: Option<Pid>,
@@ -79,6 +83,7 @@ impl Sim {
             activity: ActivityTracker::default(),
             procs,
             cpu_time: HashMap::new(),
+            disk_bytes: HashMap::new(),
             now: 0,
             foreground: None,
             log: Vec::new(),
@@ -100,6 +105,9 @@ impl Sim {
             .map(|p| {
                 let cpu = self.cpu_time.entry(p.pid).or_default();
                 *cpu += (p.cpu_pct as f64 / 100.0 * TICK_MS as f64 * 1e4) as u64;
+                let cpu = *cpu;
+                let disk = self.disk_bytes.entry(p.pid).or_default();
+                *disk += (p.disk_mb_s * 1024.0 * 1024.0 * TICK_MS as f64 / 1000.0) as u64;
                 let key = ProcessKey {
                     pid: p.pid,
                     created: 1,
@@ -118,7 +126,8 @@ impl Sim {
                         ..Default::default()
                     },
                     metrics: ProcessMetrics {
-                        cpu_time: *cpu,
+                        cpu_time: cpu,
+                        disk_bytes: *disk,
                         ..Default::default()
                     },
                 }
@@ -205,7 +214,7 @@ impl Sim {
         self.decisions
             .iter()
             .filter_map(|d| match d {
-                Decision::Program { root, to, .. } if root.pid == pid => Some(*to),
+                Decision::Program { root, state, .. } if root.pid == pid => Some(state.verdict),
                 _ => None,
             })
             .collect()

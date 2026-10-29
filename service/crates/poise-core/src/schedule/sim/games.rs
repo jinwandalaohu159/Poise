@@ -162,11 +162,88 @@ fn background_work_yields_sooner_while_gaming() {
         ..app(GAME)
     });
     sim.foreground = Some(GAME);
+    // 刚用过的程序先缓一会儿（来回切换不反复调整），之后依然在忙才让路。
     sim.run_for(8_000);
+    assert!(!sim.is_yielded(CLIENT));
+    sim.run_for(16_000);
     assert!(sim.is_yielded(CLIENT));
     assert_eq!(sim.state_of(GAME), Some(Desired::GAME));
     // 回到客户端：立即恢复。
     sim.foreground = Some(CLIENT);
     sim.run_for(TICK_MS);
     assert!(!sim.is_yielded(CLIENT));
+}
+
+/// 复盘"玩游戏时，聊天软件的通知弹窗一下下抢走前台"：每次被抢走都会立即恢复它（可能是用户切过去了），
+/// 但随后不会马上又让路——不来回调整。
+#[test]
+fn foreground_flickers_while_gaming_do_not_flip_programs() {
+    const GAME: Pid = 1;
+    const CHAT: Pid = 2;
+    let mut sim = Sim::new(vec![
+        Proc {
+            cpu_pct: 300.0,
+            preference: AppPreference::Game,
+            ..app(GAME)
+        },
+        Proc {
+            cpu_pct: 7.0,
+            ..app(CHAT)
+        },
+    ]);
+    sim.foreground = Some(GAME);
+    sim.run_for(60_000);
+    assert!(sim.is_yielded(CHAT));
+    // 每 6 秒被抢一次前台，持续 3 分钟。
+    for _ in 0..30 {
+        sim.foreground = Some(CHAT);
+        sim.run_for(TICK_MS);
+        sim.foreground = Some(GAME);
+        sim.run_for(4_000);
+    }
+    // 第一次被抢时恢复，之后一直保持（以前每次被抢都要恢复、再让路，3 分钟里来回 60 次）。
+    assert_eq!(sim.adjustments_per_process().get(&CHAT), Some(&2));
+    // 不再被打扰 20 秒后，依然在忙，再让路。
+    sim.run_for(30_000);
+    assert!(sim.is_yielded(CHAT));
+    assert_eq!(sim.adjustments_per_process().get(&CHAT), Some(&3));
+    use Verdict::{Normal, Yielded};
+    assert_eq!(sim.verdicts_of(CHAT), [Yielded, Normal, Yielded]);
+}
+
+/// 一局结束：玩游戏时按更低的门槛让路的轻负载程序恢复，依然很忙的继续让路。
+#[test]
+fn light_programs_come_back_after_the_game() {
+    const GAME: Pid = 1;
+    const LIGHT: Pid = 2;
+    const HEAVY: Pid = 3;
+    const USER_APP: Pid = 4;
+    let mut sim = Sim::new(vec![
+        Proc {
+            cpu_pct: 300.0,
+            preference: AppPreference::Game,
+            ..app(GAME)
+        },
+        Proc {
+            cpu_pct: 5.0,
+            ..app(LIGHT)
+        },
+        Proc {
+            cpu_pct: 60.0,
+            ..app(HEAVY)
+        },
+        Proc {
+            cpu_pct: 80.0,
+            ..app(USER_APP)
+        },
+    ]);
+    sim.foreground = Some(GAME);
+    sim.run_for(60_000);
+    assert!(sim.is_yielded(LIGHT) && sim.is_yielded(HEAVY));
+    // 游戏退出，用户回到自己的程序继续忙。
+    sim.procs.retain(|p| p.pid != GAME);
+    sim.foreground = Some(USER_APP);
+    sim.run_for(60_000);
+    assert!(!sim.is_yielded(LIGHT));
+    assert!(sim.is_yielded(HEAVY));
 }

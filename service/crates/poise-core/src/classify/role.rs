@@ -1,25 +1,62 @@
 //! 角色：进程是什么（关键进程、受保护、反作弊、服务……），只靠系统属性判断；以及服务能否安全重启。
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use super::{ClassifyInput, Role};
 use crate::known;
-use crate::model::{Pid, ProcessSample, Protection, Snapshot};
+use crate::model::{Pid, ProcessFacts, ProcessSample, Protection, Snapshot};
 
-pub(super) fn detect_anti_cheat(snap: &Snapshot) -> bool {
-    snap.processes.iter().any(|p| {
-        known::is_anti_cheat_process(&p.facts.name)
-            || p.facts
-                .services
-                .iter()
-                .any(|s| known::is_anti_cheat_service(&s.name))
-    })
+/// 反作弊程序：名单里的进程和服务，装在已知反作弊目录里的程序，以及与名单里的程序装在同一目录的
+/// 所有程序——同一套反作弊往往有好几个程序（例如 Vanguard 的 vgc、vgm、vgtray），名单不可能列全。
+#[derive(Debug, Default)]
+pub(super) struct AntiCheat {
+    /// 正在运行的已知反作弊程序所在的目录（小写，不带末尾的分隔符）。
+    dirs: HashSet<String>,
+    present: bool,
+}
+
+impl AntiCheat {
+    pub(super) fn detect(snap: &Snapshot) -> Self {
+        let mut found = Self::default();
+        for p in snap.processes.iter().filter(|p| listed(&p.facts)) {
+            found.present = true;
+            if let Some(dir) = p.facts.image_path.as_deref().and_then(dir_of) {
+                found.dirs.insert(dir.to_string());
+            }
+        }
+        found
+    }
+
+    /// 有反作弊程序在运行。
+    pub(super) fn present(&self) -> bool {
+        self.present
+    }
+
+    pub(super) fn covers(&self, f: &ProcessFacts) -> bool {
+        listed(f)
+            || f.image_path.as_deref().is_some_and(|path| {
+                known::is_anti_cheat_path(path)
+                    || dir_of(path).is_some_and(|d| self.dirs.contains(d))
+            })
+    }
+}
+
+fn listed(f: &ProcessFacts) -> bool {
+    known::is_anti_cheat_process(&f.name)
+        || f.services
+            .iter()
+            .any(|s| known::is_anti_cheat_service(&s.name))
+}
+
+fn dir_of(path: &str) -> Option<&str> {
+    path.rsplit_once('\\').map(|(dir, _)| dir)
 }
 
 pub(super) fn role_of(
     p: &ProcessSample,
     by_pid: &HashMap<Pid, &ProcessSample>,
     input: &ClassifyInput,
+    anti_cheat: &AntiCheat,
 ) -> Role {
     let f = &p.facts;
     if input.own_pids.contains(&f.key.pid) {
@@ -31,11 +68,7 @@ pub(super) fn role_of(
     if f.protection != Protection::None {
         return Role::Protected;
     }
-    if known::is_anti_cheat_process(&f.name)
-        || f.services
-            .iter()
-            .any(|s| known::is_anti_cheat_service(&s.name))
-    {
+    if anti_cheat.covers(f) {
         return Role::AntiCheat;
     }
     if known::is_vm_process(&f.name) {

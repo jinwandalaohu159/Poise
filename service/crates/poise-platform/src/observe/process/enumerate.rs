@@ -141,6 +141,7 @@ fn to_raw(info: &SystemProcessInformation) -> RawProcess {
             io_bytes: (info.read_transfer_count
                 + info.write_transfer_count
                 + info.other_transfer_count) as u64,
+            disk_bytes: (info.read_transfer_count + info.write_transfer_count) as u64,
         },
     }
 }

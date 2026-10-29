@@ -15,7 +15,7 @@ mod scope;
 mod tree;
 
 use game::renders_fullscreen;
-use role::{detect_anti_cheat, restartable_service, role_of};
+use role::{AntiCheat, restartable_service, role_of};
 use scope::{preference_of, schedule_scope};
 use tree::{Marks, roots};
 
@@ -145,7 +145,7 @@ impl Classifier {
     pub fn classify_all(&self, input: &ClassifyInput) -> HashMap<Pid, Classification> {
         let snap = input.snapshot;
         let by_pid = snap.by_pid();
-        let anti_cheat_present = detect_anti_cheat(snap);
+        let anti_cheat = AntiCheat::detect(snap);
         let marks = Marks::new(snap, input.session);
         let visible = &marks.visible;
         let audio: HashSet<Pid> = input.session.audio_pids.iter().copied().collect();
@@ -169,7 +169,7 @@ impl Classifier {
             .map(|p| {
                 let pid = p.facts.key.pid;
                 let root_pid = roots[&pid];
-                let role = role_of(p, &by_pid, input);
+                let role = role_of(p, &by_pid, input, &anti_cheat);
                 let preference = preference_of(p, root_pid, &by_pid, input.preferences);
                 let in_foreground_tree = foreground_root == Some(root_pid);
                 let has_visible_window =
@@ -194,7 +194,7 @@ impl Classifier {
                     ),
                     preference,
                     is_game,
-                    anti_cheat_present,
+                    anti_cheat_present: anti_cheat.present(),
                     restartable_service: restartable_service(p, &role, &by_pid),
                     role,
                 };

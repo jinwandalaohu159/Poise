@@ -6,6 +6,7 @@
 /// 反作弊程序的进程名。
 const ANTI_CHEAT_PROCESSES: &[&str] = &[
     "vgc.exe",
+    "vgm.exe",
     "vgtray.exe",
     "easyanticheat.exe",
     "easyanticheat_eos.exe",
@@ -30,6 +31,20 @@ const ANTI_CHEAT_SERVICES: &[&str] = &[
     "ace-base",
     "anticheatexpert",
     "faceit",
+];
+
+/// 反作弊软件的安装目录名（路径里的一段）。同一套反作弊往往有好几个程序，装在这些目录里的一律算反作弊。
+const ANTI_CHEAT_FOLDERS: &[&str] = &[
+    "riot vanguard",
+    "easyanticheat",
+    "easyanticheat_eos",
+    "battleye",
+    "anticheatexpert",
+    "faceit ac",
+    "gameguard",
+    "xigncode3",
+    "nprotect",
+    "punkbuster",
 ];
 
 /// 虚拟机工作进程。
@@ -156,6 +171,14 @@ const PROTECTED_SERVICES: &[&str] = &[
 
 pub fn is_anti_cheat_process(name: &str) -> bool {
     ANTI_CHEAT_PROCESSES.contains(&name)
+}
+
+/// 路径（小写）里有一段是已知的反作弊目录。
+pub fn is_anti_cheat_path(path: &str) -> bool {
+    path.split('\\')
+        .rev()
+        .skip(1)
+        .any(|segment| ANTI_CHEAT_FOLDERS.contains(&segment))
 }
 
 pub fn is_anti_cheat_service(name: &str) -> bool {

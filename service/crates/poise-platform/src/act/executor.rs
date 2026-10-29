@@ -82,7 +82,9 @@ fn set_eco_qos(pid: Pid, state: EcoQos) -> Result<ExecOutcome, ExecError> {
         EcoQos::Default => (0, 0),
         // 两项都明确"不限制"：系统不会自动给它降频，也不会放宽它请求的计时器精度。
         EcoQos::Off => (speed | timer, 0),
-        EcoQos::On => (speed, speed),
+        // 两项都开启：降频，并且不理会它请求的高精度计时器——后台程序请求 1 毫秒计时器会让整机的
+        // 计时器中断变密（Windows 只对没有可见窗口的程序自动这样做）。
+        EcoQos::On => (speed | timer, speed | timer),
     };
     let info = PROCESS_POWER_THROTTLING_STATE {
         Version: PROCESS_POWER_THROTTLING_CURRENT_VERSION,

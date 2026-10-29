@@ -20,6 +20,7 @@ use poise_protocol::{
 
 use crate::config::RunMode;
 use crate::engine::Engine;
+use crate::engine::catalog::Catalog;
 
 /// 同时连接数上限，防止被大量连接拖垮。
 const MAX_CONNECTIONS: usize = 8;
@@ -151,6 +152,12 @@ fn serve(conn: PipeConnection, pid: Pid, engine: &Mutex<Engine>) {
         };
         let started = Instant::now();
         let name = request_name(&envelope.request);
+        if let Some(max_age) = Catalog::freshness_for(&envelope.request)
+            && let Ok((catalog, user)) = engine.lock().map(|e| e.catalog_handle())
+        {
+            // 慢的枚举在引擎锁外进行。
+            catalog.refresh(user.as_ref(), max_age);
+        }
         let response = match engine.lock() {
             Ok(mut eng) => {
                 let waited = started.elapsed();

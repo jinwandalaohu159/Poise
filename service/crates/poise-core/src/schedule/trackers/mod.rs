@@ -11,7 +11,7 @@ mod load;
 
 pub use audio::AudioTracker;
 pub use boosts::TempBoosts;
-pub use busy::{BusyRule, BusyTracker};
+pub use busy::{BusyRule, BusyTracker, Demand};
 pub use demand::{DemandRule, DemandSignals, DemandTracker, Pressure};
 pub use foreground::{ForegroundHold, ForegroundTracker};
 pub use games::{GameCores, GameTracker};

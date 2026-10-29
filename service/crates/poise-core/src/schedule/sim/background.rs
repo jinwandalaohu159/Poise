@@ -255,3 +255,29 @@ fn too_few_small_cores_are_not_used_for_yielding() {
     assert_eq!(low.priority, Some(PriorityClass::BelowNormal));
     assert_eq!(sim.state_of(3).map(|d| d.cores), Some(CoreSet::Performance));
 }
+
+/// 处理器占用很低、却一直大量读写磁盘的后台程序（同步、下载、备份）：有人需要时同样让路，
+/// 内存与磁盘读写优先级一起降低；没人需要时不碰。
+#[test]
+fn heavy_disk_users_yield_when_someone_needs_the_machine() {
+    const USER_APP: Pid = 1;
+    const SYNC: Pid = 2;
+    let mut sim = Sim::new(vec![
+        app(USER_APP),
+        Proc {
+            cpu_pct: 1.0,
+            disk_mb_s: 40.0,
+            ..app(SYNC)
+        },
+    ]);
+    sim.foreground = Some(USER_APP);
+    sim.run_for(2 * 60_000);
+    assert!(!sim.is_yielded(SYNC));
+    sim.proc_mut(USER_APP).cpu_pct = 80.0;
+    sim.run_for(60_000);
+    assert!(sim.is_yielded(SYNC));
+    assert_eq!(
+        sim.state_of(SYNC).map(|d| d.resources),
+        Some(ResourcePriority::Low)
+    );
+}

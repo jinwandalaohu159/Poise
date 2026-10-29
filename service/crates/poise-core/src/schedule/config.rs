@@ -4,6 +4,8 @@ use super::trackers::{BusyRule, DemandRule, ForegroundHold};
 use crate::action::CoreSet;
 use crate::model::Millis;
 
+const MB: f64 = 1024.0 * 1024.0;
+
 #[derive(Debug, Clone, Copy)]
 pub struct ScheduleConfig {
     /// 失去前台后多久内仍算"正在用"、最多保持几个程序。
@@ -43,12 +45,17 @@ impl Default for ScheduleConfig {
             busy: BusyRule {
                 core_pct: 10.0,
                 core_pct_high: 3.0,
+                disk_bytes_per_s: 8.0 * MB,
                 release_after_ms: 60_000,
+                reyield_after_ms: 20_000,
             },
             busy_with_audio: BusyRule {
                 core_pct: 25.0,
                 core_pct_high: 25.0,
+                // 发声的程序（播放、通话）本来就会读写，只看处理器。
+                disk_bytes_per_s: f64::INFINITY,
                 release_after_ms: 60_000,
+                reyield_after_ms: 20_000,
             },
             game_session_hold_ms: 3 * 60_000,
             audio_hold_ms: 30_000,

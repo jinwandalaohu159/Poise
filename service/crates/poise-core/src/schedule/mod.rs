@@ -24,7 +24,7 @@ use crate::model::{Millis, Pid, PriorityClass, ProcessKey, ProcessSample, Snapsh
 use crate::prefs::Mode;
 
 pub use config::{CoreLayout, ScheduleConfig};
-pub use decisions::{Decision, Verdict};
+pub use decisions::{Cause, Decision, ProgramState, Verdict};
 pub use policy::Desired;
 pub use reconcile::{PlannedAction, ProcessSchedule};
 
@@ -103,7 +103,7 @@ impl Scheduler {
     pub fn plan(&mut self, input: &ScheduleInput) -> SchedulePlan {
         let effective_mode = self.observe(input);
         let programs = if input.enabled {
-            self.judge_programs(input.classes)
+            self.judge_programs(input.classes, input.snapshot.at)
         } else {
             HashMap::new()
         };

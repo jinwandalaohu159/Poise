@@ -7,7 +7,9 @@ use poise_core::classify::Classification;
 use poise_core::model::{Pid, ProcessKey, Snapshot};
 use poise_core::prefs::Mode;
 use poise_core::safety::{GuardedExecutor, Trigger};
-use poise_core::schedule::{Decision, GameInfo, PlannedAction, Pressure, ScheduleInput, Verdict};
+use poise_core::schedule::{
+    Cause, Decision, GameInfo, PlannedAction, Pressure, ProgramState, ScheduleInput, Verdict,
+};
 use poise_platform::observe::system;
 use poise_protocol::ErrorCode;
 
@@ -138,7 +140,7 @@ fn execute(
 /// 记录调度决定的变化：需求的变化，以及哪个程序因为什么被调整、恢复。
 fn log_decisions(decisions: &[Decision], snapshot: &Snapshot) {
     for d in decisions {
-        match *d {
+        match d {
             Decision::Pressure(p) => log::info!(
                 "处理器需求：{}",
                 match p {
@@ -147,24 +149,52 @@ fn log_decisions(decisions: &[Decision], snapshot: &Snapshot) {
                     Pressure::High => "高（玩游戏、发热）",
                 }
             ),
-            Decision::Program {
-                root,
-                from,
-                to,
-                load_pct,
-            } => {
+            Decision::Program { root, from, state } => {
                 let name = snapshot
                     .find(root.pid)
                     .map_or_else(|| root.pid.to_string(), |p| p.facts.friendly_name());
-                let what = match to {
-                    Verdict::Playing => "按游戏调度",
-                    Verdict::Yielded => "后台忙，让路",
-                    Verdict::Backseat => "玩游戏时后台忙，移到小核",
-                    Verdict::Normal if from == Verdict::Playing => "不再按游戏调度",
-                    Verdict::Normal => "恢复",
-                };
-                log::info!("{name}（进程 {}，负载 {load_pct}%）：{what}", root.pid);
+                log::info!(
+                    "{name}（进程 {}，{}）：{}",
+                    root.pid,
+                    load_text(state),
+                    what_text(*from, state)
+                );
             }
         }
+    }
+}
+
+fn load_text(state: &ProgramState) -> String {
+    if state.disk_mb_s == 0 {
+        format!("负载 {}%", state.load_pct)
+    } else {
+        format!("负载 {}%，磁盘 {} MB/s", state.load_pct, state.disk_mb_s)
+    }
+}
+
+fn what_text(from: Verdict, state: &ProgramState) -> String {
+    let what = match state.verdict {
+        Verdict::Playing => "按游戏调度",
+        Verdict::Yielded => "后台忙，让路",
+        Verdict::Backseat => "玩游戏时后台忙，移到小核",
+        Verdict::Normal if from == Verdict::Playing => "不再按游戏调度",
+        Verdict::Normal => "恢复",
+    };
+    match state.cause {
+        Some(cause) => format!("{what}（{}）", cause_text(cause)),
+        None => what.to_string(),
+    }
+}
+
+fn cause_text(cause: Cause) -> &'static str {
+    match cause {
+        Cause::Foreground => "在前台",
+        Cause::RecentlyUsed => "刚用过",
+        Cause::Audio => "在发声",
+        Cause::Boosted => "临时全速",
+        Cause::Marked => "设为始终优先或游戏",
+        Cause::NoDemand => "没人需要处理器",
+        Cause::LessDemand => "需求降低",
+        Cause::Exited => "已退出",
     }
 }

@@ -150,6 +150,10 @@ mod tests {
                 .unwrap(),
         );
         let pid = child.0.id();
+        // 先定好起点：子进程会继承父进程的优先级，而测试进程本身可能正被调度（例如 Poise 让它让路）。
+        let h = open_process(pid, PROCESS_SET_INFORMATION).unwrap();
+        set_memory_priority(h.raw(), MEMORY_PRIORITY_NORMAL).unwrap();
+        set_io_priority(h.raw(), IO_PRIORITY_NORMAL).unwrap();
         assert_eq!(read(pid), (MEMORY_PRIORITY_NORMAL, IO_PRIORITY_NORMAL));
         set(pid, ResourcePriority::Low).unwrap();
         assert_eq!(read(pid), (MEMORY_PRIORITY_LOW, IO_PRIORITY_LOW));
@@ -157,7 +161,6 @@ mod tests {
         assert_eq!(read(pid), (MEMORY_PRIORITY_NORMAL, IO_PRIORITY_NORMAL));
 
         // 程序自己调得更低的：还原时不动。
-        let h = open_process(pid, PROCESS_SET_INFORMATION).unwrap();
         set_memory_priority(h.raw(), MEMORY_PRIORITY(1)).unwrap();
         set_io_priority(h.raw(), 0).unwrap();
         set(pid, ResourcePriority::Default).unwrap();

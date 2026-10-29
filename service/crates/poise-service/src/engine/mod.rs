@@ -15,6 +15,7 @@
 
 mod apps;
 mod auto;
+pub(crate) mod catalog;
 pub(crate) mod changes;
 mod cleanup;
 mod convert;
@@ -34,6 +35,7 @@ mod status;
 pub use cycle::TICK;
 
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use poise_core::activity::{ActivityConfig, ActivityTracker};
@@ -66,6 +68,7 @@ use crate::config::{RunConfig, RunMode};
 use crate::gpu_feed::GpuFeed;
 use crate::sensor_feed::SensorFeed;
 
+use catalog::Catalog;
 use changes::Changes;
 use session::SessionTracker;
 
@@ -122,6 +125,8 @@ pub struct Engine {
     /// 硬件读数在采集线程里进行，这里只取最近一次的结果。
     sensors: SensorFeed,
     changes: Changes,
+    /// 系统优化项的目录（在请求线程里刷新，见 `catalog`）。
+    catalog: Arc<Catalog>,
     settings: Settings,
     settings_file: JsonFile<Settings>,
     session: SessionTracker,
@@ -205,6 +210,7 @@ impl Engine {
             sensors: SensorFeed::start(hardware.take_sensors(), TICK),
             hardware,
             changes: Changes::new(&cfg.data_dir, user, cfg.dry_run),
+            catalog: Arc::default(),
             settings,
             settings_file,
             seen: seen_file.load().unwrap_or_default(),

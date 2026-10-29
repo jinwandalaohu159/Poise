@@ -4,19 +4,27 @@
 use std::collections::{HashMap, HashSet};
 
 use super::Scheduler;
-use super::decisions::{Decision, Verdict};
+use super::decisions::{Cause, Decision, ProgramState, Verdict};
 use super::policy::{self, Desired, ProcessView};
+use super::trackers::{Demand, Pressure};
 use crate::action::CoreSet;
 use crate::classify::Classification;
-use crate::model::Pid;
+use crate::model::{Millis, Pid};
+use crate::prefs::AppPreference;
 
 impl Scheduler {
     /// 每个程序（进程树）此刻的情况。同一棵树里的进程一起判断，每轮每个程序只判断一次。
     pub(super) fn judge_programs(
         &mut self,
         classes: &HashMap<Pid, Classification>,
+        now: Millis,
     ) -> HashMap<Pid, Program> {
         let gaming = self.games.any_active();
+        let demand = Demand {
+            now,
+            pressure: self.pressure,
+            idle_for: self.idle_for,
+        };
         let boosted = self.boosts.roots(classes);
         let roots: HashSet<Pid> = classes.values().map(|c| c.root_pid).collect();
         let mut programs = HashMap::with_capacity(roots.len());
@@ -32,7 +40,7 @@ impl Scheduler {
                 needs_all_cores: active_game
                     && self.game_cores.needs_all_cores(
                         root,
-                        self.load.of(&root),
+                        self.load.of(&root).core_pct,
                         self.cfg.cores.performance_threads,
                     ),
                 recently_foreground: self.foreground.recently_foreground(root_pid),
@@ -46,8 +54,7 @@ impl Scheduler {
                 root,
                 load,
                 policy::in_use(&program.view(root_class, false)),
-                self.pressure,
-                self.idle_for,
+                demand,
                 self.cfg.busy,
             );
             // 发声的程序：只在玩游戏时、除了发声之外没在用，才让到小核。
@@ -61,8 +68,7 @@ impl Scheduler {
                 root,
                 load,
                 in_use_besides_audio,
-                self.pressure,
-                self.idle_for,
+                demand,
                 self.cfg.busy_with_audio,
             );
             programs.insert(root_pid, program);
@@ -76,16 +82,48 @@ impl Scheduler {
         classes: &HashMap<Pid, Classification>,
         programs: &HashMap<Pid, Program>,
     ) -> Vec<Decision> {
-        let verdicts: Vec<_> = programs
+        let states: Vec<_> = programs
             .iter()
             .filter_map(|(root_pid, program)| {
                 let root = self.load.root(*root_pid)?;
                 let class = classes.get(root_pid)?;
                 let verdict = Verdict::of(self.desired(class, program, false));
-                Some((root, verdict, self.load.of(&root).round() as u32))
+                let usage = self.load.of(&root);
+                let cause = (verdict == Verdict::Normal).then(|| self.cause(class, program));
+                Some((
+                    root,
+                    ProgramState {
+                        verdict,
+                        load_pct: usage.core_pct.round() as u32,
+                        disk_mb_s: (usage.disk_bytes_per_s / (1024.0 * 1024.0)).round() as u32,
+                        cause,
+                    },
+                ))
             })
             .collect();
-        self.decisions.update(self.pressure, verdicts)
+        self.decisions.update(self.pressure, states)
+    }
+
+    /// 程序没有让路的原因。
+    fn cause(&self, class: &Classification, program: &Program) -> Cause {
+        if class.in_foreground_tree {
+            Cause::Foreground
+        } else if program.audible {
+            Cause::Audio
+        } else if program.boosted {
+            Cause::Boosted
+        } else if matches!(
+            class.preference,
+            AppPreference::AlwaysFast | AppPreference::Game
+        ) {
+            Cause::Marked
+        } else if program.recently_foreground && !program.gaming {
+            Cause::RecentlyUsed
+        } else if self.pressure == Pressure::None {
+            Cause::NoDemand
+        } else {
+            Cause::LessDemand
+        }
     }
 
     pub(super) fn desired(
