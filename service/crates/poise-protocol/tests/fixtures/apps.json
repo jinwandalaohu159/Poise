@@ -9,7 +9,7 @@
     "schedule": {
       "state": "scheduled",
       "foreground": false,
-      "small_cores": true,
+      "cores": "efficiency",
       "priority": "lower",
       "adjustment": "yielded"
     },
@@ -28,7 +28,7 @@
     "schedule": {
       "state": "scheduled",
       "foreground": true,
-      "small_cores": false,
+      "cores": "performance",
       "priority": "higher",
       "adjustment": "raised"
     },
@@ -46,7 +46,7 @@
         "schedule": {
           "state": "scheduled",
           "foreground": true,
-          "small_cores": false,
+          "cores": "performance",
           "priority": "higher",
           "adjustment": "raised"
         }
@@ -61,7 +61,7 @@
         "schedule": {
           "state": "self_managed",
           "foreground": false,
-          "small_cores": null,
+          "cores": null,
           "priority": "normal",
           "adjustment": "none"
         }
@@ -78,7 +78,7 @@
     "schedule": {
       "state": "scheduled",
       "foreground": false,
-      "small_cores": null,
+      "cores": null,
       "priority": "high",
       "adjustment": "raised"
     },
@@ -97,7 +97,7 @@
     "schedule": {
       "state": "excluded",
       "foreground": false,
-      "small_cores": null,
+      "cores": null,
       "priority": "normal",
       "adjustment": "none"
     },
@@ -116,7 +116,7 @@
     "schedule": {
       "state": "self_managed",
       "foreground": false,
-      "small_cores": null,
+      "cores": null,
       "priority": "normal",
       "adjustment": "none"
     },
@@ -135,7 +135,7 @@
     "schedule": {
       "state": "off",
       "foreground": false,
-      "small_cores": null,
+      "cores": null,
       "priority": "normal",
       "adjustment": "none"
     },

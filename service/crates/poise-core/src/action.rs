@@ -18,6 +18,17 @@ pub enum EcoQos {
     On,
 }
 
+/// 内存与磁盘读写的优先级，一起调整。低时：内存紧张时系统先回收它的内存页，磁盘忙时先满足别人的读写。
+/// Windows 不会因为程序在后台就降低这两项，后台的更新、索引、同步大量读写磁盘时，前台和游戏照样被拖慢。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum ResourcePriority {
+    /// 系统默认（正常）。
+    #[default]
+    Default,
+    /// 低：先回收它的内存页、先满足别人的磁盘读写，保护正在用的程序。
+    Low,
+}
+
 /// 进程可用的核心集合。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum CoreSet {
@@ -41,6 +52,10 @@ pub enum Action {
     SetCoreSet {
         pid: Pid,
         set: CoreSet,
+    },
+    SetResourcePriority {
+        pid: Pid,
+        priority: ResourcePriority,
     },
     /// 重启承载或拉起该进程的服务。
     RestartService {
@@ -76,6 +91,7 @@ impl Action {
             Self::SetPriority { pid, .. }
             | Self::SetEcoQos { pid, .. }
             | Self::SetCoreSet { pid, .. }
+            | Self::SetResourcePriority { pid, .. }
             | Self::RestartService { pid, .. }
             | Self::RecreateCompositor { pid }
             | Self::RestartApp { pid } => *pid,
@@ -100,6 +116,10 @@ impl Action {
                 CoreSet::Performance => ActionKind::Boost,
                 CoreSet::Efficiency => ActionKind::Demote,
             },
+            Self::SetResourcePriority { priority, .. } => match priority {
+                ResourcePriority::Default => ActionKind::Restore,
+                ResourcePriority::Low => ActionKind::Demote,
+            },
             Self::RestartService { .. }
             | Self::RecreateCompositor { .. }
             | Self::RestartApp { .. } => ActionKind::Restart,
@@ -110,7 +130,10 @@ impl Action {
     pub fn is_task_manager_equivalent(&self) -> bool {
         matches!(
             self,
-            Self::SetPriority { .. } | Self::SetEcoQos { .. } | Self::SetCoreSet { .. }
+            Self::SetPriority { .. }
+                | Self::SetEcoQos { .. }
+                | Self::SetCoreSet { .. }
+                | Self::SetResourcePriority { .. }
         )
     }
 }

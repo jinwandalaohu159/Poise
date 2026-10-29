@@ -1,5 +1,5 @@
-//! 进程的静态属性：路径、关键进程标记、保护级别、友好名称。
-//! 每个进程只在第一次见到时读取一次，之后走缓存。
+//! 进程的静态属性：路径、关键进程标记、保护级别。
+//! 每个进程只在第一次见到时读取一次，之后走缓存。友好名称要读磁盘，见 [`super::names`]。
 
 use std::collections::HashMap;
 use std::ffi::c_void;
@@ -12,14 +12,12 @@ use windows::Win32::System::Threading::{
 use windows::core::BOOL;
 
 use crate::win::handle::{OwnedHandle, image_path_of, open_process};
-use crate::win::version_info;
 
 const PROTECTION_LEVEL_NONE: u32 = 0xFFFF_FFFE;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct StaticFacts {
     pub image_path: Option<String>,
-    pub display_name: Option<String>,
     pub is_critical: bool,
     pub protection: Protection,
 }
@@ -27,7 +25,6 @@ pub struct StaticFacts {
 #[derive(Default)]
 pub struct FactsCache {
     by_key: HashMap<ProcessKey, StaticFacts>,
-    names_by_path: HashMap<String, Option<String>>,
 }
 
 impl FactsCache {
@@ -45,7 +42,7 @@ impl FactsCache {
         self.by_key.retain(|k, _| alive(k));
     }
 
-    fn load(&mut self, key: ProcessKey) -> StaticFacts {
+    fn load(&self, key: ProcessKey) -> StaticFacts {
         if key.pid <= 4 {
             return StaticFacts {
                 is_critical: true,
@@ -59,19 +56,8 @@ impl FactsCache {
                 ..Default::default()
             };
         };
-        let image_path = image_path_of(&handle);
-        let display_name = image_path.as_ref().and_then(|p| {
-            self.names_by_path
-                .entry(p.clone())
-                .or_insert_with(|| {
-                    let v = version_info::read(p);
-                    v.file_description.or(v.product_name)
-                })
-                .clone()
-        });
         StaticFacts {
-            image_path: image_path.map(|p| p.to_lowercase()),
-            display_name,
+            image_path: image_path_of(&handle).map(|p| p.to_lowercase()),
             is_critical: is_critical(&handle),
             protection: protection(&handle),
         }

@@ -3,58 +3,39 @@
 //!
 //! 对外只有 [`Scheduler`]：每个采样周期调用一次 [`Scheduler::plan`]，
 //! 把动作交给安全执行器后用 [`Scheduler::report`] 回报结果。
+//!
+//! 每一轮：`trackers` 跨周期观察（前台、游戏、发声、负载、需求、忙碌）→ `program` 判断每个程序
+//! （进程树）→ `policy` 决定每个进程应有的状态 → `reconcile` 与已应用的比较，得到动作 →
+//! `decisions` 记下程序级的变化供日志。参数在 `config`。
 
+mod config;
+mod decisions;
 mod policy;
+mod program;
 mod reconcile;
 mod trackers;
 
 use std::collections::{HashMap, HashSet};
 
-use crate::action::{ActionKind, CoreSet, ExecError, ExecOutcome};
+use crate::action::{ActionKind, ExecError, ExecOutcome};
 use crate::activity::ActivityTracker;
 use crate::classify::Classification;
 use crate::model::{Millis, Pid, PriorityClass, ProcessKey, ProcessSample, Snapshot};
 use crate::prefs::Mode;
 
+pub use config::{CoreLayout, ScheduleConfig};
+pub use decisions::{Decision, Verdict};
 pub use policy::Desired;
 pub use reconcile::{PlannedAction, ProcessSchedule};
 
-use policy::ProcessView;
+use decisions::DecisionLog;
+use program::Program;
 use reconcile::Reconciler;
-use trackers::{AudioTracker, BusyTracker, ForegroundTracker, GameTracker, TempBoosts};
-pub use trackers::{BusyRule, ForegroundHold};
-
-#[derive(Debug, Clone, Copy)]
-pub struct ScheduleConfig {
-    /// 失去前台后多久内仍算"正在用"、最多保持几个程序。
-    pub foreground_hold: ForegroundHold,
-    /// 后台程序怎样算"在忙"、要让路。
-    pub busy: BusyRule,
-    /// 停声后多久内仍算"在发声"。
-    pub audio_hold_ms: Millis,
-    /// 自动识别的游戏（全屏且在渲染）要持续多久才确认为"正在玩"。
-    pub game_confirm_ms: Millis,
-    /// 是否是大小核处理器。不是时不限制核心，只用优先级和节能区分前后台。
-    pub hybrid: bool,
-}
-
-impl Default for ScheduleConfig {
-    fn default() -> Self {
-        Self {
-            foreground_hold: ForegroundHold {
-                ms: 5 * 60_000,
-                max_apps: 3,
-            },
-            busy: BusyRule {
-                core_pct: 10.0,
-                after_ms: 10_000,
-            },
-            audio_hold_ms: 30_000,
-            game_confirm_ms: 6_000,
-            hybrid: true,
-        }
-    }
-}
+use trackers::{
+    AudioTracker, BusyTracker, DemandSignals, DemandTracker, ForegroundTracker, GameCores,
+    GameTracker, TempBoosts, TreeLoad,
+};
+pub use trackers::{BusyRule, DemandRule, ForegroundHold, Pressure};
 
 pub struct ScheduleInput<'a> {
     pub snapshot: &'a Snapshot,
@@ -67,6 +48,9 @@ pub struct ScheduleInput<'a> {
     pub user_mode: Mode,
     /// 玩游戏时切换到的模式；None 表示不切换。
     pub game_mode: Option<Mode>,
+    pub on_battery: bool,
+    /// 处理器接近温度上限（上一轮的判断）。
+    pub hot: bool,
 }
 
 /// 正在运行的游戏（用于界面显示"游戏中 · 英雄联盟"）。
@@ -82,6 +66,8 @@ pub struct SchedulePlan {
     pub effective_mode: Mode,
     pub game: Option<GameInfo>,
     pub actions: Vec<PlannedAction>,
+    /// 和上一轮相比，需求和对各程序的决定有什么变化（供日志记录）。
+    pub decisions: Vec<Decision>,
 }
 
 #[derive(Default)]
@@ -89,9 +75,20 @@ pub struct Scheduler {
     cfg: ScheduleConfig,
     foreground: ForegroundTracker,
     games: GameTracker,
+    /// 正在玩的游戏所在的进程树（每轮更新）。
+    game_roots: HashSet<Pid>,
+    game_cores: GameCores,
     audio: AudioTracker,
+    load: TreeLoad,
+    demand: DemandTracker,
+    /// 本轮的资源需求，以及已经连续多久没有需求。
+    pressure: Pressure,
+    idle_for: Millis,
     busy: BusyTracker,
+    /// 玩游戏时，发声又在忙的程序（只让到小核）。
+    busy_with_audio: BusyTracker,
     boosts: TempBoosts,
+    decisions: DecisionLog,
     reconciler: Reconciler,
 }
 
@@ -104,57 +101,19 @@ impl Scheduler {
     }
 
     pub fn plan(&mut self, input: &ScheduleInput) -> SchedulePlan {
-        let snap = input.snapshot;
-        let now = snap.at;
-        self.foreground
-            .update(now, input.classes, self.cfg.foreground_hold);
-        self.games
-            .update(snap, input.classes, now, self.cfg.game_confirm_ms);
-        self.audio
-            .update(input.classes, now, self.cfg.audio_hold_ms);
-        self.boosts.expire(now);
-        let alive: HashSet<ProcessKey> = snap.processes.iter().map(|p| p.facts.key).collect();
-        self.reconciler.retain_alive(&alive);
-        if input.enabled {
-            self.busy.retain_alive(&alive);
+        let effective_mode = self.observe(input);
+        let programs = if input.enabled {
+            self.judge_programs(input.classes)
         } else {
-            // 关闭期间不累计"在忙"：重新打开时从头判断，不会一打开就让一批程序让路。
-            self.busy = BusyTracker::default();
-        }
-
-        let game_active = self.games.any_active();
-        let effective_mode = match input.game_mode {
-            Some(game) if game_active => game,
-            _ => input.user_mode,
+            HashMap::new()
         };
-
-        self.reconciler.begin(now);
-        let by_pid = snap.by_pid();
-        let mut actions = Vec::new();
-        for p in &snap.processes {
-            let Some(class) = input.classes.get(&p.facts.key.pid) else {
-                continue;
-            };
-            let key = p.facts.key;
-            let desired = if input.enabled {
-                let core_pct = input.activity.usage(&key).core_pct;
-                self.desired(class, key, core_pct, now)
-            } else {
-                Desired::NEUTRAL
-            };
-            let inherited_low = self.inherited_low(p, &by_pid);
-            actions.extend(
-                self.reconciler
-                    .diff(key, p.facts.priority, inherited_low, desired),
-            );
-        }
-        // 先恢复（回到前台的程序立即拿回性能），再让路。
-        actions.sort_by_key(|a| a.action.kind(a.original_priority) == ActionKind::Demote);
-
+        let actions = self.diff(input, &programs);
+        let decisions = self.record_decisions(input.classes, &programs);
         SchedulePlan {
             effective_mode,
-            game: self.current_game(snap),
+            game: self.current_game(input.snapshot),
             actions,
+            decisions,
         }
     }
 
@@ -196,6 +155,89 @@ impl Scheduler {
         self.reconciler.state(key)
     }
 
+    /// 更新各项跟踪（前台、游戏、发声、临时全速、负载、需求），返回实际生效的模式。
+    fn observe(&mut self, input: &ScheduleInput) -> Mode {
+        let snap = input.snapshot;
+        let now = snap.at;
+        self.foreground
+            .update(now, input.classes, self.cfg.foreground_hold);
+        self.games
+            .update(snap, input.classes, now, self.cfg.game_confirm_ms);
+        self.audio
+            .update(snap, input.classes, now, self.cfg.audio_hold_ms);
+        self.boosts.expire(now);
+        let alive: HashSet<ProcessKey> = snap.processes.iter().map(|p| p.facts.key).collect();
+        self.reconciler.retain_alive(&alive);
+        self.game_cores.retain_alive(&alive);
+        if input.enabled {
+            self.busy.retain_alive(&alive);
+            self.busy_with_audio.retain_alive(&alive);
+        } else {
+            // 关闭期间不累计"在忙"：重新打开时从头判断，不会一打开就让一批程序让路。
+            self.busy = BusyTracker::default();
+            self.busy_with_audio = BusyTracker::default();
+        }
+
+        self.game_roots = self
+            .games
+            .active_keys()
+            .filter_map(|k| input.classes.get(&k.pid))
+            .map(|c| c.root_pid)
+            .collect();
+        self.load.update(
+            snap,
+            input.classes,
+            input.activity,
+            now,
+            self.cfg.load_smoothing_ms,
+        );
+        let signals = DemandSignals {
+            gaming: self.games.any_active(),
+            hot: input.hot,
+            on_battery: input.on_battery,
+            foreground_core_pct: self.load.foreground(),
+            system_pct: input.activity.system_cpu_pct(),
+        };
+        self.pressure = self.demand.update(signals, now, self.cfg.demand);
+        self.idle_for = self.demand.idle_for(now);
+        match input.game_mode {
+            Some(game) if self.games.in_session(now, self.cfg.game_session_hold_ms) => game,
+            _ => input.user_mode,
+        }
+    }
+
+    /// 每个进程期望的状态与已应用的比较，得到要执行的动作。先恢复（回到前台的程序立即拿回性能），再让路。
+    fn diff(
+        &mut self,
+        input: &ScheduleInput,
+        programs: &HashMap<Pid, Program>,
+    ) -> Vec<PlannedAction> {
+        let snap = input.snapshot;
+        self.reconciler.begin(snap.at);
+        let by_pid = snap.by_pid();
+        let mut actions = Vec::new();
+        for p in &snap.processes {
+            let Some(class) = input.classes.get(&p.facts.key.pid) else {
+                continue;
+            };
+            let key = p.facts.key;
+            let desired = match programs.get(&class.root_pid) {
+                Some(program) => {
+                    let emitting = class.emits_audio || self.audio.emitting(&key);
+                    self.desired(class, program, emitting)
+                }
+                None => Desired::NEUTRAL,
+            };
+            let inherited_low = self.inherited_low(p, &by_pid);
+            actions.extend(
+                self.reconciler
+                    .diff(key, p.facts.priority, inherited_low, desired),
+            );
+        }
+        actions.sort_by_key(|a| a.action.kind(a.original_priority) == ActionKind::Demote);
+        actions
+    }
+
     /// 父进程被 Poise 降为"低于正常"后新建的子进程，会继承这个优先级（Windows 的规则）。
     fn inherited_low(&self, p: &ProcessSample, by_pid: &HashMap<Pid, &ProcessSample>) -> bool {
         p.facts.priority == Some(PriorityClass::BelowNormal)
@@ -205,31 +247,6 @@ impl Scheduler {
                 .is_some_and(|parent| {
                     parent.is_parent_of(p) && self.reconciler.lowered(&parent.facts.key)
                 })
-    }
-
-    fn desired(
-        &mut self,
-        class: &Classification,
-        key: ProcessKey,
-        core_pct: f32,
-        now: Millis,
-    ) -> Desired {
-        let mut view = ProcessView {
-            class,
-            active_game: self.games.is_active(&key),
-            recently_foreground: self.foreground.recently_foreground(class.root_pid),
-            boosted: self.boosts.is_boosted(&key, class.root_pid),
-            audible: class.plays_audio || self.audio.audible(class.root_pid),
-            busy: false,
-        };
-        view.busy = self
-            .busy
-            .observe(key, core_pct, policy::in_use(&view), now, self.cfg.busy);
-        let mut desired = policy::decide(&view);
-        if !self.cfg.hybrid {
-            desired.cores = CoreSet::All;
-        }
-        desired
     }
 
     fn current_game(&self, snap: &Snapshot) -> Option<GameInfo> {

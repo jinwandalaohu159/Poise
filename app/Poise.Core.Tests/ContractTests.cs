@@ -134,9 +134,9 @@ public sealed class ContractTests
     {
         var apps = TestSupport.Fixture<List<AppEntry>>("apps.json");
 
-        Assert.Equal(new AppSchedule(ScheduleState.Scheduled, false, true, PriorityLevel.Lower, Adjustment.Yielded), apps[0].Schedule);
-        Assert.Equal(new AppSchedule(ScheduleState.Scheduled, true, false, PriorityLevel.Higher, Adjustment.Raised), apps[1].Schedule);
-        Assert.Null(apps[2].Schedule!.SmallCores);
+        Assert.Equal(new AppSchedule(ScheduleState.Scheduled, false, CoreUse.Efficiency, PriorityLevel.Lower, Adjustment.Yielded), apps[0].Schedule);
+        Assert.Equal(new AppSchedule(ScheduleState.Scheduled, true, CoreUse.Performance, PriorityLevel.Higher, Adjustment.Raised), apps[1].Schedule);
+        Assert.Null(apps[2].Schedule!.Cores);
         Assert.Equal(PriorityLevel.High, apps[2].Schedule!.Priority);
         Assert.Equal([ScheduleState.Excluded, ScheduleState.SelfManaged, ScheduleState.Off], apps.Skip(3).Take(3).Select(a => a.Schedule!.State));
         Assert.Equal([AppKind.App, AppKind.App, AppKind.App, AppKind.Excluded], apps.Take(4).Select(a => a.Kind));

@@ -28,6 +28,8 @@ pub struct CpuTopology {
     pub efficiency_count: CoreCount,
     /// 第 0 组各逻辑处理器是否是大核（按逻辑处理器序号）。不是大小核架构时为空。
     pub performance_by_index: Vec<bool>,
+    /// 最高的效率等级（大核所在的等级）。Windows 从 0（最省电的核心）开始编号，不是大小核架构时为 0。
+    pub top_class: u8,
 }
 
 /// 系统报告的一个 CPU Set。
@@ -62,6 +64,7 @@ impl CpuTopology {
         let mut t = Self {
             performance_count: count(&big),
             efficiency_count: count(&small),
+            top_class: max,
             ..Self::default()
         };
         if small.is_empty() {

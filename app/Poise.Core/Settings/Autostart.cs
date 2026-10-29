@@ -8,7 +8,7 @@ namespace Poise.Core.Settings;
 /// 登录后自动启动托盘代理（poise-agent.exe，常驻、占用极小；界面按需启动）。
 /// <para>
 /// 用任务计划程序的登录触发器，而不是 Run 键：Windows 会把 Run 键里的程序推迟到登录后一两分钟才启动，
-/// 登录触发的任务则立即启动。任务定义是安装目录里的 AutostartTask.xml（安装脚本也用它），
+/// 登录触发的任务则立即启动。任务定义是安装目录里的 AutostartTask.xml（首次安装时服务的 install 命令也用它），
 /// 每个用户一个任务，以普通权限运行，创建和删除都不需要管理员权限。
 /// </para>
 /// 这里的方法都不抛异常：失败时记日志，返回"未开启"或"没有成功"。
@@ -28,7 +28,7 @@ public static class Autostart
     /// <summary>找不到托盘代理时（例如开发时单独运行界面）不能设置开机启动。</summary>
     public static bool IsAvailable => File.Exists(AgentPath) && File.Exists(TemplatePath);
 
-    /// <summary>与 install.ps1 使用同一个名字。</summary>
+    /// <summary>与服务的 install 命令（poise-service/src/install.rs）使用同一个名字。</summary>
     private static string TaskName => $"Agent {UserSid}";
 
     private static string UserSid => WindowsIdentity.GetCurrent().User?.Value ?? "";

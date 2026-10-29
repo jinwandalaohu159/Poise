@@ -227,19 +227,22 @@ public sealed class PresentationTests
     public void Schedule_state_reads_like_a_status_line()
     {
         Assert.Equal("后台 · 能效核 · 优先级较低",
-            ScheduleText.State(new AppSchedule(ScheduleState.Scheduled, false, true, PriorityLevel.Lower, Adjustment.Yielded)));
+            ScheduleText.State(new AppSchedule(ScheduleState.Scheduled, false, CoreUse.Efficiency, PriorityLevel.Lower, Adjustment.Yielded)));
         // 不是大小核处理器：不提核心。
         Assert.Equal("后台 · 优先级较低",
             ScheduleText.State(new AppSchedule(ScheduleState.Scheduled, false, null, PriorityLevel.Lower, Adjustment.Yielded)));
         // 没调整过：程序自己的优先级不当成 Poise 的调整。
         Assert.Equal("前台 · 未调整",
-            ScheduleText.State(new AppSchedule(ScheduleState.Scheduled, true, false, PriorityLevel.Higher, Adjustment.None)));
+            ScheduleText.State(new AppSchedule(ScheduleState.Scheduled, true, CoreUse.Any, PriorityLevel.Higher, Adjustment.None)));
         Assert.Equal("后台 · 不受系统节能限速",
-            ScheduleText.State(new AppSchedule(ScheduleState.Scheduled, false, false, PriorityLevel.Normal, Adjustment.Protected)));
-        Assert.Equal("前台 · 优先级较高 · 不受系统节能限速",
-            ScheduleText.State(new AppSchedule(ScheduleState.Scheduled, true, false, PriorityLevel.Higher, Adjustment.Raised)));
+            ScheduleText.State(new AppSchedule(ScheduleState.Scheduled, false, CoreUse.Any, PriorityLevel.Normal, Adjustment.Protected)));
+        // 正在玩的游戏：固定在大核。
+        Assert.Equal("后台 · 性能核 · 不受系统节能限速",
+            ScheduleText.State(new AppSchedule(ScheduleState.Scheduled, false, CoreUse.Performance, PriorityLevel.Normal, Adjustment.Protected)));
+        Assert.Equal("前台 · 性能核 · 优先级较高 · 不受系统节能限速",
+            ScheduleText.State(new AppSchedule(ScheduleState.Scheduled, true, CoreUse.Performance, PriorityLevel.Higher, Adjustment.Raised)));
         Assert.Equal("未调整（由程序自行管理）",
-            ScheduleText.State(new AppSchedule(ScheduleState.SelfManaged, false, true, PriorityLevel.Normal, Adjustment.None)));
+            ScheduleText.State(new AppSchedule(ScheduleState.SelfManaged, false, CoreUse.Efficiency, PriorityLevel.Normal, Adjustment.None)));
         Assert.Null(ScheduleText.State(null));
     }
 
@@ -405,7 +408,7 @@ public sealed class PresentationTests
     {
         var apps = TestSupport.Fixture<List<AppEntry>>("apps.json");
 
-        Assert.Equal("前台 · 优先级较高 · 不受系统节能限速 · 2 个进程", AppsText.Detail(apps[1]));
+        Assert.Equal("前台 · 性能核 · 优先级较高 · 不受系统节能限速 · 2 个进程", AppsText.Detail(apps[1]));
         Assert.Equal("后台 · 能效核 · 优先级较低", AppsText.Detail(apps[0]));
         Assert.Equal(apps[^1].Path, AppsText.Detail(apps[^1]));
         Assert.Equal(("6.5%", "3.0 GB"), (AppsText.Cpu(apps[1].CpuPct), AppsText.Memory(apps[1].MemoryBytes)));

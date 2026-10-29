@@ -6,7 +6,7 @@ mod history;
 mod stutter;
 
 pub use health::{Health, HealthCode, HealthInput, Level, assess};
-pub use heat::{Heat, HeatWatch, OverheatGuard};
+pub use heat::{Heat, HeatWatch};
 pub use history::{HISTORY_WINDOW_MS, HistoryPoint, MetricHistory, Sample};
 pub use stutter::{StutterCause, StutterInput, StutterReport, analyze_stutter};
 
@@ -23,10 +23,12 @@ pub struct Thermals {
 
 #[derive(Debug, Clone, Copy)]
 pub struct DiagnoseConfig {
-    /// 平滑后的温度达到这个值进入"温度过高"。
+    /// 平滑后的温度达到这个值进入"温度过高"。笔记本处理器在高性能模式下本来就工作在 90～100°C
+    /// （英特尔移动处理器的上限是 100°C，到了会自己降频），阈值贴着上限设，正常玩游戏不报警。
     pub hot_temp: f32,
     /// 已经"温度过高"时，降到这个值以下才退出（避免在阈值附近反复切换）。
     pub hot_release_temp: f32,
+    /// 平滑后的温度达到这个值算"严重过高"：已经长时间贴着上限，处理器在降频。
     pub critical_temp: f32,
     /// 温度平滑的时间常数：短于它的尖峰影响很小。
     pub heat_smoothing_ms: u64,
@@ -43,9 +45,9 @@ pub struct DiagnoseConfig {
 impl Default for DiagnoseConfig {
     fn default() -> Self {
         Self {
-            hot_temp: 90.0,
-            hot_release_temp: 85.0,
-            critical_temp: 95.0,
+            hot_temp: 95.0,
+            hot_release_temp: 90.0,
+            critical_temp: 99.0,
             heat_smoothing_ms: 20_000,
             commit_tired_pct: 85.0,
             throttle_load_pct: 60.0,

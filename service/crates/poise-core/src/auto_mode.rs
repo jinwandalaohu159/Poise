@@ -1,13 +1,14 @@
-//! "自动"模式：按负载、空闲、温度、供电在安静 / 均衡 / 全力之间切换。
+//! "自动"模式：按负载、空闲、供电在安静 / 均衡 / 全力之间切换。
 //!
 //! - 持续高负载（前台程序或整机）且插着电 → 全力；
 //! - 用户长时间不操作且整机空闲 → 安静；
-//! - 其余 → 均衡；
-//! - 温度墙：温度过高最多均衡，严重过高降到安静；用电池时不进全力。
+//! - 其余 → 均衡；用电池时不进全力。
 //!
-//! 升档要持续一段时间（短暂的峰值不切换），降档等得更久（避免来回跳）；温度墙立即生效。
+//! 升档要持续一段时间（短暂的峰值不切换），降档等得更久（避免来回跳）；拔掉电源立即生效。
+//!
+//! 不按温度切换：处理器和显卡到了温度上限会自己降频保护，Poise 再按温度切模式只会和硬件
+//! 抢方向盘——每次切换散热模式都卡一下，降到低功耗模式又白白损失性能，温度一降又切回来，反复循环。
 
-use crate::diagnose::Heat;
 use crate::model::Millis;
 use crate::prefs::Mode;
 
@@ -50,7 +51,6 @@ pub struct AutoInput {
     pub system_cpu_pct: f32,
     /// 前台程序（整个进程树）占用的核心数。
     pub foreground_cores: f32,
-    pub heat: Heat,
 }
 
 #[derive(Debug)]
@@ -89,7 +89,7 @@ impl AutoMode {
             return self.current;
         }
         if target.rank() < self.current.rank() && self.limit(input).rank() < self.current.rank() {
-            // 温度墙或电池：立即降下来。
+            // 拔掉电源：立即降下来。
             self.switch(target);
             return self.current;
         }
@@ -116,7 +116,7 @@ impl AutoMode {
         self.pending = None;
     }
 
-    /// 只看负载的理想模式，再受温度与供电限制。
+    /// 只看负载的理想模式，再受供电限制。
     fn target(&self, input: &AutoInput) -> Mode {
         let cfg = &self.cfg;
         let heavy = input.foreground_cores >= cfg.heavy_foreground_cores
@@ -138,13 +138,12 @@ impl AutoMode {
         }
     }
 
-    /// 温度与供电允许的最高模式。
+    /// 供电允许的最高模式。
     fn limit(&self, input: &AutoInput) -> Mode {
-        match input.heat {
-            Heat::Critical => Mode::Quiet,
-            Heat::Hot => Mode::Balanced,
-            Heat::Normal if input.on_battery => Mode::Balanced,
-            Heat::Normal => Mode::Full,
+        if input.on_battery {
+            Mode::Balanced
+        } else {
+            Mode::Full
         }
     }
 }
@@ -162,7 +161,6 @@ mod tests {
             user_idle_ms: 0,
             system_cpu_pct: 15.0,
             foreground_cores: 0.5,
-            heat: Heat::Normal,
         }
     }
 
@@ -207,24 +205,6 @@ mod tests {
         // 用户回来：升到均衡也要稳定一会儿。
         assert_eq!(a.decide(&input(131 * S)), Mode::Quiet);
         assert_eq!(a.decide(&input(152 * S)), Mode::Balanced);
-    }
-
-    #[test]
-    fn heat_caps_the_mode_immediately() {
-        let mut a = AutoMode::default();
-        a.decide(&heavy(0));
-        a.decide(&heavy(20 * S));
-        assert_eq!(a.current(), Mode::Full);
-        let hot = AutoInput {
-            heat: Heat::Hot,
-            ..heavy(22 * S)
-        };
-        assert_eq!(a.decide(&hot), Mode::Balanced);
-        let critical = AutoInput {
-            heat: Heat::Critical,
-            ..heavy(24 * S)
-        };
-        assert_eq!(a.decide(&critical), Mode::Quiet);
     }
 
     #[test]

@@ -1,16 +1,21 @@
-//! 调度需要跨时间记住的五件事，各在一个文件里：前台保持、正在玩的游戏、发声保持、后台忙碌、临时全速。
+//! 调度需要跨时间记住的事，各在一个文件里：前台保持、正在玩的游戏、发声保持、程序负载、资源需求、
+//! 后台忙碌、临时全速。
 
 mod audio;
 mod boosts;
 mod busy;
+mod demand;
 mod foreground;
 mod games;
+mod load;
 
 pub use audio::AudioTracker;
 pub use boosts::TempBoosts;
 pub use busy::{BusyRule, BusyTracker};
+pub use demand::{DemandRule, DemandSignals, DemandTracker, Pressure};
 pub use foreground::{ForegroundHold, ForegroundTracker};
-pub use games::GameTracker;
+pub use games::{GameCores, GameTracker};
+pub use load::TreeLoad;
 
 /// 测试用：进程 10 和 20 各是一个程序，`fg_root` 在前台。
 #[cfg(test)]
@@ -31,6 +36,7 @@ pub(crate) fn test_classes(
                 has_visible_window: true,
                 tree_has_window: false,
                 plays_audio: false,
+                emits_audio: false,
                 recently_active: false,
                 preference: AppPreference::Auto,
                 is_game: false,

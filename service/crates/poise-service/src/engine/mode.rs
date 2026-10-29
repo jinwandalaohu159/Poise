@@ -1,5 +1,9 @@
-//! 硬件模式：把"实际生效的模式"落到电源计划与散热上，并在过热时自动退出全力和极限模式；风扇加速按用户设置。
+//! 硬件模式：把"实际生效的模式"落到电源计划与散热上；风扇加速按用户设置。
 //! 观察模式下不写入，只在将要变化时记一条日志。
+//!
+//! 不因为温度切换模式：处理器和显卡到了温度上限会自己降频保护（i7-12700H 这类笔记本处理器在高性能模式下
+//! 本来就工作在 90～100°C）。以前温度一高就退回低功耗模式、5 分钟后再切回来，结果是玩游戏时反复切换、
+//! 大部分时间跑在低功耗模式下。
 
 use poise_core::journal::{Journal, JournalError};
 use poise_core::model::Millis;
@@ -11,19 +15,9 @@ use poise_platform::observe::system;
 use super::Engine;
 use super::changes::ChangeError;
 
-/// 过热退出性能模式后，至少保持这么久（并且温度降回正常）才恢复。
-const OVERHEAT_HOLD_MS: Millis = 5 * 60_000;
-
 impl Engine {
-    /// 应用电源/散热模式，返回实际落到硬件上的模式（界面显示它）。
-    /// 温度危险时自动退出全力和极限模式（见 [`poise_core::diagnose::OverheatGuard`]）。观察模式下不写入。
-    fn apply_hardware_mode(&mut self, effective: Mode, now: Millis) -> Mode {
-        let overheating = self.overheat.update(self.last_heat, now, OVERHEAT_HOLD_MS);
-        let mode = if overheating && effective.is_performance() {
-            Mode::Balanced
-        } else {
-            effective
-        };
+    /// 应用电源/散热模式，返回实际落到硬件上的模式（界面显示它）。观察模式下不写入。
+    fn apply_hardware_mode(&mut self, mode: Mode, now: Millis) -> Mode {
         let on_battery = system::on_battery();
         if self.cfg.dry_run {
             if self.observed.mode != Some((mode, on_battery)) {
@@ -64,7 +58,7 @@ impl Engine {
         changes.edit(|s, j| f(hardware, s, j))
     }
 
-    /// 把实际模式和风扇加速落到硬件，返回落到硬件上的模式（过热时可能被降级）。
+    /// 把实际模式和风扇加速落到硬件，返回落到硬件上的模式。
     pub(super) fn apply_modes(&mut self, effective: Mode, now: Millis) -> Mode {
         let mode = self.apply_hardware_mode(effective, now);
         self.apply_fan_boost();

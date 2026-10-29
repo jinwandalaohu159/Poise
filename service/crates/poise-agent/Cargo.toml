@@ -14,6 +14,7 @@ path = "src/main.rs"
 poise-core.workspace = true
 poise-protocol.workspace = true
 poise-platform.workspace = true
+poise-update.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 log.workspace = true
@@ -26,7 +27,6 @@ features = [
     "Win32_Globalization",
     "Win32_Graphics_Gdi",
     "Win32_Media_Audio",
-    "Win32_Networking_WinHttp",
     "Win32_Security",
     "Win32_System_Com",
     "Win32_System_LibraryLoader",

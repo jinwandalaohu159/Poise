@@ -34,16 +34,29 @@ public static class ScheduleText
                 yield return Loc.Get("sched.unadjusted");
                 yield break;
             case Adjustment.Protected:
+                if (s.Cores == CoreUse.Performance)
+                {
+                    yield return Loc.Get("sched.performance_cores");
+                }
                 yield return Loc.Get("sched.protected");
                 yield break;
             case Adjustment.Raised:
+                if (s.Cores == CoreUse.Performance)
+                {
+                    yield return Loc.Get("sched.performance_cores");
+                }
                 yield return Loc.Get(Priority(s.Priority));
                 yield return Loc.Get("sched.protected");
                 yield break;
         }
-        if (s.SmallCores is { } small)
+        if (s.Cores is { } cores)
         {
-            yield return Loc.Get(small ? "sched.small_cores" : "sched.any_cores");
+            yield return Loc.Get(cores switch
+            {
+                CoreUse.Efficiency => "sched.small_cores",
+                CoreUse.Performance => "sched.performance_cores",
+                _ => "sched.any_cores",
+            });
         }
         yield return Loc.Get(Priority(s.Priority));
     }

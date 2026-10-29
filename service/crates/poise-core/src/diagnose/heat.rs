@@ -59,34 +59,6 @@ impl HeatWatch {
     }
 }
 
-/// 过热保护：温度危险时退出全力和极限模式。
-///
-/// 退出后要同时满足"距最后一次危险已过保持时间"和"温度降回正常（低于退出'温度过高'的阈值）"才恢复。
-/// 否则一恢复高性能模式又迅速升温，模式在危险线附近每几秒切换一次，每次切换都会短暂卡顿。
-#[derive(Debug, Default)]
-pub struct OverheatGuard {
-    /// 最近一次处于危险温度的时间；None 表示没有在保护中。
-    last_critical_ms: Option<u64>,
-}
-
-impl OverheatGuard {
-    /// 每个周期调用，返回现在是否应该限制性能模式。
-    pub fn update(&mut self, heat: Heat, now_ms: u64, hold_ms: u64) -> bool {
-        if heat == Heat::Critical {
-            self.last_critical_ms = Some(now_ms);
-            return true;
-        }
-        let Some(last) = self.last_critical_ms else {
-            return false;
-        };
-        if heat == Heat::Normal && now_ms.saturating_sub(last) >= hold_ms {
-            self.last_critical_ms = None;
-            return false;
-        }
-        true
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -114,7 +86,7 @@ mod tests {
     fn a_short_spike_does_not_trigger() {
         let mut w = HeatWatch::default();
         run(&mut w, 0, &[80.0; 20]);
-        let states = run(&mut w, 40_000, &[94.0, 80.0, 80.0]);
+        let states = run(&mut w, 40_000, &[99.0, 80.0, 80.0]);
         assert!(states.iter().all(|&s| s == Heat::Normal), "{states:?}");
     }
 
@@ -122,11 +94,11 @@ mod tests {
     fn hovering_around_the_threshold_does_not_flicker() {
         let mut w = HeatWatch::default();
         // 持续高温后进入"温度过高"。
-        let entering = run(&mut w, 0, &[93.0; 30]);
+        let entering = run(&mut w, 0, &[97.0; 30]);
         assert_eq!(entering.last(), Some(&Heat::Hot));
-        // 在 86～89 之间来回：高于退出阈值，一直保持，不来回切换。
+        // 在 91～94 之间来回：高于退出阈值，一直保持，不来回切换。
         let hovering: Vec<f32> = (0..30)
-            .map(|i| if i % 2 == 0 { 86.0 } else { 89.0 })
+            .map(|i| if i % 2 == 0 { 91.0 } else { 94.0 })
             .collect();
         let states = run(&mut w, 60_000, &hovering);
         assert!(states.iter().all(|&s| s == Heat::Hot), "{states:?}");
@@ -138,7 +110,8 @@ mod tests {
     #[test]
     fn values_just_below_the_entry_threshold_stay_normal() {
         let mut w = HeatWatch::default();
-        let states = run(&mut w, 0, &[88.0; 60]);
+        // 高性能模式下的正常工作温度。
+        let states = run(&mut w, 0, &[93.0; 60]);
         assert!(states.iter().all(|&s| s == Heat::Normal));
     }
 
@@ -155,26 +128,11 @@ mod tests {
         let mut w = HeatWatch::default();
         let both = Thermals {
             cpu_temp: Some(60.0),
-            gpu_temp: Some(93.0),
+            gpu_temp: Some(97.0),
         };
         assert_eq!(w.observe(&cfg, both, 0), Heat::Hot);
         assert_eq!(w.observe(&cfg, Thermals::default(), 2_000), Heat::Normal);
         // 重新开始：第一次读数直接作为平滑值。
         assert_eq!(w.observe(&cfg, cpu(70.0), 4_000), Heat::Normal);
-    }
-
-    #[test]
-    fn overheat_protection_holds_until_cooled_and_time_passed() {
-        const HOLD: u64 = 300_000;
-        let mut g = OverheatGuard::default();
-        assert!(!g.update(Heat::Normal, 0, HOLD));
-        assert!(g.update(Heat::Critical, 1_000, HOLD));
-        // 刚降到危险线以下：仍然限制（不在危险线附近来回切换）。
-        assert!(g.update(Heat::Hot, 3_000, HOLD));
-        assert!(g.update(Heat::Normal, 60_000, HOLD));
-        // 时间到了但仍是"温度过高"：继续限制。
-        assert!(g.update(Heat::Hot, 400_000, HOLD));
-        // 降回正常且过了保持时间：恢复。
-        assert!(!g.update(Heat::Normal, 401_000, HOLD));
     }
 }

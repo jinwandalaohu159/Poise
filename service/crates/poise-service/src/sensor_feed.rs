@@ -13,9 +13,9 @@ use poise_hardware::{HardwareReading, SensorLevel, Sensors};
 /// 一次读取超过这个时间就记一条日志。
 const SLOW_READ: Duration = Duration::from_millis(500);
 
-/// 玩游戏时的读取间隔。机型接口的调用会让处理器短暂停顿，玩游戏时尽量少读；
-/// 过热保护有 5 分钟的保持时间，10 秒读一次温度足够。
-const GAMING_EVERY: Duration = Duration::from_secs(10);
+/// 界面没显示时的读取间隔。机型接口（BIOS 的 WMI 方法）的调用可能让所有核心短暂停顿，
+/// 没人看的时候少读：温度只用于健康状态和走势记录，10 秒一次足够。界面显示时按 `every` 读。
+const QUIET_EVERY: Duration = Duration::from_secs(10);
 
 enum Signal {
     /// 需要的详细程度变了（界面打开、开始玩游戏）：按新的要求立即读一次。
@@ -31,7 +31,7 @@ pub struct SensorFeed {
 }
 
 impl SensorFeed {
-    /// 启动采集线程，每隔 `every` 读取一次（玩游戏时见 [`GAMING_EVERY`]）。
+    /// 启动采集线程：界面显示时每隔 `every` 读取一次，否则见 [`QUIET_EVERY`]。
     pub fn start(mut sensors: Sensors, every: Duration) -> Self {
         let latest = Arc::new(Mutex::new(HardwareReading::default()));
         let (tx, rx) = mpsc::channel();
@@ -50,10 +50,10 @@ impl SensorFeed {
                     if let Ok(mut l) = shared.lock() {
                         *l = reading;
                     }
-                    let wait = if level == SensorLevel::Gaming {
-                        GAMING_EVERY
-                    } else {
+                    let wait = if level == SensorLevel::Full {
                         every
+                    } else {
+                        QUIET_EVERY
                     };
                     match rx.recv_timeout(wait) {
                         Ok(Signal::Level(l)) => level = l,

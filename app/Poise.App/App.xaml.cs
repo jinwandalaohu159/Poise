@@ -65,8 +65,8 @@ public partial class App : Application
             EfficiencyMode.Set(false);
             _idleExit.Stop();
         };
-        // 安装程序会替换正在运行的 Poise：它启动后界面立即退出，不占用文件。
-        _host.Updates.InstallerStarted += () => dispatcher.TryEnqueue(Quit);
+        // 更新助手接手后界面立即退出：安装程序要替换界面的文件。
+        _host.Updates.UpdaterStarted += () => dispatcher.TryEnqueue(Quit);
         _instance.OnRequest(r => dispatcher.TryEnqueue(() => Handle(r)));
         Agent.EnsureRunning();
         Handle(request);
@@ -123,7 +123,7 @@ public partial class App : Application
         ShowMain();
         _main!.Navigate(typeof(UI.Pages.SettingsPage));
         var updates = _host!.Updates;
-        if (updates.State.Phase is not (UpdatePhase.Available or UpdatePhase.Downloading or UpdatePhase.Installing))
+        if (updates.State.Phase is not (UpdatePhase.Available or UpdatePhase.Starting))
         {
             _ = updates.CheckAsync();
         }

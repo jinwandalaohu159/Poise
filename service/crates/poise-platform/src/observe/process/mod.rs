@@ -3,4 +3,5 @@
 pub mod cmdline;
 pub mod enumerate;
 pub mod facts;
+pub mod names;
 pub mod snapshot;

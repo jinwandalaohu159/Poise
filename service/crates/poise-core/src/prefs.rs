@@ -21,11 +21,6 @@ pub enum Mode {
 }
 
 impl Mode {
-    /// 全力或机型极限模式：调度与电源计划都按最高性能处理。
-    pub fn is_performance(self) -> bool {
-        matches!(self, Self::Full | Self::Vendor)
-    }
-
     /// 性能高低（安静 0，均衡 1，全力 2，极限 3）；"自动"按均衡计。
     pub fn rank(self) -> u8 {
         match self {

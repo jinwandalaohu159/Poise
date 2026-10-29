@@ -79,29 +79,38 @@ impl SafetyGuard {
                     Err(DenyReason::NotUserApp)
                 }
             }
-            ActionKind::Demote => Self::check_demote(c),
+            ActionKind::Demote => Self::check_demote(action, c),
             ActionKind::Restart => Self::check_restart(action, c, trigger),
         }
     }
 
     /// 与调度策略（`schedule::policy`）的规则对应、互为把关：改其中一边时两边一起改。
-    fn check_demote(c: &Classification) -> Result<(), DenyReason> {
+    fn check_demote(action: &Action, c: &Classification) -> Result<(), DenyReason> {
         if !c.is_schedulable() {
             return Err(DenyReason::NotUserApp);
         }
-        // 正在发声的程序（整个进程树）、游戏完全不降级，连"低优先级"也让步。
-        if c.plays_audio || c.is_game {
+        if c.is_game {
             return Err(DenyReason::InUse);
-        }
-        // 用户设为"低优先级"的程序在前台也留在小核。
-        if c.preference == AppPreference::Background {
-            return Ok(());
         }
         let in_use = c.in_foreground_tree
             || matches!(
                 c.preference,
                 AppPreference::AlwaysFast | AppPreference::Game
             );
+        // 正在发声的程序（整个进程树）：连"低优先级"也让步，只允许挪到小核——声音线程有自己的
+        // 实时优先级，在小核上照样流畅；不降优先级、不节能、不降内存优先级。
+        if c.plays_audio {
+            let core_move = matches!(action, Action::SetCoreSet { .. });
+            return if core_move && !in_use {
+                Ok(())
+            } else {
+                Err(DenyReason::InUse)
+            };
+        }
+        // 用户设为"低优先级"的程序在前台也留在小核。
+        if c.preference == AppPreference::Background {
+            return Ok(());
+        }
         if in_use {
             return Err(DenyReason::InUse);
         }
@@ -215,6 +224,7 @@ mod tests {
             has_visible_window: false,
             tree_has_window: false,
             plays_audio: false,
+            emits_audio: false,
             recently_active: false,
             preference: AppPreference::Auto,
             is_game: false,
@@ -295,6 +305,7 @@ mod tests {
             },
             Classification {
                 plays_audio: true,
+                emits_audio: false,
                 ..user_app()
             },
             Classification {
@@ -321,16 +332,23 @@ mod tests {
     };
 
     #[test]
-    fn audio_apps_are_not_demoted_at_all() {
+    fn audio_apps_may_only_move_to_small_cores() {
         let c = Classification {
             plays_audio: true,
+            emits_audio: false,
             ..user_app()
         };
+        assert_eq!(check(TO_SMALL_CORES, &c, Trigger::Auto), Ok(()));
+        assert_eq!(check(LOWER, &c, Trigger::Auto), Err(DenyReason::InUse));
+        // 在前台：连核心也不挪。
+        let fg = Classification {
+            in_foreground_tree: true,
+            ..c
+        };
         assert_eq!(
-            check(TO_SMALL_CORES, &c, Trigger::Auto),
+            check(TO_SMALL_CORES, &fg, Trigger::Auto),
             Err(DenyReason::InUse)
         );
-        assert_eq!(check(LOWER, &c, Trigger::Auto), Err(DenyReason::InUse));
     }
 
     #[test]

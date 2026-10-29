@@ -158,13 +158,16 @@ impl SettingStore for WinSettingStore {
     }
 
     fn end_batch(&self) {
-        let outermost = self.batch.fetch_sub(1, Ordering::AcqRel) == 1;
-        if outermost
-            && self.power_pending.swap(false, Ordering::AcqRel)
+        if self.end_batch_deferred()
             && let Err(e) = power_plan::activate()
         {
             log::warn!("重新激活电源计划失败：{e:?}");
         }
+    }
+
+    fn end_batch_deferred(&self) -> bool {
+        let outermost = self.batch.fetch_sub(1, Ordering::AcqRel) == 1;
+        outermost && self.power_pending.swap(false, Ordering::AcqRel)
     }
 
     fn delete(&self, target: &Target) -> Result<(), StoreError> {

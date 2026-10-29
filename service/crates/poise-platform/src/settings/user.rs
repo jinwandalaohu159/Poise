@@ -9,9 +9,10 @@ use std::path::PathBuf;
 use poise_core::optimize::Value;
 use windows::Win32::Foundation::{HANDLE, HLOCAL, LocalFree};
 use windows::Win32::Security::Authorization::ConvertSidToStringSidW;
-use windows::Win32::Security::{GetTokenInformation, TOKEN_USER, TokenUser};
+use windows::Win32::Security::{GetTokenInformation, TOKEN_QUERY, TOKEN_USER, TokenUser};
 use windows::Win32::System::Registry::{HKEY, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, HKEY_USERS};
 use windows::Win32::System::RemoteDesktop::WTSQueryUserToken;
+use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 use windows::core::PWSTR;
 
 use crate::win::handle::OwnedHandle;
@@ -31,6 +32,14 @@ impl UserContext {
             sid: None,
             profile_dir: PathBuf::from(profile),
         })
+    }
+
+    /// 当前进程用户的 SID（例如 "S-1-5-21-…"）。
+    pub fn current_process_sid() -> Option<String> {
+        let mut token = HANDLE::default();
+        // SAFETY: 当前进程的伪句柄；输出到本地句柄。
+        unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) }.ok()?;
+        token_sid(&OwnedHandle::from_raw(token))
     }
 
     /// 服务模式下解析某个会话的登录用户。需要 SYSTEM 权限。

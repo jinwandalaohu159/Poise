@@ -66,6 +66,8 @@ pub struct Classification {
     pub tree_has_window: bool,
     /// 同一进程树里有程序正在发声（例如浏览器由单独的子进程输出声音、由渲染进程解码）。
     pub plays_audio: bool,
+    /// 这个进程本身在输出声音（[`Self::plays_audio`] 按整个进程树算）。
+    pub emits_audio: bool,
     pub recently_active: bool,
     pub preference: AppPreference,
     /// 是否像游戏：用户标记，或者是前台全屏窗口所属的进程且正在用显卡渲染。
@@ -172,8 +174,10 @@ impl Classifier {
                 let in_foreground_tree = foreground_root == Some(root_pid);
                 let has_visible_window =
                     visible.contains(&pid) || (!input.session_fresh && p.facts.session_id != 0);
+                // 已确认正在玩的游戏不再测显卡占用（见服务的 measure_foreground_gpu），按已确认的算。
                 let is_game = role == Role::UserApp
                     && (preference == AppPreference::Game
+                        || input.active_games.contains(&pid)
                         || renders_fullscreen(p, input, self.cfg.game_gpu_pct));
                 let c = Classification {
                     schedule: schedule_scope(p, &role, marks.never_scheduled.contains(&pid)),
@@ -182,6 +186,7 @@ impl Classifier {
                     has_visible_window,
                     tree_has_window: has_visible_window || windowed_roots.contains(&root_pid),
                     plays_audio: audio_roots.contains(&root_pid),
+                    emits_audio: audio.contains(&pid),
                     recently_active: input.activity.is_recently_active(
                         &p.facts.key,
                         snap.at,

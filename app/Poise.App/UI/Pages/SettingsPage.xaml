@@ -99,8 +99,6 @@
                     </Grid.ColumnDefinitions>
                     <StackPanel Spacing="6" VerticalAlignment="Center">
                         <TextBlock Text="{x:Bind Vm.UpdateStatus, Mode=OneWay}" Style="{StaticResource BodyTextStyle}" TextWrapping="Wrap" />
-                        <ProgressBar Maximum="100" Value="{x:Bind Vm.DownloadPercent, Mode=OneWay}"
-                                     Visibility="{x:Bind Vm.IsDownloading, Mode=OneWay}" />
                         <TextBlock Text="{x:Bind Vm.UpdateNotes, Mode=OneWay}" Style="{StaticResource CaptionSecondaryTextStyle}"
                                    TextWrapping="Wrap" Visibility="{x:Bind Vm.HasUpdateNotes, Mode=OneWay}" />
                         <HyperlinkButton Content="{l:L Key=settings.update.notes}" Style="{StaticResource DetailsLinkStyle}" Padding="0,2"

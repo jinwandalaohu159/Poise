@@ -1,12 +1,13 @@
 //! 引擎：持有所有组件。各方面的行为分布在同目录的子模块中：
 //!
-//! - [`cycle`]：每个采样周期（采集 → 分类 → 调度 → 健康评估），并串起下面各部分
+//! - [`cycle`]：每个采样周期（采集 → 分类 → 调度 → 健康评估），并串起下面各部分；[`phases`] 给每轮分段计时
 //! - [`schedule`]：按调度计划调整进程、临时全速、停止时撤销
+//! - [`presence`]：托盘代理在线时才起作用，退出时撤销全部影响
 //! - [`auto`]：把用户模式（含"自动"）换算成具体模式
-//! - [`mode`]：把实际模式落到电源计划与散热上（过热时退出全力和极限模式），风扇加速
+//! - [`mode`]：把实际模式落到电源计划与散热上（慢的硬件操作在硬件执行线程里），风扇加速
 //! - [`cleanup`]：一键清理、延后清理、自动清理
 //! - [`growth`]：与开机时、与进程稳定运行时相比的增长
-//! - [`optimizer`]：系统优化项与游戏偏好
+//! - [`optimizer`]：系统优化项；[`game_prefs`]：程序类别与游戏对应的系统设置
 //! - [`changes`]：持久修改的唯一出口（设置存储 + 变更日志）
 //! - [`session`]：用户会话、界面是否显示
 //! - [`status`]：给界面的状态、诊断；[`apps`]：程序列表与运行过的程序（保存在本机）
@@ -42,11 +43,11 @@ use poise_core::cleanup::{
     BootBaseline, CleanupStep, Grown, GrowthConfig, GrowthWatch, KernelPoolConfig, KernelPoolWatch,
     LeakConfig, LeakDetector, LeakSuspect,
 };
-use poise_core::diagnose::{Health, Heat, HeatWatch, MetricHistory, OverheatGuard};
+use poise_core::diagnose::{Health, HeatWatch, MetricHistory};
 use poise_core::model::{Millis, Pid, Snapshot};
 use poise_core::prefs::{Mode, Settings};
 use poise_core::safety::GuardedExecutor;
-use poise_core::schedule::{GameInfo, ScheduleConfig, Scheduler};
+use poise_core::schedule::{CoreLayout, GameInfo, ScheduleConfig, Scheduler};
 use poise_core::seen_apps::SeenApps;
 use poise_hardware::{Hardware, HardwareReading};
 use poise_platform::act::executor::WinExecutor;
@@ -107,9 +108,8 @@ pub struct Engine {
     growth: GrowthWatch,
     baseline_file: JsonFile<BootBaseline>,
     heat: HeatWatch,
-    /// 上一个周期的温度状态（"自动"模式的温度墙、过热保护用）。
-    last_heat: Heat,
-    overheat: OverheatGuard,
+    /// 处理器接近温度上限（最近一次健康评估的结果）：调度据此让后台更早让路。
+    hot: bool,
     auto_mode: AutoMode,
     /// 最近几分钟的整机指标（主页与卡顿诊断的走势图）。
     history: MetricHistory,
@@ -128,6 +128,8 @@ pub struct Engine {
     /// 运行过的程序（程序偏好页"未运行"一栏）。
     seen: SeenApps,
     seen_file: JsonFile<SeenApps>,
+    /// 上次记录运行的程序的时间。
+    seen_checked_at: Option<Millis>,
     /// Poise 自己的进程（服务和已连接的界面），永不触碰。
     own_pids: HashSet<Pid>,
     cleanup: CleanupState,
@@ -154,7 +156,7 @@ impl Engine {
         let settings_file = JsonFile::new(cfg.data_dir.join("settings.json"));
         let settings = settings_file.load().unwrap_or_default();
         let baseline_file = JsonFile::new(cfg.data_dir.join(growth::BASELINE_FILE));
-        let hardware = Hardware::detect();
+        let mut hardware = Hardware::detect(topology.top_class);
         let seen_file = JsonFile::new(cfg.data_dir.join(apps::SEEN_FILE));
         let growth = GrowthWatch::new(
             GrowthConfig::default(),
@@ -181,7 +183,10 @@ impl Engine {
             activity: ActivityTracker::new(ActivityConfig::default()),
             classifier: Classifier::new(ClassifyConfig::default()),
             scheduler: Scheduler::new(ScheduleConfig {
-                hybrid: topology.is_hybrid(),
+                cores: CoreLayout {
+                    performance_threads: topology.performance_count.threads,
+                    efficiency_threads: topology.efficiency_count.threads,
+                },
                 ..Default::default()
             }),
             leaks: LeakDetector::new(LeakConfig::default()),
@@ -189,8 +194,7 @@ impl Engine {
             growth,
             baseline_file,
             heat: HeatWatch::default(),
-            last_heat: Heat::Normal,
-            overheat: OverheatGuard::default(),
+            hot: false,
             auto_mode: AutoMode::default(),
             history: MetricHistory::default(),
             core_load_meter: CoreLoadMeter::new(&topology),
@@ -198,13 +202,14 @@ impl Engine {
                 Box::new(WinExecutor::new(topology.clone(), launcher)),
                 cfg.dry_run,
             ),
-            sensors: SensorFeed::start(hardware.sensors(), TICK),
+            sensors: SensorFeed::start(hardware.take_sensors(), TICK),
             hardware,
             changes: Changes::new(&cfg.data_dir, user, cfg.dry_run),
             settings,
             settings_file,
             seen: seen_file.load().unwrap_or_default(),
             seen_file,
+            seen_checked_at: None,
             session: SessionTracker::new(system::active_console_session()),
             own_pids: HashSet::from([std::process::id()]),
             cleanup: CleanupState::default(),

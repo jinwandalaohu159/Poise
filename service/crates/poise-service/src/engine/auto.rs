@@ -1,4 +1,4 @@
-//! 把用户选择的模式换算成具体模式："自动"按负载、空闲、温度、供电决定；
+//! 把用户选择的模式换算成具体模式："自动"按负载、空闲、供电决定；
 //! 机型不支持极限模式时按全力处理。游戏时的目标模式也在这里换算。
 
 use std::collections::HashMap;
@@ -27,7 +27,6 @@ impl Engine {
                     user_idle_ms: self.session.current(now).idle_ms,
                     system_cpu_pct: self.activity.system_cpu_pct(),
                     foreground_cores: self.foreground_cores(snapshot, classes),
-                    heat: self.last_heat,
                 };
                 self.auto_mode.decide(&input)
             }

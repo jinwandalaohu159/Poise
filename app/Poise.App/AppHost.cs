@@ -23,7 +23,7 @@ public sealed class AppHost : IDisposable
         Status = new StatusMonitor(Api);
         Presence = new UiPresence(Status, Api, dispatcher);
         Trend = new TrendFeed(Api, Presence, dispatcher);
-        Updates = new Updater(AppVersion.Installed, InstallerFiles.Default);
+        Updates = new Updater(AppVersion.Installed, UpdateFiles.Default);
         UpdateSchedule = new UpdateSchedule(Updates, dispatcher);
     }
 
@@ -46,7 +46,7 @@ public sealed class AppHost : IDisposable
     /// <summary>走势图的数据（主页与卡顿诊断共用）。</summary>
     public TrendFeed Trend { get; }
 
-    /// <summary>检查和安装新版本（设置页显示状态）。</summary>
+    /// <summary>检查新版本、启动更新助手（设置页显示状态）。</summary>
     public Updater Updates { get; }
 
     private UpdateSchedule UpdateSchedule { get; }

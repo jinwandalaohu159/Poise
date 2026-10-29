@@ -1,4 +1,3 @@
-using System.Globalization;
 using Poise.Core.Localization;
 using Poise.Core.Updates;
 
@@ -22,16 +21,8 @@ public static class UpdateText
         UpdatePhase.Checking => Loc.Get("update.checking"),
         UpdatePhase.UpToDate => Loc.Get("update.up_to_date"),
         UpdatePhase.Available => Loc.Format("update.available", state.Release!.Version.ToString(3)),
-        UpdatePhase.Downloading => Loc.Format(
-            "update.downloading",
-            (state.Progress * 100).ToString("0", CultureInfo.InvariantCulture) + "%"),
-        UpdatePhase.Installing => Loc.Get("update.installing"),
-        UpdatePhase.Failed => Loc.Get(state.Error switch
-        {
-            UpdateError.Verification => "update.failed.verification",
-            UpdateError.Launch => "update.failed.launch",
-            _ => "update.failed.network",
-        }),
+        UpdatePhase.Starting => Loc.Get("update.installing"),
+        UpdatePhase.Failed => Loc.Get(state.Error == UpdateError.Launch ? "update.failed.launch" : "update.failed.network"),
         _ => "",
     };
 

@@ -212,6 +212,15 @@ impl Reconciler {
                 original,
             );
         }
+        if desired.resources != current.resources {
+            push(
+                Action::SetResourcePriority {
+                    pid,
+                    priority: desired.resources,
+                },
+                original,
+            );
+        }
         out
     }
 
@@ -248,6 +257,7 @@ impl Reconciler {
             }
             Action::SetEcoQos { state, .. } => entry.current.eco = *state,
             Action::SetCoreSet { set, .. } => entry.current.cores = *set,
+            Action::SetResourcePriority { priority, .. } => entry.current.resources = *priority,
             _ => {}
         }
         if entry.current.is_neutral() {
@@ -296,7 +306,7 @@ fn effective_priority(desired: Option<PriorityClass>, original: PriorityClass) -
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::action::{CoreSet, EcoQos};
+    use crate::action::{CoreSet, EcoQos, ResourcePriority};
 
     const KEY: ProcessKey = ProcessKey { pid: 5, created: 1 };
 
@@ -314,7 +324,8 @@ mod tests {
             ..LOW
         };
         let actions = r.diff(KEY, Some(PriorityClass::Normal), false, want);
-        assert_eq!(actions.len(), 3);
+        // 优先级、节能、核心范围、内存优先级。
+        assert_eq!(actions.len(), 4);
         apply_all(&mut r, &actions);
         assert!(
             r.diff(KEY, Some(PriorityClass::BelowNormal), false, want)
@@ -329,6 +340,7 @@ mod tests {
             priority: Some(PriorityClass::BelowNormal),
             eco: EcoQos::On,
             cores: CoreSet::Efficiency,
+            resources: ResourcePriority::Low,
         };
         let actions = r.diff(KEY, Some(PriorityClass::Normal), false, want);
         apply_all(&mut r, &actions);
@@ -414,6 +426,7 @@ mod tests {
             priority: Some(PriorityClass::High),
             eco: EcoQos::Off,
             cores: CoreSet::All,
+            resources: ResourcePriority::Low,
         };
         let actions = r.diff(KEY, Some(PriorityClass::Normal), false, want);
         apply_all(&mut r, &actions);
@@ -426,6 +439,7 @@ mod tests {
         priority: Some(PriorityClass::BelowNormal),
         eco: EcoQos::On,
         cores: CoreSet::Efficiency,
+        resources: ResourcePriority::Low,
     };
 
     #[test]
@@ -447,13 +461,13 @@ mod tests {
         }
         r.begin(MAX_FIGHTS as u64);
         let last = r.diff(KEY, Some(PriorityClass::Normal), false, LOW);
-        // 退让：不碰优先级，只把核心范围和节能恢复默认。
+        // 退让：不碰优先级，只把节能、核心范围、内存优先级恢复默认。
         assert!(
             !last
                 .iter()
                 .any(|a| matches!(a.action, Action::SetPriority { .. }))
         );
-        assert_eq!(last.len(), 2);
+        assert_eq!(last.len(), 3);
         apply_all(&mut r, &last);
         assert_eq!(r.state(&KEY), ProcessSchedule::SelfManaged);
         r.begin(10);

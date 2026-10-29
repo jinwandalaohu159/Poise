@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use poise_core::classify::{Classification, ClassifyInput};
-use poise_core::diagnose::{self, DiagnoseConfig, Health, HealthInput, Sample};
+use poise_core::diagnose::{self, DiagnoseConfig, Health, HealthInput, Heat, Sample};
 use poise_core::model::{Millis, Pid, Snapshot};
 use poise_core::safety::Trigger;
 use poise_hardware::{HardwareReading, SensorLevel};
@@ -16,6 +16,12 @@ use super::{Engine, View};
 
 /// 采样间隔。前台切换不等采样，会立即触发一次调度。
 pub const TICK: Duration = Duration::from_secs(2);
+
+/// 没人在用电脑时的采样间隔（见 [`Engine::next_tick_in`]）。
+const IDLE_TICK: Duration = Duration::from_secs(6);
+
+/// 用户多久不操作算离开。
+const AWAY_AFTER_MS: Millis = 2 * 60_000;
 
 impl Engine {
     pub fn tick(&mut self) {
@@ -55,7 +61,7 @@ impl Engine {
             reading,
             health,
         });
-        self.remember_running_apps();
+        self.remember_running_apps(now);
         phases.done("记录运行的程序");
         if active {
             self.run_deferred_cleanup();
@@ -65,9 +71,24 @@ impl Engine {
         phases.finish();
     }
 
+    /// 下一轮采样前等多久。用户离开、没在玩游戏、界面也没显示时放慢：没人用的时候调度没什么可做的，
+    /// 用户一回来（前台变化）就会立即重新调度，不受影响。所有判断都按时间而不是轮数，间隔变了结果不变。
+    pub fn next_tick_in(&self) -> Duration {
+        let now = self.now();
+        let session = self.session.current(now);
+        let gaming = self.view.as_ref().is_some_and(|v| v.game.is_some());
+        let away = session.idle_ms >= AWAY_AFTER_MS || self.paused;
+        if away && !gaming && !self.session.ui_visible(now) {
+            IDLE_TICK
+        } else {
+            TICK
+        }
+    }
+
     /// 前台切换、用户改模式时立即重新调度并落到硬件，不等下一次采样。
-    /// 重新取一次进程快照（约 10 ms）：刚打开的程序也能立即拿到前台待遇。
-    /// 这样紧接着的状态查询就是最终结果（包括过热降级后的实际模式），界面不会先显示一个中间状态。
+    /// 新的前台程序已经在上一轮采样里（切换到已经开着的程序，最常见）时直接沿用上一轮的采样，
+    /// 响应更快；刚打开的程序还不在里面，才重新取一次进程快照（约 5 毫秒），让它也立即拿到前台待遇。
+    /// 这样紧接着的状态查询就是最终结果（包括实际生效的模式），界面不会先显示一个中间状态。
     pub fn reschedule_now(&mut self) {
         let now = self.now();
         if !self.ensure_presence(now) {
@@ -76,7 +97,13 @@ impl Engine {
         let Some(view) = self.view.take() else {
             return;
         };
-        let snapshot = self.snapshotter.take(now).unwrap_or(view.snapshot);
+        let foreground = self.session.current(now).foreground_pid;
+        let known = foreground.is_none_or(|pid| view.snapshot.find(pid).is_some());
+        let snapshot = if known {
+            view.snapshot
+        } else {
+            self.snapshotter.take(now).unwrap_or(view.snapshot)
+        };
         let classes = self.classify(&snapshot, now);
         let outcome = self.schedule_if(true, &snapshot, &classes);
         let effective_mode = self.apply_modes(outcome.effective_mode, now);
@@ -103,10 +130,14 @@ impl Engine {
 
     /// 前台全屏时测量它的显卡 3D 占用（识别游戏用）；不全屏时停止测量。
     /// 测量在独立线程里进行，这里只取最近一次的结果；立即重新调度时沿用上次的结果。
+    /// 已经确认为游戏的不再测量：读取显卡计数器要查询显卡驱动，没必要在游戏运行时一直做。
     fn measure_foreground_gpu(&mut self, now: Millis) {
         let session = self.session.current(now);
-        self.gpu
-            .measure(session.foreground_pid.filter(|_| session.fullscreen));
+        let games = self.scheduler.active_games();
+        let target = session
+            .foreground_pid
+            .filter(|pid| session.fullscreen && !games.contains(pid));
+        self.gpu.measure(target);
         self.foreground_gpu = self.gpu.latest();
     }
 
@@ -153,7 +184,7 @@ impl Engine {
         let heat = self
             .heat
             .observe(&DiagnoseConfig::default(), reading.thermals, now);
-        self.last_heat = heat;
+        self.hot = heat != Heat::Normal;
         let preview = self.plan_cleanup(snapshot, classes, Trigger::Manual, false);
         diagnose::assess(
             &DiagnoseConfig::default(),

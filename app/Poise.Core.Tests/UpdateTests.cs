@@ -91,35 +91,48 @@ public sealed class UpdateTests
     }
 
     [Fact]
-    public void Installer_files_are_verified_by_size_and_sha256()
+    public void The_updater_is_copied_out_of_the_install_directory()
     {
-        var dir = Directory.CreateTempSubdirectory("poise-installer-");
+        var root = Directory.CreateTempSubdirectory("poise-update-files-");
         try
         {
-            var files = new InstallerFiles(dir.FullName);
-            var path = files.PathFor(new Version(0, 3, 0));
-            File.WriteAllText(path, "installer");
-            var sha = InstallerFiles.Sha256Of(path);
+            var install = Directory.CreateDirectory(Path.Combine(root.FullName, "Poise"));
+            var files = new UpdateFiles(Path.Combine(root.FullName, "updates"), install.FullName + Path.DirectorySeparatorChar);
+            Assert.Equal(install.FullName, files.InstallDirectory);
+            Assert.Throws<FileNotFoundException>(files.PrepareUpdater);
 
-            Assert.True(InstallerFiles.Matches(path, 9, sha));
-            Assert.False(InstallerFiles.Matches(path, 10, sha));
-            Assert.False(InstallerFiles.Matches(path, 9, Digest));
-            Assert.False(InstallerFiles.Matches(path + ".missing", 9, sha));
-            using (var locked = InstallerFiles.OpenVerified(path, 9, sha))
-            {
-                // 校验通过后文件被占着：不能被改写或删除。
-                Assert.NotNull(locked);
-                Assert.ThrowsAny<IOException>(() => File.WriteAllText(path, "swapped!!"));
-            }
+            File.WriteAllText(Path.Combine(install.FullName, "poise-updater.exe"), "v2");
+            var copy = files.PrepareUpdater();
+            Assert.Equal(Path.Combine(files.Directory, "poise-updater.exe"), copy);
+            Assert.Equal("v2", File.ReadAllText(copy));
 
-            File.WriteAllText(files.PartialPathFor(new Version(0, 2, 9)), "old");
-            files.DeleteAllExcept(path);
-            Assert.Equal([path], Directory.GetFiles(dir.FullName));
+            // 已是最新版本时删除下载过的安装程序，更新助手本身保留。
+            File.WriteAllText(Path.Combine(files.Directory, "Poise-Setup-0.3.0.exe"), "setup");
+            File.WriteAllText(Path.Combine(files.Directory, "Poise-Setup-0.3.1.exe.part"), "partial");
+            files.DeleteInstallers();
+            Assert.Equal([copy], Directory.GetFiles(files.Directory));
         }
         finally
         {
-            dir.Delete(recursive: true);
+            root.Delete(recursive: true);
         }
+    }
+
+    [Fact]
+    public async Task Starting_an_update_without_the_updater_fails_and_can_be_retried()
+    {
+        var json = Release(assets: Asset("Poise-Setup-0.3.0.exe"));
+        using var updater = new Updater(new Version(0, 2, 1), Scratch(), new Reply(HttpStatusCode.OK, json));
+        var started = false;
+        updater.UpdaterStarted += () => started = true;
+        await updater.CheckAsync();
+
+        updater.StartUpdate();
+
+        Assert.False(started);
+        Assert.Equal(UpdatePhase.Failed, updater.State.Phase);
+        Assert.Equal(UpdateError.Launch, updater.State.Error);
+        Assert.True(updater.State.CanInstall);
     }
 
     [Fact]
@@ -167,14 +180,18 @@ public sealed class UpdateTests
         var release = GitHubReleases.ParseLatest(Release(assets: Asset("Poise-Setup-0.3.0.exe")))!;
 
         Assert.Equal("发现新版本 0.3.0", UpdateText.Status(new UpdateState(UpdatePhase.Available, release)));
-        Assert.Equal("正在下载新版本 42%", UpdateText.Status(new UpdateState(UpdatePhase.Downloading, release, 0.42)));
+        Assert.Equal("正在启动更新…", UpdateText.Status(new UpdateState(UpdatePhase.Starting, release)));
         Assert.Equal("安装\n还原到系统默认：说明\n开机启动更快", UpdateText.Notes(new UpdateState(UpdatePhase.Available, release)));
         Assert.Equal("", UpdateText.Notes(new UpdateState(UpdatePhase.UpToDate)));
         Assert.Equal("Poise 0.2.1", UpdateText.VersionLine(new Version(0, 2, 1)));
     }
 
-    private static InstallerFiles Scratch() =>
-        new(Path.Combine(Path.GetTempPath(), "poise-updates-test-" + Guid.NewGuid().ToString("N")));
+    /// <summary>不存在的临时目录：没有更新助手。</summary>
+    private static UpdateFiles Scratch()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "poise-updates-test-" + Guid.NewGuid().ToString("N"));
+        return new UpdateFiles(Path.Combine(root, "updates"), Path.Combine(root, "Poise"));
+    }
 
     /// <summary>固定返回一个响应，并记录请求次数。</summary>
     private sealed class Reply(HttpStatusCode status, string body) : HttpMessageHandler

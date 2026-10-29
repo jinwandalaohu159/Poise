@@ -1,6 +1,6 @@
 //! 内部数据 → 协议数据（给界面）。只做字段对应，不做判断。
 
-use poise_core::action::{CoreSet, EcoQos};
+use poise_core::action::{CoreSet, EcoQos, ResourcePriority};
 use poise_core::app_groups::GroupKind;
 use poise_core::cleanup::Advisory;
 use poise_core::model::PriorityClass;
@@ -10,7 +10,7 @@ use poise_hardware::profiles::FanReading;
 use poise_hardware::storage::{DiskHealth, DiskReading};
 use poise_platform::observe::topology::CpuTopology;
 use poise_protocol::{
-    Adjustment, AdvisoryDto, AppKind, CpuDto, DiskDto, DiskHealthDto, DriveSpace, FanDto,
+    Adjustment, AdvisoryDto, AppKind, CoreUse, CpuDto, DiskDto, DiskHealthDto, DriveSpace, FanDto,
     MemoryDto, PriorityLevel, VolumeDto,
 };
 
@@ -88,13 +88,25 @@ pub(super) fn priority_level(p: PriorityClass) -> PriorityLevel {
     }
 }
 
+pub(super) fn core_use(cores: CoreSet) -> CoreUse {
+    match cores {
+        CoreSet::All => CoreUse::Any,
+        CoreSet::Performance => CoreUse::Performance,
+        CoreSet::Efficiency => CoreUse::Efficiency,
+    }
+}
+
 /// 已应用的调度状态 → Poise 对它做了什么。
 pub(super) fn adjustment(d: Desired) -> Adjustment {
     if d.priority
         .is_some_and(|p| p.rank() > PriorityClass::Normal.rank())
     {
         Adjustment::Raised
-    } else if d.priority.is_some() || d.cores == CoreSet::Efficiency || d.eco == EcoQos::On {
+    } else if d.priority.is_some()
+        || d.cores == CoreSet::Efficiency
+        || d.eco == EcoQos::On
+        || d.resources == ResourcePriority::Low
+    {
         Adjustment::Yielded
     } else if d.eco == EcoQos::Off {
         Adjustment::Protected

@@ -6,17 +6,35 @@ pub mod desktop;
 use poise_core::model::{Pid, SessionState};
 
 /// 采集一次会话状态。`audio` 为 None 时重新枚举音频会话（相对较贵），否则沿用给定的结果。
+/// 进程列表排好序：窗口层叠顺序变了不算状态变化（服务只关心有哪些进程）。
 pub fn capture(audio: Option<&[Pid]>) -> SessionState {
     let foreground = desktop::foreground_window();
     SessionState {
         session_id: current_session(),
         foreground_pid: desktop::pid_of(foreground),
         fullscreen: desktop::is_fullscreen(foreground),
-        visible_window_pids: desktop::visible_window_pids(),
-        audio_pids: audio.map_or_else(audio::active_pids, <[Pid]>::to_vec),
+        visible_window_pids: sorted(desktop::visible_window_pids()),
+        audio_pids: sorted(audio.map_or_else(audio::active_pids, <[Pid]>::to_vec)),
         shell_pid: desktop::shell_pid(),
         idle_ms: desktop::idle_ms(),
     }
+}
+
+/// 除了"多久没操作"之外是否相同（它每次都不同，靠定期上报更新即可）。
+pub fn same_desktop(a: &SessionState, b: &SessionState) -> bool {
+    SessionState {
+        idle_ms: 0,
+        ..a.clone()
+    } == SessionState {
+        idle_ms: 0,
+        ..b.clone()
+    }
+}
+
+fn sorted(mut pids: Vec<Pid>) -> Vec<Pid> {
+    pids.sort_unstable();
+    pids.dedup();
+    pids
 }
 
 fn current_session() -> u32 {

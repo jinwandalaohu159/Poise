@@ -65,25 +65,20 @@ public sealed partial class SettingsViewModel : ObservableObject, IDisposable
 
     public bool HasReleasePage => ReleasePage is not null && Update.Phase != UpdatePhase.Checking;
 
-    public bool IsDownloading => Update.Phase == UpdatePhase.Downloading;
-
-    public double DownloadPercent => Update.Progress * 100;
-
     public bool CanCheckUpdate => Update.CanCheck;
 
     public bool CanInstallUpdate => Update.CanInstall;
 
     public void CheckForUpdates() => _ = _host.Updates.CheckAsync();
 
-    public void InstallUpdate() => _ = _host.Updates.DownloadAndInstallAsync();
+    public void InstallUpdate() => _host.Updates.StartUpdate();
 
     private void RefreshUpdate()
     {
         foreach (var name in new[]
                  {
                      nameof(UpdateStatus), nameof(UpdateNotes), nameof(HasUpdateNotes), nameof(ReleasePage),
-                     nameof(HasReleasePage), nameof(IsDownloading), nameof(DownloadPercent),
-                     nameof(CanCheckUpdate), nameof(CanInstallUpdate),
+                     nameof(HasReleasePage), nameof(CanCheckUpdate), nameof(CanInstallUpdate),
                  })
         {
             OnPropertyChanged(name);

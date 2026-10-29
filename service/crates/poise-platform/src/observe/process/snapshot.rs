@@ -1,4 +1,4 @@
-//! 把进程表、静态属性缓存、服务表、系统指标组装成 poise-core 的 [`Snapshot`]。
+//! 把进程表、静态属性缓存、友好名称、服务表、系统指标组装成 poise-core 的 [`Snapshot`]。
 
 use std::collections::HashSet;
 
@@ -6,6 +6,7 @@ use poise_core::model::{Millis, ProcessFacts, ProcessKey, ProcessSample, Snapsho
 
 use super::enumerate::ProcessTable;
 use super::facts::FactsCache;
+use super::names::NameResolver;
 use crate::observe::services::ServiceMap;
 use crate::observe::system;
 use crate::persist::paths;
@@ -14,6 +15,7 @@ use crate::persist::paths;
 pub struct Snapshotter {
     table: ProcessTable,
     facts: FactsCache,
+    names: NameResolver,
     services: ServiceMap,
 }
 
@@ -21,6 +23,7 @@ impl Snapshotter {
     pub fn take(&mut self, at: Millis) -> windows::core::Result<Snapshot> {
         let raw = self.table.read()?;
         self.services.refresh_if_stale();
+        self.names.collect();
         let alive: HashSet<ProcessKey> = raw.iter().map(|r| r.key).collect();
         self.facts.retain(|k| alive.contains(k));
 
@@ -28,6 +31,7 @@ impl Snapshotter {
             .into_iter()
             .map(|r| {
                 let s = self.facts.get(r.key);
+                let display_name = s.image_path.as_deref().and_then(|p| self.names.name(p));
                 ProcessSample {
                     facts: ProcessFacts {
                         key: r.key,
@@ -38,7 +42,7 @@ impl Snapshotter {
                             .as_deref()
                             .is_some_and(paths::is_in_windows_dir),
                         image_path: s.image_path,
-                        display_name: s.display_name,
+                        display_name,
                         session_id: r.session_id,
                         is_critical: s.is_critical,
                         protection: s.protection,

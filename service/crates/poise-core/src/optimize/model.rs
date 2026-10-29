@@ -71,6 +71,13 @@ pub trait SettingStore {
 
     /// 结束一批写入，让推迟的修改生效。默认无操作。
     fn end_batch(&self) {}
+
+    /// 结束一批写入，但不在这里让推迟的修改生效，而是返回是否还有待生效的修改：
+    /// 生效很慢时（重新激活电源计划约 200 毫秒），调用方可以放到别的线程里做。
+    fn end_batch_deferred(&self) -> bool {
+        self.end_batch();
+        false
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

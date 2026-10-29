@@ -4,8 +4,8 @@
 //! WMI 代理对象在多线程套间里可以跨线程使用。
 
 use windows::Win32::System::Com::{
-    CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx,
-    CoSetProxyBlanket, EOAC_NONE, RPC_C_AUTHN_LEVEL_CALL, RPC_C_IMP_LEVEL_IMPERSONATE,
+    CLSCTX_INPROC_SERVER, CoCreateInstance, CoSetProxyBlanket, EOAC_NONE, RPC_C_AUTHN_LEVEL_CALL,
+    RPC_C_IMP_LEVEL_IMPERSONATE,
 };
 use windows::Win32::System::Rpc::{RPC_C_AUTHN_WINNT, RPC_C_AUTHZ_NONE};
 use windows::Win32::System::Variant::VARIANT;
@@ -15,6 +15,7 @@ use windows::Win32::System::Wmi::{
 };
 use windows::core::BSTR;
 
+use super::com;
 use super::wide::WideString;
 
 #[derive(Debug)]
@@ -34,12 +35,6 @@ impl From<windows::core::Error> for WmiError {
 
 pub type WmiResult<T> = Result<T, WmiError>;
 
-/// 当前线程加入多线程套间（重复调用无害）。
-fn ensure_com() {
-    // S_FALSE 表示已经初始化过；RPC_E_CHANGED_MODE 表示线程已是单线程套间，此时照常可用。
-    let _ = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
-}
-
 /// 一个已连接的 WMI 命名空间。
 pub struct WmiNamespace {
     services: IWbemServices,
@@ -51,7 +46,7 @@ unsafe impl Send for WmiNamespace {}
 impl WmiNamespace {
     /// 连接本机命名空间，例如 `root\WMI`。
     pub fn connect(namespace: &str) -> WmiResult<Self> {
-        ensure_com();
+        com::ensure_initialized();
         unsafe {
             let locator: IWbemLocator = CoCreateInstance(&WbemLocator, None, CLSCTX_INPROC_SERVER)?;
             let services = locator.ConnectServer(
@@ -79,7 +74,7 @@ impl WmiNamespace {
 
     /// 执行 WQL 查询，返回全部结果。
     pub fn query(&self, wql: &str) -> WmiResult<Vec<WmiObject>> {
-        ensure_com();
+        com::ensure_initialized();
         let mut out = Vec::new();
         unsafe {
             let rows = self.services.ExecQuery(
@@ -112,7 +107,7 @@ impl WmiNamespace {
         arg: u32,
         out: &str,
     ) -> WmiResult<u32> {
-        ensure_com();
+        com::ensure_initialized();
         unsafe {
             let mut class_obj = None;
             self.services.GetObject(

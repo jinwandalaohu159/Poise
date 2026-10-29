@@ -1,60 +1,65 @@
-//! 后台忙碌。
+//! 后台忙碌：哪些程序（进程树）该让路。
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
+use super::demand::Pressure;
 use crate::model::{Millis, ProcessKey};
 
-/// 后台忙碌的判断规则。
+/// 后台忙碌的判断规则。负载是整棵进程树平滑后的负载（见 `TreeLoad`），短暂的活动本来就不会让它升高。
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct BusyRule {
-    /// 单核占用达到这个百分比算在忙。
+    /// 需求一般时，负载（单核百分比）达到这么多算在忙。
     pub core_pct: f32,
-    /// 要连续忙这么久才让路（短暂的活动不值得调整）。
-    pub after_ms: Millis,
+    /// 需求高时（玩游戏、接近温度上限）的门槛：更低，后台更早让路。
+    pub core_pct_high: f32,
+    /// 已经让路的程序，持续这么久没有需求后恢复。
+    pub release_after_ms: Millis,
 }
 
-/// 后台忙碌：在后台持续占用处理器的进程才让路；让路后一直保持，直到它回到"正在用"
-/// （前台、发声、游戏等）或退出。不因为一时闲下来就恢复，避免反复调整。
+/// 后台忙碌：有需求时，在后台持续占用处理器的程序让路；让路后保持，直到它回到"正在用"
+/// （前台、发声、游戏等）、退出，或者长时间没有需求（没人需要资源了，后台的工作应该全速完成）。
+/// 不因为它一时闲下来就恢复，避免反复调整。按进程树（程序）判断。
 #[derive(Debug, Default)]
 pub struct BusyTracker {
-    /// 正在忙、还没到让路时间的进程，以及从什么时候开始连续忙。
-    since: HashMap<ProcessKey, Millis>,
     yielded: HashSet<ProcessKey>,
 }
 
 impl BusyTracker {
-    /// 每个周期对每个进程调用一次，返回它现在是否应该让路。
+    /// 每轮对每个程序调用一次，返回它现在是否应该让路。
+    /// `idle_for` 是已经连续多久没有需求（见 `DemandTracker::idle_for`）。
     pub fn observe(
         &mut self,
-        key: ProcessKey,
-        core_pct: f32,
+        root: ProcessKey,
+        load: f32,
         in_use: bool,
-        now: Millis,
+        pressure: Pressure,
+        idle_for: Millis,
         rule: BusyRule,
     ) -> bool {
         if in_use {
-            self.since.remove(&key);
-            self.yielded.remove(&key);
+            self.yielded.remove(&root);
             return false;
         }
-        if self.yielded.contains(&key) {
+        if self.yielded.contains(&root) {
+            if pressure == Pressure::None && idle_for >= rule.release_after_ms {
+                self.yielded.remove(&root);
+                return false;
+            }
             return true;
         }
-        if core_pct < rule.core_pct {
-            self.since.remove(&key);
-            return false;
-        }
-        let since = *self.since.entry(key).or_insert(now);
-        if now.saturating_sub(since) >= rule.after_ms {
-            self.since.remove(&key);
-            self.yielded.insert(key);
+        let threshold = match pressure {
+            Pressure::None => return false,
+            Pressure::Normal => rule.core_pct,
+            Pressure::High => rule.core_pct_high,
+        };
+        if load >= threshold {
+            self.yielded.insert(root);
             return true;
         }
         false
     }
 
     pub fn retain_alive(&mut self, alive: &HashSet<ProcessKey>) {
-        self.since.retain(|k, _| alive.contains(k));
         self.yielded.retain(|k| alive.contains(k));
     }
 }
@@ -63,29 +68,36 @@ impl BusyTracker {
 mod tests {
     use super::*;
 
-    const KEY: ProcessKey = ProcessKey {
+    const ROOT: ProcessKey = ProcessKey {
         pid: 10,
         created: 1,
     };
 
-    const BUSY: BusyRule = BusyRule {
+    const RULE: BusyRule = BusyRule {
         core_pct: 10.0,
-        after_ms: 10_000,
+        core_pct_high: 3.0,
+        release_after_ms: 60_000,
     };
 
     #[test]
-    fn only_sustained_background_work_yields_and_then_stays() {
+    fn busy_programs_yield_only_when_someone_needs_the_processor() {
         let mut b = BusyTracker::default();
-        // 短暂的活动不让路。
-        assert!(!b.observe(KEY, 50.0, false, 0, BUSY));
-        assert!(!b.observe(KEY, 1.0, false, 4_000, BUSY));
-        assert!(!b.observe(KEY, 50.0, false, 6_000, BUSY));
-        assert!(!b.observe(KEY, 50.0, false, 14_000, BUSY));
-        assert!(b.observe(KEY, 50.0, false, 16_000, BUSY));
+        // 没人需要：再忙也不让路。
+        assert!(!b.observe(ROOT, 80.0, false, Pressure::None, 0, RULE));
+        // 有需求：达到门槛才让路，需求高时门槛更低。
+        assert!(!b.observe(ROOT, 5.0, false, Pressure::Normal, 0, RULE));
+        assert!(b.observe(ROOT, 5.0, false, Pressure::High, 0, RULE));
         // 闲下来也保持让路，不来回调整。
-        assert!(b.observe(KEY, 0.0, false, 20_000, BUSY));
+        assert!(b.observe(ROOT, 0.0, false, Pressure::Normal, 0, RULE));
         // 回到前台（正在用）立即恢复。
-        assert!(!b.observe(KEY, 50.0, true, 22_000, BUSY));
-        assert!(!b.observe(KEY, 50.0, false, 24_000, BUSY));
+        assert!(!b.observe(ROOT, 50.0, true, Pressure::Normal, 0, RULE));
+    }
+
+    #[test]
+    fn yielded_programs_come_back_when_nobody_needs_the_processor() {
+        let mut b = BusyTracker::default();
+        assert!(b.observe(ROOT, 50.0, false, Pressure::Normal, 0, RULE));
+        assert!(b.observe(ROOT, 50.0, false, Pressure::None, 30_000, RULE));
+        assert!(!b.observe(ROOT, 50.0, false, Pressure::None, 60_000, RULE));
     }
 }

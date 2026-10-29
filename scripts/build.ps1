@@ -14,8 +14,8 @@ if ($LASTEXITCODE -ne 0) { throw '服务测试失败' }
 dotnet test (Join-Path $root 'app\Poise.Core.Tests\Poise.Core.Tests.csproj') -nologo -v q
 if ($LASTEXITCODE -ne 0) { throw '界面测试失败' }
 
-Write-Host '构建服务与托盘代理…'
-cargo build --release -p poise-service -p poise-agent --manifest-path $cargo
+Write-Host '构建服务、托盘代理与更新助手…'
+cargo build --release -p poise-service -p poise-agent -p poise-update --manifest-path $cargo
 if ($LASTEXITCODE -ne 0) { throw '服务构建失败' }
 
 Write-Host '构建界面…'
@@ -25,7 +25,7 @@ if ($LASTEXITCODE -ne 0) { throw '界面构建失败' }
 if (Test-Path $dist) { Remove-Item $dist -Recurse -Force }
 New-Item -ItemType Directory -Force $dist | Out-Null
 Copy-Item (Join-Path $staging '*') $dist -Recurse
-foreach ($exe in 'poise-service.exe', 'poise-agent.exe') {
+foreach ($exe in 'poise-service.exe', 'poise-agent.exe', 'poise-updater.exe') {
     Copy-Item (Join-Path $root "service\target\release\$exe") $dist
 }
 Remove-Item $staging -Recurse -Force

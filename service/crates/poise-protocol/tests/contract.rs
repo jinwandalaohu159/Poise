@@ -13,7 +13,7 @@ use poise_core::diagnose::{Health, HealthCode, HistoryPoint, Level, StutterCause
 use poise_core::prefs::{AppPreference, GameMode, Mode};
 use poise_protocol::{
     Adjustment, AdvisoryDto, AppEntry, AppKind, AppProcess, AppSchedule, CleanupOverview,
-    CleanupResult, CleanupTrigger, CpuDto, Diagnosis, DiskDto, DiskHealthDto, DriveSpace,
+    CleanupResult, CleanupTrigger, CoreUse, CpuDto, Diagnosis, DiskDto, DiskHealthDto, DriveSpace,
     ErrorCode, FanDto, HardwareInfo, LastCleanup, MemoryDto, Metrics, PriorityLevel,
     ResponseEnvelope, ScheduleState, SinceBoot, Status, Trend, VolumeDto,
 };
@@ -215,14 +215,14 @@ fn apps() -> Vec<AppEntry> {
         memory_bytes: 0,
         processes: Vec::new(),
     };
-    let scheduled = |foreground, small_cores, priority| {
+    let scheduled = |foreground, cores, priority| {
         Some(AppSchedule {
             state: ScheduleState::Scheduled,
             foreground,
-            small_cores,
+            cores,
             priority,
-            adjustment: match (small_cores, priority) {
-                (Some(true), _) => Adjustment::Yielded,
+            adjustment: match (cores, priority) {
+                (Some(CoreUse::Efficiency), _) => Adjustment::Yielded,
                 (_, PriorityLevel::Higher | PriorityLevel::High) => Adjustment::Raised,
                 _ => Adjustment::Protected,
             },
@@ -232,7 +232,7 @@ fn apps() -> Vec<AppEntry> {
         Some(AppSchedule {
             state,
             foreground: false,
-            small_cores: None,
+            cores: None,
             priority: PriorityLevel::Normal,
             adjustment: Adjustment::None,
         })
@@ -241,7 +241,7 @@ fn apps() -> Vec<AppEntry> {
         app(
             "netdisk",
             AppPreference::Background,
-            scheduled(false, Some(true), PriorityLevel::Lower),
+            scheduled(false, Some(CoreUse::Efficiency), PriorityLevel::Lower),
         ),
         AppEntry {
             cpu_pct: 6.5,
@@ -254,7 +254,8 @@ fn apps() -> Vec<AppEntry> {
                     preference: None,
                     cpu_pct: 4.0,
                     memory_bytes: 2 * GB,
-                    schedule: scheduled(true, Some(false), PriorityLevel::Higher).unwrap(),
+                    schedule: scheduled(true, Some(CoreUse::Performance), PriorityLevel::Higher)
+                        .unwrap(),
                 },
                 AppProcess {
                     pid: 101,
@@ -269,7 +270,7 @@ fn apps() -> Vec<AppEntry> {
             ..app(
                 "browser",
                 AppPreference::Auto,
-                scheduled(true, Some(false), PriorityLevel::Higher),
+                scheduled(true, Some(CoreUse::Performance), PriorityLevel::Higher),
             )
         },
         app(

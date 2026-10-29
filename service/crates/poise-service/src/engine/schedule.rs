@@ -1,17 +1,18 @@
-//! 进程调度：每个周期按调度计划调整进程，临时全速，服务停止时撤销全部调整；程序偏好页的调度状态。
+//! 进程调度：每个周期按调度计划调整进程并记录决定的变化，临时全速，服务停止时撤销全部调整。
 
 use std::collections::HashMap;
 
-use poise_core::action::{CoreSet, ExecError, ExecOutcome};
+use poise_core::action::{ExecError, ExecOutcome};
 use poise_core::classify::Classification;
-use poise_core::model::{Pid, ProcessKey, ProcessSample, Snapshot};
+use poise_core::model::{Pid, ProcessKey, Snapshot};
 use poise_core::prefs::Mode;
 use poise_core::safety::{GuardedExecutor, Trigger};
-use poise_core::schedule::{Desired, GameInfo, PlannedAction, ProcessSchedule, ScheduleInput};
-use poise_protocol::{AppSchedule, ErrorCode, ScheduleState};
+use poise_core::schedule::{Decision, GameInfo, PlannedAction, Pressure, ScheduleInput, Verdict};
+use poise_platform::observe::system;
+use poise_protocol::ErrorCode;
 
+use super::Engine;
 use super::error::RequestError;
-use super::{Engine, convert};
 
 /// 临时全速的最长时间（分钟）。
 const MAX_BOOST_MINUTES: u32 = 240;
@@ -54,8 +55,11 @@ impl Engine {
             enabled: self.settings.smart_schedule,
             user_mode,
             game_mode: self.game_target(),
+            on_battery: system::on_battery(),
+            hot: self.hot,
         });
         self.execute_plan(&plan.actions, classes);
+        log_decisions(&plan.decisions, snapshot);
         ScheduleOutcome {
             effective_mode: plan.effective_mode,
             game: plan.game,
@@ -93,6 +97,8 @@ impl Engine {
                 enabled: false,
                 user_mode: self.settings.mode,
                 game_mode: None,
+                on_battery: false,
+                hot: false,
             });
             self.execute_plan(&plan.actions, &classes);
         }
@@ -107,38 +113,6 @@ impl Engine {
         self.scheduler.boost(key, until);
         self.reschedule_now();
         Ok(())
-    }
-
-    /// 一个程序（进程树的主进程）当前的调度状态。
-    pub(super) fn app_schedule(&self, p: &ProcessSample, c: &Classification) -> AppSchedule {
-        let schedule = self.scheduler.state(&p.facts.key);
-        let state = if !self.settings.smart_schedule {
-            ScheduleState::Off
-        } else if !c.is_schedulable() {
-            ScheduleState::Excluded
-        } else {
-            match schedule {
-                ProcessSchedule::SelfManaged => ScheduleState::SelfManaged,
-                ProcessSchedule::Denied => ScheduleState::Excluded,
-                ProcessSchedule::Default | ProcessSchedule::Adjusted(_) => ScheduleState::Scheduled,
-            }
-        };
-        let applied = match schedule {
-            ProcessSchedule::Adjusted(d) => d,
-            _ => Desired::NEUTRAL,
-        };
-        AppSchedule {
-            state,
-            foreground: c.in_foreground_tree,
-            small_cores: self
-                .topology
-                .is_hybrid()
-                .then_some(applied.cores == CoreSet::Efficiency),
-            priority: convert::priority_level(
-                applied.priority.or(p.facts.priority).unwrap_or_default(),
-            ),
-            adjustment: convert::adjustment(applied),
-        }
     }
 
     fn process_key(&self, pid: Pid) -> Option<ProcessKey> {
@@ -159,4 +133,38 @@ fn execute(
         planned.original_priority,
         Trigger::Auto,
     ))
+}
+
+/// 记录调度决定的变化：需求的变化，以及哪个程序因为什么被调整、恢复。
+fn log_decisions(decisions: &[Decision], snapshot: &Snapshot) {
+    for d in decisions {
+        match *d {
+            Decision::Pressure(p) => log::info!(
+                "处理器需求：{}",
+                match p {
+                    Pressure::None => "无（后台不必让路）",
+                    Pressure::Normal => "普通",
+                    Pressure::High => "高（玩游戏、发热）",
+                }
+            ),
+            Decision::Program {
+                root,
+                from,
+                to,
+                load_pct,
+            } => {
+                let name = snapshot
+                    .find(root.pid)
+                    .map_or_else(|| root.pid.to_string(), |p| p.facts.friendly_name());
+                let what = match to {
+                    Verdict::Playing => "按游戏调度",
+                    Verdict::Yielded => "后台忙，让路",
+                    Verdict::Backseat => "玩游戏时后台忙，移到小核",
+                    Verdict::Normal if from == Verdict::Playing => "不再按游戏调度",
+                    Verdict::Normal => "恢复",
+                };
+                log::info!("{name}（进程 {}，负载 {load_pct}%）：{what}", root.pid);
+            }
+        }
+    }
 }

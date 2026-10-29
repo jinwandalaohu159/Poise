@@ -1,6 +1,6 @@
 <!--
   开机启动：当前用户登录时由任务计划程序启动 Poise 托盘代理。
-  界面设置页（Autostart.cs）和安装脚本（install.ps1）共用这份定义，注册时替换 {UserSid} 和 {AgentPath}。
+  界面设置页（Autostart.cs）和首次安装时的 poise-service install（install.rs）共用这份定义，注册时替换 {UserSid} 和 {AgentPath}。
 -->
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <RegistrationInfo>

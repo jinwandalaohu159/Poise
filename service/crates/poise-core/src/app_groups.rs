@@ -172,6 +172,7 @@ mod tests {
             has_visible_window: window,
             tree_has_window: window,
             plays_audio: false,
+            emits_audio: false,
             recently_active: false,
             preference: AppPreference::Auto,
             is_game: false,

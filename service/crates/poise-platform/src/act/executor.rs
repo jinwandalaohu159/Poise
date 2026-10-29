@@ -20,6 +20,7 @@ use windows::Win32::System::Threading::{
 };
 
 use crate::act::launcher::Launcher;
+use crate::act::resource_priority;
 use crate::act::service_control;
 use crate::observe::process::cmdline;
 use crate::observe::topology::CpuTopology;
@@ -42,6 +43,9 @@ impl ActionExecutor for WinExecutor {
             Action::SetPriority { pid, class } => set_priority(*pid, *class),
             Action::SetEcoQos { pid, state } => set_eco_qos(*pid, *state),
             Action::SetCoreSet { pid, set } => self.set_cores(*pid, *set),
+            Action::SetResourcePriority { pid, priority } => {
+                resource_priority::set(*pid, *priority).map(|()| ExecOutcome::default())
+            }
             Action::RestartService { service, .. } => {
                 service_control::restart(service).map(|new_pid| ExecOutcome { new_pid })
             }
