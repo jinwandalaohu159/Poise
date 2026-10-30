@@ -1,0 +1,247 @@
+{
+  "entries": [
+    {
+      "id": 1,
+      "at_unix_ms": 1800000000000,
+      "category": "schedule",
+      "event": {
+        "type": "demand",
+        "level": "normal"
+      }
+    },
+    {
+      "id": 2,
+      "at_unix_ms": 1800000001000,
+      "category": "schedule",
+      "event": {
+        "type": "program",
+        "program": {
+          "pid": 7,
+          "name": "League of Legends",
+          "path": "c:\\riot games\\league of legends.exe"
+        },
+        "from": "normal",
+        "to": "playing",
+        "cores": {
+          "all": false,
+          "main": true,
+          "others": 1
+        },
+        "load_pct": 260,
+        "disk_mb_s": 3,
+        "cause": null
+      }
+    },
+    {
+      "id": 3,
+      "at_unix_ms": 1800000002000,
+      "category": "schedule",
+      "event": {
+        "type": "program",
+        "program": {
+          "pid": 7,
+          "name": "League of Legends",
+          "path": "c:\\riot games\\league of legends.exe"
+        },
+        "from": "yielded",
+        "to": "normal",
+        "cores": {
+          "all": true,
+          "main": true,
+          "others": 2
+        },
+        "load_pct": 0,
+        "disk_mb_s": 0,
+        "cause": "foreground"
+      }
+    },
+    {
+      "id": 4,
+      "at_unix_ms": 1800000003000,
+      "category": "schedule",
+      "event": {
+        "type": "moved_aside",
+        "count": 12
+      }
+    },
+    {
+      "id": 5,
+      "at_unix_ms": 1800000004000,
+      "category": "schedule",
+      "event": {
+        "type": "access_denied",
+        "program": {
+          "pid": 7,
+          "name": "League of Legends",
+          "path": "c:\\riot games\\league of legends.exe"
+        }
+      }
+    },
+    {
+      "id": 6,
+      "at_unix_ms": 1800000005000,
+      "category": "schedule",
+      "event": {
+        "type": "recovered",
+        "left": 5,
+        "restored": 3
+      }
+    },
+    {
+      "id": 7,
+      "at_unix_ms": 1800000006000,
+      "category": "mode",
+      "event": {
+        "type": "mode_changed",
+        "mode": "vendor",
+        "on_battery": false
+      }
+    },
+    {
+      "id": 8,
+      "at_unix_ms": 1800000007000,
+      "category": "mode",
+      "event": {
+        "type": "mode_failed",
+        "mode": "quiet"
+      }
+    },
+    {
+      "id": 9,
+      "at_unix_ms": 1800000008000,
+      "category": "mode",
+      "event": {
+        "type": "throttled",
+        "limit_pct": 78.0
+      }
+    },
+    {
+      "id": 10,
+      "at_unix_ms": 1800000009000,
+      "category": "mode",
+      "event": {
+        "type": "unthrottled"
+      }
+    },
+    {
+      "id": 11,
+      "at_unix_ms": 1800000010000,
+      "category": "power",
+      "event": {
+        "type": "plan_switched"
+      }
+    },
+    {
+      "id": 12,
+      "at_unix_ms": 1800000011000,
+      "category": "power",
+      "event": {
+        "type": "setting_restored",
+        "setting": "min_state",
+        "class": 1,
+        "ac": true,
+        "found": 100,
+        "expected": 5
+      }
+    },
+    {
+      "id": 13,
+      "at_unix_ms": 1800000012000,
+      "category": "power",
+      "event": {
+        "type": "optimization_reapplied",
+        "id": "allow_boost"
+      }
+    },
+    {
+      "id": 14,
+      "at_unix_ms": 1800000013000,
+      "category": "power",
+      "event": {
+        "type": "efficiency_slider"
+      }
+    },
+    {
+      "id": 15,
+      "at_unix_ms": 1800000014000,
+      "category": "power",
+      "event": {
+        "type": "optimizations_applied",
+        "ids": [
+          "fast_startup",
+          "open_this_pc"
+        ]
+      }
+    },
+    {
+      "id": 16,
+      "at_unix_ms": 1800000015000,
+      "category": "power",
+      "event": {
+        "type": "optimizations_reverted",
+        "ids": [
+          "fast_startup"
+        ]
+      }
+    },
+    {
+      "id": 17,
+      "at_unix_ms": 1800000016000,
+      "category": "cleanup",
+      "event": {
+        "type": "cleaned",
+        "trigger": "auto",
+        "freed_bytes": 1073741824,
+        "handled": 2,
+        "failed": 1
+      }
+    },
+    {
+      "id": 18,
+      "at_unix_ms": 1800000017000,
+      "category": "system",
+      "event": {
+        "type": "started",
+        "version": "0.7.0",
+        "observe_only": true
+      }
+    },
+    {
+      "id": 19,
+      "at_unix_ms": 1800000018000,
+      "category": "system",
+      "event": {
+        "type": "resumed"
+      }
+    },
+    {
+      "id": 20,
+      "at_unix_ms": 1800000019000,
+      "category": "system",
+      "event": {
+        "type": "paused"
+      }
+    },
+    {
+      "id": 21,
+      "at_unix_ms": 1800000020000,
+      "category": "system",
+      "event": {
+        "type": "preference_set",
+        "name": "OneDrive",
+        "path": "c:\\program files\\microsoft onedrive\\onedrive.exe",
+        "preference": "background"
+      }
+    },
+    {
+      "id": 22,
+      "at_unix_ms": 1800000021000,
+      "category": "system",
+      "event": {
+        "type": "smart_schedule",
+        "enabled": false
+      }
+    }
+  ],
+  "log_dir": "C:\\ProgramData\\Poise"
+}

@@ -159,6 +159,7 @@ impl Sim {
                 cpu_total_time: self.system_times.1,
                 ..Default::default()
             },
+            processors: Vec::new(),
         }
     }
 

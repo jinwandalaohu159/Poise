@@ -104,6 +104,8 @@ pub struct Scheduler {
     busy_with_audio: BusyTracker,
     boosts: TempBoosts,
     decisions: DecisionLog,
+    /// 这一轮每个程序（按主进程）的决定、核心范围与负载（见 `explain`）。
+    explained: Vec<(ProcessKey, ProgramState)>,
     reconciler: Reconciler,
 }
 
@@ -179,6 +181,16 @@ impl Scheduler {
             .filter(|l| snap.find(l.key.pid).is_some_and(|p| p.facts.key == l.key))
             .flat_map(leftovers::restore_actions)
             .collect()
+    }
+
+    /// 这一轮每个程序（按主进程）的决定、核心范围与负载（核心与缓存面板显示）。
+    pub fn programs(&self) -> &[(ProcessKey, ProgramState)] {
+        &self.explained
+    }
+
+    /// 这一轮对处理器的需求。
+    pub fn pressure(&self) -> Pressure {
+        self.pressure
     }
 
     /// 一个进程当前的调度状态（程序偏好页显示）。

@@ -12,9 +12,12 @@
 //! 需求只看正在用的程序：后台程序自己把整机跑满，不算有人需要——否则它会为"没有人"让路，
 //! 白白慢下来。需求出现后保持一段时间（前台的负载时有时无，例如滚动网页），不会每轮来回变化。
 
+use serde::{Deserialize, Serialize};
+
 use crate::model::Millis;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Pressure {
     #[default]
     None,

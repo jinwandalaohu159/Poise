@@ -1,5 +1,5 @@
 //! 解释决定：每个程序按主进程算的决定、负载、核心范围，以及没有让路时的原因，交给 [`super::decisions`]
-//! 和上一轮比较、只报告变化。
+//! 和上一轮比较、只报告变化；这一轮的全部结果留着，供界面查看（核心与缓存面板）。
 
 use std::collections::HashMap;
 
@@ -44,7 +44,9 @@ impl Scheduler {
                 ))
             })
             .collect();
-        self.decisions.update(self.pressure, states)
+        let decisions = self.decisions.update(self.pressure, states.iter().copied());
+        self.explained = states;
+        decisions
     }
 
     /// 程序没有让路的原因。

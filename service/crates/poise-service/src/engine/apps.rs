@@ -1,5 +1,5 @@
 //! 程序列表：正在运行的用户程序（含其全部进程）；系统一栏（后台杂活、不参与调度的程序）；
-//! 未运行的程序（设置过类别的，以及以前运行过的）。运行过的程序保存在本机。每个程序附带它当前的调度状态。
+//! 未运行的程序（设置过类别的，以及以前运行过的，见 [`super::remembered`]）。每个程序附带它当前的调度状态。
 //! 分组规则见 [`poise_core::app_groups`]。
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
@@ -11,13 +11,8 @@ use poise_core::prefs::AppPreference;
 use poise_core::schedule::{Desired, ProcessSchedule};
 use poise_protocol::{AppEntry, AppKind, AppProcess, AppSchedule, ScheduleState};
 
-use super::{Engine, View, convert, unix_now_ms};
-
-/// 运行过的程序保存在数据目录的这个文件里。
-pub(super) const SEEN_FILE: &str = "seen_apps.json";
-
-/// 多久记录一次运行的程序：只用于"未运行"一栏，不需要每轮都整理一遍分组。
-const REMEMBER_EVERY_MS: Millis = 30_000;
+use super::remembered::file_stem;
+use super::{Engine, View, convert};
 
 impl Engine {
     /// 程序偏好页的列表：正在运行的（含系统一栏）加上未运行的，按名称排序。界面按 `kind` 和 `running` 分栏。
@@ -137,7 +132,7 @@ impl Engine {
             .filter(|(_, p)| **p != AppPreference::Auto)
             .map(|(path, _)| path);
         let paths: BTreeSet<&String> = configured
-            .chain(self.seen.apps.keys())
+            .chain(self.seen.paths())
             .filter(|path| !running.contains(path.as_str()))
             .collect();
         paths
@@ -148,9 +143,8 @@ impl Engine {
                     pid: None,
                     name: self
                         .seen
-                        .apps
-                        .get(path)
-                        .map_or_else(|| file_stem(path), |s| s.name.clone()),
+                        .name(path)
+                        .map_or_else(|| file_stem(path), str::to_string),
                     path: path.clone(),
                     preference,
                     running: false,
@@ -165,60 +159,26 @@ impl Engine {
             .collect()
     }
 
-    /// 每个采样周期调用，每 [`REMEMBER_EVERY_MS`] 实际做一次：记住正在运行、有窗口的用户程序
-    /// （命令行工具、后台小程序不记），有变化时保存。
+    /// 每个采样周期调用，隔一段时间实际做一次（见 [`super::remembered`]）：记住正在运行、有窗口的用户程序
+    /// （命令行工具、后台小程序不记）。
     pub(super) fn remember_running_apps(&mut self, now: Millis) {
-        if self
-            .seen_checked_at
-            .is_some_and(|t| now.saturating_sub(t) < REMEMBER_EVERY_MS)
-        {
+        if !self.seen.due(now) {
             return;
         }
-        self.seen_checked_at = Some(now);
         let Some(view) = &self.view else {
             return;
         };
-        let running: Vec<(String, String)> = self
+        let running: Vec<(&str, String)> = self
             .running_groups(view)
             .into_values()
             .filter(|g| g.kind == GroupKind::App && g.class.tree_has_window)
-            .map(|g| (g.path.to_string(), g.main.facts.friendly_name()))
+            .map(|g| (g.path, g.main.facts.friendly_name()))
             .collect();
-        let now_s = unix_now_ms() / 1000;
-        let mut changed = false;
-        for (path, name) in &running {
-            changed |= self.seen.observe(path, name, now_s);
-        }
-        if changed {
-            self.save_seen_apps();
-        }
-    }
-
-    /// 启动时：去掉太久没运行、文件已不存在的程序。
-    pub(super) fn prune_seen_apps(&mut self) {
-        let now_s = unix_now_ms() / 1000;
-        if self
-            .seen
-            .prune(now_s, |path| std::path::Path::new(path).exists())
-        {
-            self.save_seen_apps();
-        }
+        self.seen.observe(running);
     }
 
     /// 设置过类别或运行过的程序：只要在运行就列出（即使没有窗口、也没在干活）。
     fn remembered(&self, path: &str) -> bool {
-        self.seen.apps.contains_key(path) || self.settings.preferences.apps.contains_key(path)
+        self.seen.contains(path) || self.settings.preferences.apps.contains_key(path)
     }
-
-    fn save_seen_apps(&self) {
-        if let Err(e) = self.seen_file.save(&self.seen) {
-            log::warn!("保存运行过的程序失败：{e}");
-        }
-    }
-}
-
-fn file_stem(path: &str) -> String {
-    std::path::Path::new(path)
-        .file_stem()
-        .map_or_else(|| path.to_string(), |s| s.to_string_lossy().into_owned())
 }

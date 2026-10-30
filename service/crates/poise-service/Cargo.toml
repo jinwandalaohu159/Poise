@@ -15,6 +15,7 @@ poise-core.workspace = true
 poise-protocol.workspace = true
 poise-platform.workspace = true
 poise-hardware.workspace = true
+poise-logbook.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 log.workspace = true

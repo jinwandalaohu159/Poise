@@ -10,12 +10,16 @@ use poise_core::cleanup::{
     Change, GrowthMetric, Issue, ProcessGroup, Remedy, TotalChange, TotalItem,
 };
 use poise_core::diagnose::{Health, HealthCode, HistoryPoint, Level, StutterCause, StutterReport};
+use poise_core::power_settings::PowerSettingKind;
 use poise_core::prefs::{AppPreference, GameMode, Mode};
+use poise_core::schedule::{Cause, Pressure, Verdict};
 use poise_protocol::{
     Adjustment, AdvisoryDto, AppEntry, AppKind, AppProcess, AppSchedule, CleanupOverview,
-    CleanupResult, CleanupTrigger, CoreUse, CpuDto, Diagnosis, DiskDto, DiskHealthDto, DriveSpace,
-    ErrorCode, FanDto, HardwareInfo, LastCleanup, MemoryDto, Metrics, PriorityLevel,
-    ResponseEnvelope, ScheduleState, SinceBoot, Status, Trend, VolumeDto,
+    CleanupResult, CleanupTrigger, CoreDomainDto, CoreMap, CoreSpan, CoreUse, CpuDto, Diagnosis,
+    DiskDto, DiskHealthDto, DriveSpace, ErrorCode, Event, EventEntry, EventPage, FanDto,
+    HardwareInfo, LastCleanup, MemoryDto, Metrics, PlacedProgram, PriorityLevel, ProcessorDto,
+    ProgramRef, RecordProgram, ResponseEnvelope, ScheduleState, SessionRecord, SinceBoot, Status,
+    Trend, VolumeDto,
 };
 use serde::Serialize;
 
@@ -389,6 +393,222 @@ fn cleanup_overview() -> CleanupOverview {
     }
 }
 
+/// 一个大核域（有程序）和一个小核组（只读得到部分负载）。
+fn cores() -> CoreMap {
+    let program = |pid, name: &str, verdict, load_pct, domains| PlacedProgram {
+        pid,
+        name: name.into(),
+        path: format!(r"c:\games\{pid}.exe"),
+        verdict,
+        load_pct,
+        domains,
+    };
+    CoreMap {
+        partitioned: true,
+        smart_schedule: true,
+        demand: Pressure::High,
+        domains: vec![
+            CoreDomainDto {
+                performance: true,
+                cores: 6,
+                threads: 12,
+                l2_bytes: 1280 * 1024,
+                l2_threads: 2,
+                l3_bytes: 24 << 20,
+                l3_group: Some(0),
+                load_pct: Some(62.5),
+                processors: vec![
+                    ProcessorDto {
+                        number: 0,
+                        core: 0,
+                        load_pct: Some(80.0),
+                    },
+                    ProcessorDto {
+                        number: 1,
+                        core: 0,
+                        load_pct: Some(45.0),
+                    },
+                ],
+                programs: vec![program(7, "League of Legends", Verdict::Playing, 260, 2)],
+            },
+            CoreDomainDto {
+                performance: false,
+                cores: 4,
+                threads: 4,
+                l2_bytes: 2 << 20,
+                l2_threads: 4,
+                l3_bytes: 24 << 20,
+                l3_group: Some(0),
+                load_pct: None,
+                processors: vec![ProcessorDto {
+                    number: 64,
+                    core: 256,
+                    load_pct: None,
+                }],
+                programs: vec![
+                    program(7, "League of Legends", Verdict::Playing, 260, 2),
+                    program(9, "OneDrive", Verdict::Yielded, 35, 1),
+                    program(11, "微信", Verdict::Aside, 0, 1),
+                ],
+            },
+        ],
+        unrestricted: vec![program(12, "Microsoft Edge", Verdict::Lowered, 18, 2)],
+    }
+}
+
+/// 每种事件各一条，界面必须都能读懂。
+fn events() -> EventPage {
+    let program = ProgramRef {
+        pid: 7,
+        name: "League of Legends".into(),
+        path: r"c:\riot games\league of legends.exe".into(),
+    };
+    let list = vec![
+        Event::Demand {
+            level: Pressure::Normal,
+        },
+        Event::Program {
+            program: program.clone(),
+            from: Verdict::Normal,
+            to: Verdict::Playing,
+            cores: CoreSpan {
+                all: false,
+                main: true,
+                others: 1,
+            },
+            load_pct: 260,
+            disk_mb_s: 3,
+            cause: None,
+        },
+        Event::Program {
+            program: program.clone(),
+            from: Verdict::Yielded,
+            to: Verdict::Normal,
+            cores: CoreSpan {
+                all: true,
+                main: true,
+                others: 2,
+            },
+            load_pct: 0,
+            disk_mb_s: 0,
+            cause: Some(Cause::Foreground),
+        },
+        Event::MovedAside { count: 12 },
+        Event::AccessDenied { program },
+        Event::Recovered {
+            left: 5,
+            restored: 3,
+        },
+        Event::ModeChanged {
+            mode: Mode::Vendor,
+            on_battery: false,
+        },
+        Event::ModeFailed { mode: Mode::Quiet },
+        Event::Throttled {
+            limit_pct: Some(78.0),
+        },
+        Event::Unthrottled,
+        Event::PlanSwitched,
+        Event::SettingRestored {
+            setting: Some(PowerSettingKind::MinState),
+            class: Some(1),
+            ac: true,
+            found: Some(100),
+            expected: Some(5),
+        },
+        Event::OptimizationReapplied {
+            id: "allow_boost".into(),
+        },
+        Event::EfficiencySlider,
+        Event::OptimizationsApplied {
+            ids: vec!["fast_startup".into(), "open_this_pc".into()],
+        },
+        Event::OptimizationsReverted {
+            ids: vec!["fast_startup".into()],
+        },
+        Event::Cleaned {
+            trigger: CleanupTrigger::Auto,
+            freed_bytes: GB,
+            handled: 2,
+            failed: 1,
+        },
+        Event::Started {
+            version: "0.7.0".into(),
+            observe_only: true,
+        },
+        Event::Resumed,
+        Event::Paused,
+        Event::PreferenceSet {
+            name: "OneDrive".into(),
+            path: r"c:\program files\microsoft onedrive\onedrive.exe".into(),
+            preference: AppPreference::Background,
+        },
+        Event::SmartSchedule { enabled: false },
+    ];
+    EventPage {
+        entries: list
+            .into_iter()
+            .enumerate()
+            .map(|(i, event)| EventEntry {
+                id: i as u64 + 1,
+                at_unix_ms: 1_800_000_000_000 + i as u64 * 1000,
+                category: event.category(),
+                event,
+            })
+            .collect(),
+        log_dir: r"C:\ProgramData\Poise".into(),
+    }
+}
+
+/// 一段游戏（两个重点程序、温度读得到）和一段编译（温度读不到）。
+fn records() -> Vec<SessionRecord> {
+    vec![
+        SessionRecord {
+            started_unix_ms: 1_800_000_000_000,
+            ended_unix_ms: 1_800_002_400_000,
+            programs: vec![
+                RecordProgram {
+                    name: "League of Legends".into(),
+                    path: Some(r"c:\riot games\league of legends.exe".into()),
+                    game: true,
+                    focused_secs: 2350,
+                    peak_load_pct: 310,
+                    widest_domains: 0b011,
+                },
+                RecordProgram {
+                    name: "Riot Client".into(),
+                    path: None,
+                    game: false,
+                    focused_secs: 40,
+                    peak_load_pct: 120,
+                    widest_domains: 0b001,
+                },
+            ],
+            modes: vec![Mode::Vendor, Mode::Full],
+            moved_aside_peak: 23,
+            yielded_programs: 4,
+            cpu_pct_avg: 41.5,
+            cpu_pct_peak: 88.0,
+            cpu_temp_avg: Some(86.5),
+            cpu_temp_peak: Some(99.0),
+            throttled_secs: 180,
+        },
+        SessionRecord {
+            started_unix_ms: 1_799_990_000_000,
+            ended_unix_ms: 1_799_990_300_000,
+            programs: vec![],
+            modes: vec![Mode::Balanced],
+            moved_aside_peak: 0,
+            yielded_programs: 0,
+            cpu_pct_avg: 70.0,
+            cpu_pct_peak: 100.0,
+            cpu_temp_avg: None,
+            cpu_temp_peak: None,
+            throttled_secs: 0,
+        },
+    ]
+}
+
 fn fixtures_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests")
@@ -454,4 +674,19 @@ fn error_response_sample() {
         "error_response.json",
         &ResponseEnvelope::error(7, ErrorCode::ObserveOnly, "dry run"),
     );
+}
+
+#[test]
+fn cores_sample() {
+    check("cores.json", &cores());
+}
+
+#[test]
+fn events_sample() {
+    check("events.json", &events());
+}
+
+#[test]
+fn records_sample() {
+    check("records.json", &records());
 }

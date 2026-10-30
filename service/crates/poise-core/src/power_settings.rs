@@ -4,6 +4,8 @@
 //! "第 N 类"版本作用于等级 N，大核的等级最高。不是大小核的处理器只用到等级 0，其余版本照样存在、写入无妨。
 //! 只改基础版本的话，大小核处理器的大核完全不受影响——所以凡是分等级的设置，都按等级列全。
 
+use serde::{Deserialize, Serialize};
+
 use crate::setting::Target;
 
 pub const SUB_PROCESSOR: &str = "54533251-82be-4824-96c1-47b60b740d00";
@@ -50,23 +52,33 @@ pub fn target(setting: &str, ac: bool) -> Target {
     Target::power(SUB_PROCESSOR, setting, ac)
 }
 
-/// 日志里显示的名称。
-pub fn name(setting: &str) -> String {
-    let classed = |list: &[&str], label: &str| {
+/// 处理器电源设置的种类（日志与界面按它显示名称）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PowerSettingKind {
+    MinState,
+    MaxState,
+    Epp,
+    CoreParkingMin,
+    BoostMode,
+}
+
+/// 一个设置是哪种、作用于哪个效率等级（不分等级的为 None）；不认识的为 None。
+pub fn kind(setting: &str) -> Option<(PowerSettingKind, Option<u8>)> {
+    let classed = |list: &[&str], kind: PowerSettingKind| {
         list.iter()
             .position(|s| s.eq_ignore_ascii_case(setting))
-            .map(|class| format!("{label}（等级 {class}）"))
+            .map(|class| (kind, Some(class as u8)))
     };
-    classed(&MIN_STATE, "最小处理器状态")
-        .or_else(|| classed(&MAX_STATE, "最大处理器状态"))
-        .or_else(|| classed(&EPP, "能效偏好"))
-        .or_else(|| classed(&CP_MIN_CORES, "核心停放最少核心"))
+    classed(&MIN_STATE, PowerSettingKind::MinState)
+        .or_else(|| classed(&MAX_STATE, PowerSettingKind::MaxState))
+        .or_else(|| classed(&EPP, PowerSettingKind::Epp))
+        .or_else(|| classed(&CP_MIN_CORES, PowerSettingKind::CoreParkingMin))
         .or_else(|| {
             setting
                 .eq_ignore_ascii_case(BOOST_MODE)
-                .then(|| "睿频模式".into())
+                .then_some((PowerSettingKind::BoostMode, None))
         })
-        .unwrap_or_else(|| setting.to_string())
 }
 
 #[cfg(test)]
@@ -84,9 +96,12 @@ mod tests {
     }
 
     #[test]
-    fn names_say_which_class() {
-        assert_eq!(name(MIN_STATE[1]), "最小处理器状态（等级 1）");
-        assert_eq!(name(BOOST_MODE), "睿频模式");
-        assert_eq!(name("unknown"), "unknown");
+    fn kinds_say_which_class() {
+        assert_eq!(
+            kind(&MIN_STATE[1].to_uppercase()),
+            Some((PowerSettingKind::MinState, Some(1)))
+        );
+        assert_eq!(kind(BOOST_MODE), Some((PowerSettingKind::BoostMode, None)));
+        assert_eq!(kind("unknown"), None);
     }
 }

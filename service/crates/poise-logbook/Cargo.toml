@@ -1,0 +1,14 @@
+[package]
+name = "poise-logbook"
+description = "Poise 的日志系统与记录系统：在自己的线程里写日志、汇总使用记录，调度只通过接口交给它"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+poise-core.workspace = true
+poise-protocol.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+log.workspace = true

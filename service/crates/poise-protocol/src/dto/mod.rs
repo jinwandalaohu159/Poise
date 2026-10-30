@@ -2,10 +2,16 @@
 
 mod apps;
 mod cleanup;
+mod cores;
 mod diagnosis;
+mod events;
+mod records;
 mod status;
 
 pub use apps::*;
 pub use cleanup::*;
+pub use cores::*;
 pub use diagnosis::*;
+pub use events::*;
+pub use records::*;
 pub use status::*;

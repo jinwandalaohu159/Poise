@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use crate::model::{Millis, ProcessKey, Snapshot};
+use crate::model::{Millis, ProcessKey, ProcessorTime, Snapshot};
 
 /// 一个进程最近的资源使用情况。
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
@@ -56,6 +56,8 @@ pub struct ActivityTracker {
     usage: HashMap<ProcessKey, Usage>,
     last_system: Option<(u64, u64)>,
     system_cpu_pct: f32,
+    last_processors: Vec<ProcessorTime>,
+    processor_pct: Vec<f32>,
 }
 
 impl ActivityTracker {
@@ -69,6 +71,23 @@ impl ActivityTracker {
     /// 整机 CPU 占用百分比（0–100）。
     pub fn system_cpu_pct(&self) -> f32 {
         self.system_cpu_pct
+    }
+
+    /// 第 0 个处理器组各逻辑处理器的占用（0–100，按组内序号）；还没有两次采样时为空。
+    pub fn processor_loads(&self) -> &[f32] {
+        &self.processor_pct
+    }
+
+    /// 两类核心各自的平均占用：`performance_by_index` 按组内序号标出大核。不是大小核处理器（为空）或还没有读数时为空。
+    pub fn class_loads(&self, performance_by_index: &[bool]) -> Option<(f32, f32)> {
+        let mut sums = [(0.0f32, 0u32); 2];
+        for (pct, &big) in self.processor_pct.iter().zip(performance_by_index) {
+            let s = &mut sums[usize::from(!big)];
+            s.0 += pct;
+            s.1 += 1;
+        }
+        let avg = |(sum, n): (f32, u32)| if n == 0 { 0.0 } else { sum / n as f32 };
+        (sums[0].1 > 0 && sums[1].1 > 0).then(|| (avg(sums[0]), avg(sums[1])))
     }
 
     pub fn usage(&self, key: &ProcessKey) -> Usage {
@@ -130,10 +149,34 @@ impl ActivityTracker {
         if let Some((pb, pt)) = self.last_system
             && total > pt
         {
-            self.system_cpu_pct =
-                (busy.saturating_sub(pb) as f64 * 100.0 / (total - pt) as f64) as f32;
+            self.system_cpu_pct = pct(busy.saturating_sub(pb), total - pt);
         }
         self.last_system = Some((busy, total));
+        if snap.processors.len() == self.last_processors.len() {
+            self.processor_pct = snap
+                .processors
+                .iter()
+                .zip(&self.last_processors)
+                .map(|(now, prev)| {
+                    pct(
+                        now.busy.saturating_sub(prev.busy),
+                        now.total.saturating_sub(prev.total),
+                    )
+                })
+                .collect();
+        } else {
+            self.processor_pct.clear();
+        }
+        self.last_processors.clone_from(&snap.processors);
+    }
+}
+
+/// 一段时间里忙碌的比例（0–100）。
+fn pct(busy: u64, total: u64) -> f32 {
+    if total == 0 {
+        0.0
+    } else {
+        (busy.min(total) as f64 * 100.0 / total as f64) as f32
     }
 }
 
@@ -198,5 +241,53 @@ mod tests {
             t.usage(&ProcessKey { pid: 7, created: 1 }),
             Usage::default()
         );
+    }
+
+    #[test]
+    fn processor_loads_and_the_two_core_classes() {
+        let mut t = ActivityTracker::new(ActivityConfig::default());
+        let first = Snapshot {
+            processors: vec![
+                ProcessorTime {
+                    busy: 0,
+                    total: 100,
+                },
+                ProcessorTime {
+                    busy: 0,
+                    total: 200,
+                },
+                ProcessorTime {
+                    busy: 0,
+                    total: 300,
+                },
+            ],
+            ..Default::default()
+        };
+        t.update(&first);
+        assert!(t.processor_loads().is_empty());
+        assert_eq!(t.class_loads(&[true, false, false]), None);
+        // 下一次：各自的时间都多了 100、200、300，其中忙碌 50、0、300。
+        let next = Snapshot {
+            processors: vec![
+                ProcessorTime {
+                    busy: 50,
+                    total: 200,
+                },
+                ProcessorTime {
+                    busy: 0,
+                    total: 400,
+                },
+                ProcessorTime {
+                    busy: 300,
+                    total: 600,
+                },
+            ],
+            ..Default::default()
+        };
+        t.update(&next);
+        assert_eq!(t.processor_loads(), &[50.0, 0.0, 100.0]);
+        assert_eq!(t.class_loads(&[true, false, false]), Some((50.0, 50.0)));
+        // 不是大小核处理器：没有两类之分。
+        assert_eq!(t.class_loads(&[]), None);
     }
 }

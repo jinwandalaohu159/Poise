@@ -65,6 +65,22 @@ impl CoreSet {
             _ => false,
         }
     }
+
+    /// 在有 `domains` 个核心域的处理器上用到哪些域（第 n 位对应第 n 个域）；不限制时是全部。
+    pub fn domain_mask(self, domains: usize) -> u16 {
+        let all = if domains >= 16 {
+            u16::MAX
+        } else {
+            (1u16 << domains) - 1
+        };
+        let mask = match self {
+            Self::All => all,
+            Self::Performance => 1,
+            Self::Efficiency => all & !1,
+            Self::Domains(m) => m,
+        } & all;
+        if mask == 0 { all } else { mask }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -191,4 +207,20 @@ pub struct ExecOutcome {
 /// 平台层实现的原始执行器。业务代码不直接使用它，而是通过安全守卫包装。
 pub trait ActionExecutor: Send {
     fn execute(&self, action: &Action) -> Result<ExecOutcome, ExecError>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::CoreSet;
+
+    #[test]
+    fn core_sets_map_to_the_domains_they_use() {
+        assert_eq!(CoreSet::All.domain_mask(3), 0b111);
+        assert_eq!(CoreSet::Performance.domain_mask(3), 0b001);
+        assert_eq!(CoreSet::Efficiency.domain_mask(3), 0b110);
+        assert_eq!(CoreSet::Domains(0b011).domain_mask(3), 0b011);
+        // 只有一个域：怎样都是不限制。
+        assert_eq!(CoreSet::Efficiency.domain_mask(1), 0b1);
+        assert_eq!(CoreSet::All.domain_mask(16), u16::MAX);
+    }
 }

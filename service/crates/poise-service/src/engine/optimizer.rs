@@ -5,7 +5,7 @@ use std::sync::Arc;
 use poise_core::optimize::{self, ApplyReport, ItemStatus, OptimizationItem};
 use poise_platform::settings::user::UserContext;
 
-use poise_protocol::ErrorCode;
+use poise_protocol::{ErrorCode, Event};
 
 use super::Engine;
 use super::catalog::Catalog;
@@ -42,9 +42,10 @@ impl Engine {
     pub fn apply_optimization(&mut self, id: &str) -> Result<(), RequestError> {
         let item = self.optimization_item(id)?;
         let now = self.now();
-        Ok(self
-            .changes
-            .edit(|s, j| optimize::apply(&item, s, j, now))?)
+        self.changes
+            .edit(|s, j| optimize::apply(&item, s, j, now))?;
+        self.note_applied(vec![id.to_string()]);
+        Ok(())
     }
 
     /// 还原一项：Poise 改过的回到修改前，别处改的（用户自己或其他工具）回到系统默认。
@@ -56,21 +57,40 @@ impl Engine {
             ));
         }
         if self.changes.journal().owns(id) {
-            return Ok(self.changes.revert(id)?);
+            self.changes.revert(id)?;
+        } else {
+            let item = self.optimization_item(id)?;
+            self.changes.restore_default(&item)?;
         }
-        let item = self.optimization_item(id)?;
-        Ok(self.changes.restore_default(&item)?)
+        self.note_reverted(vec![id.to_string()]);
+        Ok(())
     }
 
     pub fn apply_recommended(&mut self) -> Result<ApplyReport, RequestError> {
         let items = self.optimization_items();
         let now = self.now();
-        Ok(self
+        let report = self
             .changes
-            .edit(|s, j| Ok(optimize::apply_recommended(&items, s, j, now)))?)
+            .edit(|s, j| Ok(optimize::apply_recommended(&items, s, j, now)))?;
+        self.note_applied(report.applied.clone());
+        Ok(report)
     }
 
     pub fn revert_optimizations(&mut self) -> Result<Vec<String>, RequestError> {
-        Ok(self.changes.revert_optimizations()?)
+        let reverted = self.changes.revert_optimizations()?;
+        self.note_reverted(reverted.clone());
+        Ok(reverted)
+    }
+
+    fn note_applied(&mut self, ids: Vec<String>) {
+        if !ids.is_empty() {
+            self.logbook.event(Event::OptimizationsApplied { ids });
+        }
+    }
+
+    fn note_reverted(&mut self, ids: Vec<String>) {
+        if !ids.is_empty() {
+            self.logbook.event(Event::OptimizationsReverted { ids });
+        }
     }
 }

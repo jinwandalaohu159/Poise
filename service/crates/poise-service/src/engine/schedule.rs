@@ -9,10 +9,10 @@ use poise_core::prefs::Mode;
 use poise_core::safety::{GuardedExecutor, Trigger};
 use poise_core::schedule::{GameInfo, PlannedAction, ScheduleInput};
 use poise_platform::observe::system;
-use poise_protocol::ErrorCode;
+use poise_protocol::{ErrorCode, Event};
 
 use super::error::RequestError;
-use super::{Engine, decision_log};
+use super::{Engine, decision_events};
 
 /// 临时全速的最长时间（分钟）。
 const MAX_BOOST_MINUTES: u32 = 240;
@@ -61,12 +61,15 @@ impl Engine {
             on_battery: system::on_battery(),
             hot: self.headroom.exhausted(),
         });
-        self.execute_plan(&plan.actions, classes);
+        self.execute_plan(&plan.actions, snapshot, classes);
         if !plan.actions.is_empty() || !plan.decisions.is_empty() {
             self.last_change_at = now;
         }
         self.adjusted.update(self.scheduler.adjusted(), now);
-        decision_log::log(&plan.decisions, snapshot);
+        let domains = self.topology.domains.len();
+        for event in decision_events::events(&plan.decisions, snapshot, domains) {
+            self.logbook.event(event);
+        }
         ScheduleOutcome {
             effective_mode: plan.effective_mode,
             game: plan.game,
@@ -75,7 +78,12 @@ impl Engine {
     }
 
     /// 执行调度动作（经过安全守卫），并把结果回报给调度器。
-    fn execute_plan(&mut self, actions: &[PlannedAction], classes: &HashMap<Pid, Classification>) {
+    fn execute_plan(
+        &mut self,
+        actions: &[PlannedAction],
+        snapshot: &Snapshot,
+        classes: &HashMap<Pid, Classification>,
+    ) {
         for planned in actions {
             let Some(result) = execute(&self.executor, planned, classes) else {
                 continue;
@@ -86,10 +94,11 @@ impl Engine {
                 // 系统拒绝访问的进程之后不再尝试（见 `Reconciler::report`），每个进程只记一次。
                 // 游戏被拒绝时，它就没能放到大核上：日志里要看得到。
                 Err(ExecError::AccessDenied) => {
-                    log::info!(
-                        "{:?} 未执行：{}，不再尝试",
-                        planned.action,
-                        ExecError::AccessDenied
+                    self.logbook.event_with(
+                        Event::AccessDenied {
+                            program: decision_events::program_ref(planned.key, snapshot),
+                        },
+                        format!("{:?}", planned.action),
                     );
                 }
                 Err(e) => log::debug!("{:?} 未执行：{e}", planned.action),
@@ -115,10 +124,10 @@ impl Engine {
             .map(|a| a.key)
             .collect::<std::collections::HashSet<_>>()
             .len();
-        log::info!(
-            "上次异常退出，留下 {} 个调整过的进程，已把还在运行的 {restored} 个恢复原样",
-            leftovers.len()
-        );
+        self.logbook.event(Event::Recovered {
+            left: leftovers.len() as u32,
+            restored: restored as u32,
+        });
     }
 
     /// 撤销所有进程调整（服务停止、Poise 退出时）。按最新的进程快照撤销两遍：
@@ -140,7 +149,7 @@ impl Engine {
                 on_battery: false,
                 hot: false,
             });
-            self.execute_plan(&plan.actions, &classes);
+            self.execute_plan(&plan.actions, &snapshot, &classes);
         }
         let now = self.now();
         self.adjusted.flush(self.scheduler.adjusted(), now);

@@ -14,6 +14,7 @@ use poise_core::optimize::{self, OptimizationItem};
 use poise_core::power_settings;
 use poise_core::setting::{Target, Value};
 use poise_platform::settings::power_plan;
+use poise_protocol::Event;
 
 use super::Engine;
 use super::changes::GAME_PREFIX;
@@ -64,9 +65,9 @@ impl Engine {
         if scheme != self.power_guard.scheme {
             let previous = std::mem::replace(&mut self.power_guard.scheme, scheme.clone());
             if let Some(old) = previous {
-                log::info!(
-                    "电源计划从 {old} 换成了 {}，当前模式重新写入新计划",
-                    scheme.as_deref().unwrap_or("?")
+                self.logbook.event_with(
+                    Event::PlanSwitched,
+                    format!("{old} → {}", scheme.as_deref().unwrap_or("?")),
                 );
                 self.hardware.power_plan_changed();
                 self.power_guard.check_soon(now);
@@ -92,12 +93,19 @@ impl Engine {
             return;
         }
         for (e, current) in &drifted {
-            log::info!(
-                "{} 被别处改成了 {}（Poise 为 {} 设的是 {}），已改回",
-                setting_name(&e.target),
-                value_text(current.as_ref()),
-                e.owner,
-                value_text(Some(&e.applied))
+            let Target::PowerSetting { setting, ac, .. } = &e.target else {
+                continue;
+            };
+            let kind = power_settings::kind(setting);
+            self.logbook.event_with(
+                Event::SettingRestored {
+                    setting: kind.map(|(k, _)| k),
+                    class: kind.and_then(|(_, c)| c),
+                    ac: *ac,
+                    found: dword(current.as_ref()),
+                    expected: dword(Some(&e.applied)),
+                },
+                format!("{setting}，由 {} 设置", e.owner),
             );
         }
         let entries: Vec<JournalEntry> = drifted.into_iter().map(|(e, _)| e).collect();
@@ -116,7 +124,9 @@ impl Engine {
                 .collect();
         for item in reverted {
             match self.changes.edit(|s, j| optimize::apply(&item, s, j, now)) {
-                Ok(()) => log::info!("优化项 {} 已不是优化状态，已重新应用", item.id),
+                Ok(()) => self.logbook.event(Event::OptimizationReapplied {
+                    id: item.id.clone(),
+                }),
                 Err(e) => log::warn!("优化项 {} 已不是优化状态，重新应用失败：{e}", item.id),
             }
         }
@@ -130,9 +140,7 @@ impl Engine {
             return;
         }
         if overlay == Some(power_plan::OVERLAY_BETTER_BATTERY) {
-            log::info!(
-                "Windows 电源模式处于\"最佳能效\"：它会盖住电源计划里的能效偏好等设置，Poise 的模式只部分生效"
-            );
+            self.logbook.event(Event::EfficiencySlider);
         } else if self.power_guard.overlay.is_some() {
             log::info!(
                 "Windows 电源模式滑块：{}",
@@ -153,22 +161,11 @@ fn in_scheme(target: &Target, active: &str) -> bool {
     matches!(target, Target::PowerSetting { scheme: Some(s), .. } if s.eq_ignore_ascii_case(active))
 }
 
-fn setting_name(target: &Target) -> String {
-    match target {
-        Target::PowerSetting { setting, ac, .. } => format!(
-            "{}（{}）",
-            power_settings::name(setting),
-            if *ac { "插电" } else { "电池" }
-        ),
-        other => format!("{other:?}"),
-    }
-}
-
-fn value_text(v: Option<&Value>) -> String {
+/// 电源设置的数值；不存在或不是数值时为空。
+fn dword(v: Option<&Value>) -> Option<u32> {
     match v {
-        Some(Value::Dword(n)) => n.to_string(),
-        Some(other) => format!("{other:?}"),
-        None => "（不存在）".into(),
+        Some(Value::Dword(n)) => Some(*n),
+        _ => None,
     }
 }
 
@@ -205,6 +202,7 @@ mod tests {
         assert!(in_scheme(&t(Some("ABC")), "abc"));
         assert!(!in_scheme(&t(Some("def")), "abc"));
         assert!(!in_scheme(&t(None), "abc"));
-        assert_eq!(setting_name(&t(None)), "睿频模式（插电）");
+        assert_eq!(dword(Some(&Value::Dword(2))), Some(2));
+        assert_eq!(dword(None), None);
     }
 }

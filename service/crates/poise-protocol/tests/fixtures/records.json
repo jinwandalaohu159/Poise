@@ -1,0 +1,50 @@
+[
+  {
+    "started_unix_ms": 1800000000000,
+    "ended_unix_ms": 1800002400000,
+    "programs": [
+      {
+        "name": "League of Legends",
+        "path": "c:\\riot games\\league of legends.exe",
+        "game": true,
+        "focused_secs": 2350,
+        "peak_load_pct": 310,
+        "widest_domains": 3
+      },
+      {
+        "name": "Riot Client",
+        "path": null,
+        "game": false,
+        "focused_secs": 40,
+        "peak_load_pct": 120,
+        "widest_domains": 1
+      }
+    ],
+    "modes": [
+      "vendor",
+      "full"
+    ],
+    "moved_aside_peak": 23,
+    "yielded_programs": 4,
+    "cpu_pct_avg": 41.5,
+    "cpu_pct_peak": 88.0,
+    "cpu_temp_avg": 86.5,
+    "cpu_temp_peak": 99.0,
+    "throttled_secs": 180
+  },
+  {
+    "started_unix_ms": 1799990000000,
+    "ended_unix_ms": 1799990300000,
+    "programs": [],
+    "modes": [
+      "balanced"
+    ],
+    "moved_aside_peak": 0,
+    "yielded_programs": 0,
+    "cpu_pct_avg": 70.0,
+    "cpu_pct_peak": 100.0,
+    "cpu_temp_avg": null,
+    "cpu_temp_peak": null,
+    "throttled_secs": 0
+  }
+]

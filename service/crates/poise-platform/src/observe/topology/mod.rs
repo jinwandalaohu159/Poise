@@ -28,6 +28,33 @@ pub struct CoreCount {
     pub threads: u32,
 }
 
+/// 一个逻辑处理器：处理器组、组内序号，以及属于组内的哪个物理核心（超线程的两个逻辑处理器同属一个核心）。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct LogicalProcessor {
+    pub group: u16,
+    pub index: u8,
+    pub core: u8,
+}
+
+/// 一个核心域：哪些逻辑处理器、几个物理核心、是不是大核，以及缓存（界面的核心与缓存面板按它画）。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CoreDomain {
+    /// CPU Set ID（限制进程用哪些核心时用）。
+    pub ids: Vec<u32>,
+    /// 逻辑处理器，与 `ids` 一一对应。
+    pub processors: Vec<LogicalProcessor>,
+    /// 物理核心数。
+    pub cores: u32,
+    /// 效率等级最高的核心（大核；不是大小核架构时全部是）。
+    pub performance: bool,
+    /// 二级缓存每块的容量，以及每块由几个逻辑处理器共用；读不到时为 0。
+    pub l2_bytes: u32,
+    pub l2_threads: u32,
+    /// 所在最后一级缓存的容量（读不到时为 0）和编号：几个域共用同一块时编号相同。
+    pub llc_bytes: u32,
+    pub llc_block: Option<u8>,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CpuTopology {
     /// 大核数量；不是大小核架构时是全部核心。
@@ -38,8 +65,8 @@ pub struct CpuTopology {
     pub performance_by_index: Vec<bool>,
     /// 最高的效率等级（大核所在的等级）。Windows 从 0（最省电的核心）开始编号，不是大小核架构时为 0。
     pub top_class: u8,
-    /// 核心域（每个域的 CPU Set ID），排序见模块说明。只有一个域时不限制核心。
-    pub domains: Vec<Vec<u32>>,
+    /// 核心域，排序见模块说明。只有一个域时不限制核心。
+    pub domains: Vec<CoreDomain>,
 }
 
 impl CpuTopology {
@@ -95,12 +122,15 @@ impl CpuTopology {
 
     /// 全部逻辑处理器的 CPU Set ID。
     pub fn all_ids(&self) -> Vec<u32> {
-        self.domains.iter().flatten().copied().collect()
+        self.domains
+            .iter()
+            .flat_map(|d| d.ids.iter().copied())
+            .collect()
     }
 
     /// 各核心域的线程数（调度按它分配，见 `CoreLayout`）。
     pub fn domain_threads(&self) -> Vec<u32> {
-        self.domains.iter().map(|d| d.len() as u32).collect()
+        self.domains.iter().map(|d| d.ids.len() as u32).collect()
     }
 
     /// 某个核心集合对应的 CPU Set ID；None 表示不限制（包括覆盖了全部核心域）。
@@ -108,14 +138,9 @@ impl CpuTopology {
         if !self.partitioned() {
             return None;
         }
-        let all = (1u32 << self.domains.len()) - 1;
-        let mask = u32::from(match set {
-            CoreSet::All => return None,
-            CoreSet::Performance => 1,
-            CoreSet::Efficiency => (all & !1) as u16,
-            CoreSet::Domains(m) => m,
-        }) & all;
-        if mask == 0 || mask == all {
+        let count = self.domains.len();
+        let mask = set.domain_mask(count);
+        if mask == CoreSet::All.domain_mask(count) {
             return None;
         }
         Some(
@@ -123,7 +148,7 @@ impl CpuTopology {
                 .iter()
                 .enumerate()
                 .filter(|(i, _)| mask & (1 << i) != 0)
-                .flat_map(|(_, d)| d.iter().copied())
+                .flat_map(|(_, d)| d.ids.iter().copied())
                 .collect(),
         )
     }
@@ -142,6 +167,10 @@ mod tests {
             core_index: core,
             efficiency_class: class,
         }
+    }
+
+    fn ids(t: &CpuTopology) -> Vec<Vec<u32>> {
+        t.domains.iter().map(|d| d.ids.clone()).collect()
     }
 
     fn cache(level: u8, size: u32, ids: std::ops::Range<u32>) -> CacheEntry {
@@ -178,7 +207,7 @@ mod tests {
         let (sets, caches) = alder_lake();
         let t = CpuTopology::from_sets(&sets, &caches);
         assert_eq!(
-            t.domains,
+            ids(&t),
             vec![vec![0, 1, 2, 3], vec![4, 5, 6, 7], vec![8, 9, 10, 11]]
         );
         assert!(t.is_hybrid() && t.partitioned());
@@ -194,7 +223,34 @@ mod tests {
         assert_eq!(t.ids_for(CoreSet::All), None);
         // 读不到缓存信息：大核、小核各一个域。
         let t = CpuTopology::from_sets(&sets, &[]);
-        assert_eq!(t.domains, vec![vec![0, 1, 2, 3], (4..12).collect()]);
+        assert_eq!(ids(&t), vec![vec![0, 1, 2, 3], (4..12).collect::<Vec<_>>()]);
+    }
+
+    #[test]
+    fn domains_describe_their_cores_and_caches() {
+        let (sets, caches) = alder_lake();
+        let t = CpuTopology::from_sets(&sets, &caches);
+        let [big, small, _] = t.domains.as_slice() else {
+            panic!("应有三个域");
+        };
+        assert!(big.performance && !small.performance);
+        assert_eq!((big.cores, small.cores), (2, 4));
+        assert_eq!(
+            big.processors
+                .iter()
+                .map(|p| (p.index, p.core))
+                .collect::<Vec<_>>(),
+            vec![(0, 0), (1, 0), (2, 1), (3, 1)]
+        );
+        // 大核每个核心一块二级缓存（2 线程共用），小核 4 个共用一块。
+        assert_eq!((big.l2_bytes, big.l2_threads), (1 << 20, 2));
+        assert_eq!((small.l2_bytes, small.l2_threads), (2 << 20, 4));
+        // 三级缓存全部共用：编号相同。
+        assert!(
+            t.domains
+                .iter()
+                .all(|d| d.llc_bytes == 24 << 20 && d.llc_block == Some(0))
+        );
     }
 
     #[test]
@@ -211,8 +267,16 @@ mod tests {
         ];
         let t = CpuTopology::from_sets(&sets, &caches);
         assert!(!t.is_hybrid());
-        assert_eq!(t.domains, vec![vec![4, 5, 6, 7], vec![0, 1, 2, 3]]);
+        assert_eq!(ids(&t), vec![vec![4, 5, 6, 7], vec![0, 1, 2, 3]]);
         assert_eq!(t.ids_for(CoreSet::Efficiency), Some(vec![0, 1, 2, 3]));
+        // 两块三级缓存各自编号，带 3D 缓存的在前。
+        assert_eq!(
+            t.domains
+                .iter()
+                .map(|d| (d.llc_bytes >> 20, d.llc_block))
+                .collect::<Vec<_>>(),
+            vec![(96, Some(0)), (32, Some(1))]
+        );
     }
 
     #[test]
@@ -236,7 +300,7 @@ mod tests {
     #[test]
     fn three_classes_make_three_domains_from_fast_to_slow() {
         let t = CpuTopology::from_sets(&[entry(0, 0, 2), entry(1, 1, 1), entry(2, 2, 0)], &[]);
-        assert_eq!(t.domains, vec![vec![0], vec![1], vec![2]]);
+        assert_eq!(ids(&t), vec![vec![0], vec![1], vec![2]]);
         assert_eq!(t.ids_for(CoreSet::Efficiency), Some(vec![1, 2]));
         assert_eq!(t.performance_count.threads, 1);
         assert_eq!(t.efficiency_count.threads, 2);
@@ -271,14 +335,14 @@ mod tests {
             .collect();
         let t = CpuTopology::from_sets(&sets, &caches);
         assert_eq!(t.domains.len(), domains::MAX_DOMAINS);
-        assert_eq!(t.domains.iter().map(Vec::len).sum::<usize>(), 40);
+        assert_eq!(t.domains.iter().map(|d| d.ids.len()).sum::<usize>(), 40);
     }
 
     #[test]
     fn detects_this_machine() {
         let t = CpuTopology::detect();
         // 每个逻辑处理器恰好在一个核心域里；其他机器上至少不应崩溃。
-        let total: usize = t.domains.iter().map(Vec::len).sum();
+        let total: usize = t.domains.iter().map(|d| d.ids.len()).sum();
         assert_eq!(total, crate::observe::system::logical_cpus() as usize);
         // 开发机为 i7-12700H（6P+8E，20 线程）：大核一个域，小核按二级缓存分两组。
         if t.performance_count.threads == 12 && t.efficiency_count.threads == 8 {

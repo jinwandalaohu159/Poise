@@ -1,0 +1,135 @@
+<Page
+    x:Class="Poise.App.UI.Pages.ActivityPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:c="using:Poise.App.UI.Controls"
+    xmlns:l="using:Poise.App.UI.Localization"
+    xmlns:p="using:Poise.Core.Presentation"
+    Background="Transparent">
+
+    <Page.Resources>
+        <!-- 一条日志：时刻（不是今天的上面另有日期；这一列宽度固定，各行对齐）、类别图标（需要注意的为橙色）、
+             程序图标、发生了什么、补充说明 -->
+        <DataTemplate x:Key="EventTemplate" x:DataType="p:EventRow">
+            <Grid ColumnSpacing="12" Padding="4,8">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="64" />
+                    <ColumnDefinition Width="16" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+                <StackPanel VerticalAlignment="Top" Margin="0,2,0,0">
+                    <TextBlock Text="{x:Bind Day}" Style="{StaticResource CaptionSecondaryTextStyle}" Visibility="{x:Bind c:Show.IfText(Day)}" />
+                    <TextBlock Text="{x:Bind Time}" Style="{StaticResource CaptionSecondaryTextStyle}" />
+                </StackPanel>
+                <Grid Grid.Column="1" VerticalAlignment="Top" Margin="0,2,0,0">
+                    <FontIcon FontFamily="{StaticResource IconFont}" Glyph="{x:Bind Glyph}" FontSize="14"
+                              Foreground="{ThemeResource TextFillColorSecondaryBrush}" Visibility="{x:Bind c:Show.UnlessNotice(Tone)}" />
+                    <FontIcon FontFamily="{StaticResource IconFont}" Glyph="{x:Bind Glyph}" FontSize="14"
+                              Foreground="{ThemeResource SystemFillColorCautionBrush}" Visibility="{x:Bind c:Show.IfNotice(Tone)}" />
+                </Grid>
+                <c:ProgramIcon Grid.Column="2" Path="{x:Bind IconPath}" VerticalAlignment="Top"
+                               Visibility="{x:Bind c:Show.IfText(IconPath)}" />
+                <StackPanel Grid.Column="3" Spacing="2">
+                    <TextBlock Text="{x:Bind Title}" TextWrapping="Wrap" />
+                    <TextBlock Text="{x:Bind Detail}" Style="{StaticResource CaptionSecondaryTextStyle}" TextWrapping="Wrap"
+                               Visibility="{x:Bind c:Show.IfText(Detail)}" />
+                </StackPanel>
+            </Grid>
+        </DataTemplate>
+
+        <!-- 一条使用记录：主程序图标、程序、时间与时长、模式，以及几条要点 -->
+        <DataTemplate x:Key="RecordTemplate" x:DataType="p:RecordView">
+            <Border Style="{StaticResource LargeCardStyle}">
+                <Grid ColumnSpacing="16" RowSpacing="12">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+                    <c:ProgramIcon Path="{x:Bind IconPath}" VerticalAlignment="Top" Margin="0,2,0,0" />
+                    <StackPanel Grid.Column="1" Spacing="2">
+                        <TextBlock Text="{x:Bind Title}" Style="{StaticResource CardTitleTextStyle}" TextTrimming="CharacterEllipsis" />
+                        <TextBlock Text="{x:Bind When}" Style="{StaticResource CaptionSecondaryTextStyle}" />
+                    </StackPanel>
+                    <StackPanel Grid.Column="2" HorizontalAlignment="Right" Spacing="2">
+                        <TextBlock Text="{x:Bind Duration}" Style="{StaticResource KpiUnitTextStyle}" HorizontalAlignment="Right" />
+                        <TextBlock Text="{x:Bind Modes}" Style="{StaticResource CaptionSecondaryTextStyle}" HorizontalAlignment="Right" />
+                    </StackPanel>
+                    <ItemsControl Grid.Row="1" Grid.Column="1" Grid.ColumnSpan="2" ItemsSource="{x:Bind Facts}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="x:String">
+                                <TextBlock Text="{x:Bind}" Style="{StaticResource BodyTextStyle}" TextWrapping="Wrap" Margin="0,1" />
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </Grid>
+            </Border>
+        </DataTemplate>
+    </Page.Resources>
+
+    <Grid MaxWidth="{StaticResource PageMaxWidth}" Padding="{StaticResource PagePadding}">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <c:PageHeader x:Name="Header" />
+
+        <!-- 日志 / 使用记录；日志可按类别筛选、打开详细日志所在的文件夹 -->
+        <Grid Grid.Row="1" ColumnSpacing="12" Margin="0,0,0,8">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <SelectorBar x:Name="Tabs" SelectionChanged="OnTabChanged">
+                <SelectorBarItem x:Name="LogTab" Text="{l:L Key=activity.log}" IsSelected="True" />
+                <SelectorBarItem x:Name="RecordsTab" Text="{l:L Key=activity.records}" />
+            </SelectorBar>
+            <ComboBox x:Name="FilterBox" Grid.Column="1" MinWidth="160" VerticalAlignment="Center"
+                      ItemsSource="{x:Bind Log.Filters}" SelectedItem="{x:Bind Log.Filter, Mode=TwoWay}"
+                      DisplayMemberPath="Title" />
+            <HyperlinkButton x:Name="FolderLink" Grid.Column="2" VerticalAlignment="Center" Click="OnOpenFolder"
+                             IsEnabled="{x:Bind Log.CanOpenFolder, Mode=OneWay}">
+                <StackPanel Orientation="Horizontal" Spacing="6">
+                    <FontIcon FontFamily="{StaticResource IconFont}" Glyph="&#xE838;" FontSize="14" />
+                    <TextBlock Text="{l:L Key=log.open_folder}" />
+                </StackPanel>
+            </HyperlinkButton>
+        </Grid>
+
+        <InfoBar x:Name="ErrorBar" Grid.Row="2" Severity="Error" IsOpen="False" Margin="0,0,0,8" />
+
+        <!-- 日志：虚拟化列表，几百条也只创建看得见的行 -->
+        <Grid x:Name="LogPanel" Grid.Row="3">
+            <Border Style="{StaticResource CardStyle}" Padding="8,4">
+                <ListView ItemsSource="{x:Bind Log.Events}" ItemTemplate="{StaticResource EventTemplate}"
+                          SelectionMode="None" IsItemClickEnabled="False" />
+            </Border>
+            <TextBlock Text="{l:L Key=log.empty}" Style="{StaticResource CaptionSecondaryTextStyle}"
+                       HorizontalAlignment="Center" VerticalAlignment="Center"
+                       Visibility="{x:Bind Log.EmptyVisibility, Mode=OneWay}" />
+        </Grid>
+
+        <!-- 使用记录：虚拟化列表，只创建看得见的卡片 -->
+        <Grid x:Name="RecordsPanel" Grid.Row="3" Visibility="Collapsed">
+            <ScrollViewer Margin="0,0,-24,0" Padding="0,0,24,0">
+                <ItemsRepeater ItemsSource="{x:Bind Records.Records}" ItemTemplate="{StaticResource RecordTemplate}">
+                    <ItemsRepeater.Layout>
+                        <StackLayout Spacing="8" />
+                    </ItemsRepeater.Layout>
+                </ItemsRepeater>
+            </ScrollViewer>
+            <TextBlock Text="{l:L Key=records.empty}" Style="{StaticResource CaptionSecondaryTextStyle}" TextWrapping="Wrap"
+                       MaxWidth="420" TextAlignment="Center" HorizontalAlignment="Center" VerticalAlignment="Center"
+                       Visibility="{x:Bind Records.EmptyVisibility, Mode=OneWay}" />
+        </Grid>
+    </Grid>
+</Page>

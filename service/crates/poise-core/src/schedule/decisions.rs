@@ -3,12 +3,15 @@
 
 use std::collections::HashMap;
 
+use serde::{Deserialize, Serialize};
+
 use super::trackers::Pressure;
 use crate::action::CoreSet;
 use crate::model::ProcessKey;
 
 /// 对一个程序（进程树）的决定，按它的主进程算。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Verdict {
     /// 不调整，或只是保护（不受系统节能限速）。
     Normal,
@@ -27,7 +30,8 @@ pub enum Verdict {
 }
 
 /// 程序不（再）让路的原因。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Cause {
     /// 在前台。
     Foreground,

@@ -4,11 +4,12 @@ use std::path::Path;
 
 use poise_core::prefs::AppPreference;
 use poise_core::setting::{Hive, Target, Value};
-use poise_protocol::ErrorCode;
+use poise_protocol::{ErrorCode, Event};
 
 use super::Engine;
 use super::changes::GAME_PREFIX;
 use super::error::RequestError;
+use super::remembered::file_stem;
 
 const GPU_PREFS_KEY: &str = r"Software\Microsoft\DirectX\UserGpuPreferences";
 
@@ -22,7 +23,27 @@ impl Engine {
         validate_exe_path(path)?;
         self.settings.preferences.set(path, pref);
         self.save_settings();
+        self.logbook.event(Event::PreferenceSet {
+            name: self.app_name(path),
+            path: path.to_lowercase(),
+            preference: pref,
+        });
         self.sync_game_settings(path, pref)
+    }
+
+    /// 程序给用户看的名称：正在运行时用它的友好名称，运行过的用记下的名称，否则用文件名。
+    fn app_name(&self, path: &str) -> String {
+        let lower = path.to_lowercase();
+        let running = self.view.as_ref().and_then(|v| {
+            v.snapshot
+                .processes
+                .iter()
+                .find(|p| p.facts.image_path.as_deref() == Some(lower.as_str()))
+                .map(|p| p.facts.friendly_name())
+        });
+        running
+            .or_else(|| self.seen.name(&lower).map(str::to_string))
+            .unwrap_or_else(|| file_stem(path))
     }
 
     /// 启动时按当前的偏好重新同步游戏的系统设置：旧版本写过、现在不再需要的设置

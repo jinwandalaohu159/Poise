@@ -75,6 +75,14 @@ pub enum Request {
     Diagnose,
     /// 走势图的数据。只读、很轻，界面显示走势图时每 2 秒读取一次。
     Trend,
+    /// 核心与缓存面板：核心域、缓存、负载，以及哪些程序放在哪里。只读，面板显示时每 2 秒读取一次。
+    Cores,
+    /// 日志里编号大于 `after` 的条目（最多几百条，最新的那些）；`after` 为 0 时取最新的一批。
+    Events {
+        after: u64,
+    },
+    /// 使用记录（每段有重点程序的时间一条），最新的在前。
+    Records,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

@@ -3,6 +3,7 @@
 //! 暂停期间服务只做只读的采样，不调度、不切换模式、不自动清理。
 
 use poise_core::model::{Millis, Pid};
+use poise_protocol::Event;
 
 use super::Engine;
 
@@ -12,7 +13,7 @@ impl Engine {
         if self.session.is_fresh(now) {
             if self.paused {
                 self.paused = false;
-                log::info!("托盘代理已连接，开始调度");
+                self.logbook.event(Event::Resumed);
             }
             true
         } else {
@@ -34,9 +35,10 @@ impl Engine {
             return;
         }
         self.paused = true;
+        self.logbook.end_session();
         self.release_processes();
         self.scheduler.reset_tracking();
         self.restore_hardware();
-        log::info!("托盘代理已退出：进程调整、散热与电源计划已全部还原");
+        self.logbook.event(Event::Paused);
     }
 }

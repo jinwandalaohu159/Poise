@@ -1,0 +1,183 @@
+<Page
+    x:Class="Poise.App.UI.Pages.CoresPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:c="using:Poise.App.UI.Controls"
+    xmlns:l="using:Poise.App.UI.Localization"
+    xmlns:vm="using:Poise.App.UI.ViewModels"
+    Background="Transparent">
+
+    <Page.Resources>
+        <!-- 一个程序一行：图标、名称、为什么在这里、跨几组、负载 -->
+        <DataTemplate x:Key="ProgramTemplate" x:DataType="vm:PlacedItem">
+            <Grid ColumnSpacing="12" Padding="0,6">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="20" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="64" />
+                </Grid.ColumnDefinitions>
+                <c:ProgramIcon Path="{x:Bind Path, Mode=OneWay}" VerticalAlignment="Center" />
+                <TextBlock Grid.Column="1" Text="{x:Bind Name, Mode=OneWay}" VerticalAlignment="Center"
+                           TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" />
+                <TextBlock Grid.Column="2" Text="{x:Bind Span, Mode=OneWay}" Style="{StaticResource CaptionSecondaryTextStyle}"
+                           VerticalAlignment="Center" Visibility="{x:Bind SpanVisibility, Mode=OneWay}" />
+                <c:StatusTag Grid.Column="3" Text="{x:Bind Role, Mode=OneWay}" Tone="{x:Bind Tone, Mode=OneWay}" />
+                <TextBlock Grid.Column="4" Text="{x:Bind Load, Mode=OneWay}" Style="{StaticResource TableNumberTextStyle}"
+                           HorizontalAlignment="Right" VerticalAlignment="Center" />
+            </Grid>
+        </DataTemplate>
+
+        <!-- 一个逻辑处理器：从下往上按占用填色（大核蓝、小核绿，与走势图一致） -->
+        <DataTemplate x:Key="ThreadTemplate" x:DataType="vm:ThreadItem">
+            <Grid Width="56" Height="44" CornerRadius="4"
+                  Background="{ThemeResource ControlFillColorSecondaryBrush}"
+                  BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1"
+                  ToolTipService.ToolTip="{x:Bind Label, Mode=OneWay}">
+                <Rectangle VerticalAlignment="Bottom" Height="{x:Bind FillHeight, Mode=OneWay}" Opacity="0.45"
+                           Fill="{ThemeResource ChartPerformanceBrush}" Visibility="{x:Bind PerformanceVisibility}" />
+                <Rectangle VerticalAlignment="Bottom" Height="{x:Bind FillHeight, Mode=OneWay}" Opacity="0.45"
+                           Fill="{ThemeResource ChartEfficiencyBrush}" Visibility="{x:Bind EfficiencyVisibility}" />
+                <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
+                    <TextBlock Text="{x:Bind Label, Mode=OneWay}" FontSize="10" HorizontalAlignment="Center"
+                               Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                    <TextBlock Text="{x:Bind Load, Mode=OneWay}" FontSize="12" HorizontalAlignment="Center" />
+                </StackPanel>
+            </Grid>
+        </DataTemplate>
+
+        <!-- 一个物理核心：框住它的逻辑处理器（超线程的两个线程在同一个框里） -->
+        <DataTemplate x:Key="CoreTemplate" x:DataType="vm:CoreItem">
+            <Border CornerRadius="6" Padding="3" BorderThickness="1"
+                    BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}">
+                <ItemsControl ItemsSource="{x:Bind Threads}" ItemTemplate="{StaticResource ThreadTemplate}">
+                    <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <StackPanel Orientation="Horizontal" Spacing="3" />
+                        </ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                </ItemsControl>
+            </Border>
+        </DataTemplate>
+
+        <!-- 一组核心：名称、组成、二级缓存、负载，各个核心，以及 Poise 放在这里的程序 -->
+        <DataTemplate x:Key="DomainTemplate" x:DataType="vm:DomainItem">
+            <Border Style="{StaticResource LargeCardStyle}">
+                <StackPanel Spacing="12">
+                    <Grid ColumnSpacing="12">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Spacing="2">
+                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                <TextBlock Text="{x:Bind Title, Mode=OneWay}" Style="{StaticResource CardTitleTextStyle}" />
+                                <TextBlock Text="{x:Bind Shape, Mode=OneWay}" Style="{StaticResource CaptionSecondaryTextStyle}"
+                                           VerticalAlignment="Bottom" />
+                            </StackPanel>
+                            <TextBlock Text="{x:Bind Cache, Mode=OneWay}" Style="{StaticResource CaptionSecondaryTextStyle}"
+                                       Visibility="{x:Bind CacheVisibility, Mode=OneWay}" />
+                        </StackPanel>
+                        <TextBlock Grid.Column="1" Text="{x:Bind Load, Mode=OneWay}" Style="{StaticResource KpiUnitTextStyle}"
+                                   VerticalAlignment="Top" />
+                    </Grid>
+                    <c:MeterBar Fraction="{x:Bind LoadFraction, Mode=OneWay}" />
+
+                    <ItemsRepeater ItemsSource="{x:Bind Cores}" ItemTemplate="{StaticResource CoreTemplate}">
+                        <ItemsRepeater.Layout>
+                            <UniformGridLayout MinColumnSpacing="6" MinRowSpacing="6" />
+                        </ItemsRepeater.Layout>
+                    </ItemsRepeater>
+
+                    <StackPanel>
+                        <TextBlock Text="{l:L Key=cores.programs}" Style="{StaticResource CaptionSecondaryTextStyle}" Margin="0,4,0,2" />
+                        <ItemsControl ItemsSource="{x:Bind Programs}" ItemTemplate="{StaticResource ProgramTemplate}" />
+                        <TextBlock Text="{x:Bind More, Mode=OneWay}" Style="{StaticResource CaptionSecondaryTextStyle}"
+                                   Visibility="{x:Bind MoreVisibility, Mode=OneWay}" Margin="32,4,0,0" />
+                        <TextBlock Text="{l:L Key=cores.programs.none}" Style="{StaticResource CaptionSecondaryTextStyle}"
+                                   Visibility="{x:Bind EmptyVisibility, Mode=OneWay}" Margin="0,4,0,0" />
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+        </DataTemplate>
+
+        <!-- 共用一块三级缓存的几组核心：标题写明三级缓存，外框把它们圈在一起。
+             大核各占一整行；小核每组核心少，宽窗口里两组并排，窄窗口里自动换行 -->
+        <DataTemplate x:Key="CacheGroupTemplate" x:DataType="vm:CacheGroupItem">
+            <StackPanel Spacing="8">
+                <StackPanel Orientation="Horizontal" Spacing="8" Margin="1,0,0,0" Visibility="{x:Bind TitleVisibility, Mode=OneWay}">
+                    <FontIcon FontFamily="{StaticResource IconFont}" Glyph="&#xE950;" FontSize="14" />
+                    <TextBlock Text="{x:Bind Title, Mode=OneWay}" Style="{StaticResource SectionTextStyle}" Margin="0" />
+                </StackPanel>
+                <Border CornerRadius="10" Padding="8" BorderThickness="1"
+                        BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}">
+                    <StackPanel Spacing="8">
+                        <ItemsRepeater ItemsSource="{x:Bind Main}" ItemTemplate="{StaticResource DomainTemplate}">
+                            <ItemsRepeater.Layout>
+                                <StackLayout Spacing="8" />
+                            </ItemsRepeater.Layout>
+                        </ItemsRepeater>
+                        <ItemsRepeater ItemsSource="{x:Bind Others}" ItemTemplate="{StaticResource DomainTemplate}"
+                                       Visibility="{x:Bind OthersVisibility}">
+                            <ItemsRepeater.Layout>
+                                <UniformGridLayout MinItemWidth="320" MinColumnSpacing="8" MinRowSpacing="8"
+                                                   ItemsStretch="Fill" MaximumRowsOrColumns="{x:Bind Columns}" />
+                            </ItemsRepeater.Layout>
+                        </ItemsRepeater>
+                    </StackPanel>
+                </Border>
+            </StackPanel>
+        </DataTemplate>
+    </Page.Resources>
+
+    <Grid MaxWidth="{StaticResource PageMaxWidth}" Padding="{StaticResource PagePadding}">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <c:PageHeader x:Name="Header" />
+
+        <InfoBar x:Name="ErrorBar" Grid.Row="1" Severity="Error" IsOpen="False" Margin="0,0,0,8" />
+
+        <ScrollViewer Grid.Row="2" Margin="0,0,-24,0" Padding="0,0,24,0">
+            <StackPanel Spacing="20">
+                <!-- 概况：核心组成、此刻的需求、需要说明的情况，以及缓存怎么看 -->
+                <Border Style="{StaticResource LargeCardStyle}">
+                    <StackPanel Spacing="6">
+                        <TextBlock Text="{x:Bind Vm.Summary, Mode=OneWay}" Style="{StaticResource CardTitleTextStyle}" />
+                        <TextBlock Text="{x:Bind Vm.Demand, Mode=OneWay}" Style="{StaticResource CaptionSecondaryTextStyle}" TextWrapping="Wrap" />
+                        <TextBlock Text="{x:Bind Vm.Note, Mode=OneWay}" Style="{StaticResource BodyTextStyle}" TextWrapping="Wrap"
+                                   Visibility="{x:Bind Vm.NoteVisibility, Mode=OneWay}" />
+                        <TextBlock Text="{l:L Key=cores.cache_note}" Style="{StaticResource CaptionSecondaryTextStyle}" TextWrapping="Wrap" />
+                    </StackPanel>
+                </Border>
+
+                <ItemsControl ItemsSource="{x:Bind Vm.Groups}" ItemTemplate="{StaticResource CacheGroupTemplate}">
+                    <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <StackPanel Spacing="20" />
+                        </ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                </ItemsControl>
+
+                <!-- 没有限制核心、由 Windows 安排的程序 -->
+                <StackPanel Spacing="8">
+                    <StackPanel Margin="1,0,0,0">
+                        <TextBlock Text="{l:L Key=cores.unrestricted}" Style="{StaticResource SectionTextStyle}" Margin="0" />
+                        <TextBlock Text="{l:L Key=cores.unrestricted.desc}" Style="{StaticResource CaptionSecondaryTextStyle}" />
+                    </StackPanel>
+                    <Border Style="{StaticResource LargeCardStyle}">
+                        <StackPanel>
+                            <ItemsControl ItemsSource="{x:Bind Vm.Unrestricted}" ItemTemplate="{StaticResource ProgramTemplate}" />
+                            <TextBlock Text="{l:L Key=cores.unrestricted.none}" Style="{StaticResource CaptionSecondaryTextStyle}"
+                                       Visibility="{x:Bind Vm.UnrestrictedEmptyVisibility, Mode=OneWay}" />
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+            </StackPanel>
+        </ScrollViewer>
+    </Grid>
+</Page>

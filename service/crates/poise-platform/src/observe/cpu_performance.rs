@@ -5,8 +5,10 @@
 //! - `% Processor Performance`：相对基础频率的实际性能（睿频时超过 100）；
 //! - `% Performance Limit`：固件允许的上限（温度墙、功耗墙限速时低于 100）。
 //!
-//! 每次读取与上一次之间的平均值，第一次没有可比较的数据。一次读取不到一毫秒。
+//! 每次读取得到与上一次之间的平均值，第一次没有可比较的数据。一次读取要 0.5～1.5 毫秒处理器时间
+//! （要收集所有逻辑处理器的数据），所以至少隔 [`READ_EVERY_MS`] 才读一次——给的是平均，读得少不丢信息。
 
+use poise_core::model::Millis;
 use windows::Win32::System::Performance::{
     PDH_CSTATUS_NEW_DATA, PDH_CSTATUS_VALID_DATA, PDH_FMT_COUNTERVALUE, PDH_FMT_DOUBLE,
     PDH_HCOUNTER, PDH_HQUERY, PdhAddEnglishCounterW, PdhCloseQuery, PdhCollectQueryData,
@@ -18,6 +20,9 @@ use crate::win::wide::WideString;
 
 const PERFORMANCE: &str = r"\Processor Information(_Total)\% Processor Performance";
 const LIMIT: &str = r"\Processor Information(_Total)\% Performance Limit";
+
+/// 两次读取至少隔这么久（采样间隔为 2 秒时隔一轮读一次）。
+pub const READ_EVERY_MS: Millis = 3_900;
 
 /// 一次读数（百分比）。
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
@@ -31,19 +36,30 @@ pub struct CpuPerformance {
 /// 打不开计数器（例如被管理员禁用了性能计数器）时一直返回 None。
 pub struct CpuPerformanceMeter {
     query: Option<Query>,
+    /// 上次读取的时间和读数。
+    last: Option<(Millis, Option<CpuPerformance>)>,
 }
 
 impl Default for CpuPerformanceMeter {
     fn default() -> Self {
         Self {
             query: Query::open(),
+            last: None,
         }
     }
 }
 
 impl CpuPerformanceMeter {
-    pub fn sample(&mut self) -> Option<CpuPerformance> {
-        self.query.as_mut()?.read()
+    /// 此刻的读数：距上次读取不到 [`READ_EVERY_MS`] 时沿用上次的。
+    pub fn sample_at(&mut self, now: Millis) -> Option<CpuPerformance> {
+        if let Some((at, reading)) = self.last
+            && now.saturating_sub(at) < READ_EVERY_MS
+        {
+            return reading;
+        }
+        let reading = self.query.as_mut()?.read();
+        self.last = Some((now, reading));
+        reading
     }
 }
 
@@ -120,9 +136,13 @@ mod tests {
     #[test]
     fn reads_performance_and_limit_after_the_first_sample() {
         let mut meter = CpuPerformanceMeter::default();
-        let _ = meter.sample();
+        let first = meter.sample_at(0);
         std::thread::sleep(std::time::Duration::from_millis(300));
-        let p = meter.sample().expect("读不到处理器性能计数器");
+        // 隔得太近：沿用上次的读数，不再读。
+        assert_eq!(meter.sample_at(READ_EVERY_MS - 1), first);
+        let p = meter
+            .sample_at(READ_EVERY_MS)
+            .expect("读不到处理器性能计数器");
         assert!(
             p.performance_pct > 0.0 && p.performance_pct < 400.0,
             "{p:?}"

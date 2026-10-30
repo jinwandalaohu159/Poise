@@ -1,0 +1,92 @@
+{
+  "partitioned": true,
+  "smart_schedule": true,
+  "demand": "high",
+  "domains": [
+    {
+      "performance": true,
+      "cores": 6,
+      "threads": 12,
+      "l2_bytes": 1310720,
+      "l2_threads": 2,
+      "l3_bytes": 25165824,
+      "l3_group": 0,
+      "load_pct": 62.5,
+      "processors": [
+        {
+          "number": 0,
+          "core": 0,
+          "load_pct": 80.0
+        },
+        {
+          "number": 1,
+          "core": 0,
+          "load_pct": 45.0
+        }
+      ],
+      "programs": [
+        {
+          "pid": 7,
+          "name": "League of Legends",
+          "path": "c:\\games\\7.exe",
+          "verdict": "playing",
+          "load_pct": 260,
+          "domains": 2
+        }
+      ]
+    },
+    {
+      "performance": false,
+      "cores": 4,
+      "threads": 4,
+      "l2_bytes": 2097152,
+      "l2_threads": 4,
+      "l3_bytes": 25165824,
+      "l3_group": 0,
+      "load_pct": null,
+      "processors": [
+        {
+          "number": 64,
+          "core": 256,
+          "load_pct": null
+        }
+      ],
+      "programs": [
+        {
+          "pid": 7,
+          "name": "League of Legends",
+          "path": "c:\\games\\7.exe",
+          "verdict": "playing",
+          "load_pct": 260,
+          "domains": 2
+        },
+        {
+          "pid": 9,
+          "name": "OneDrive",
+          "path": "c:\\games\\9.exe",
+          "verdict": "yielded",
+          "load_pct": 35,
+          "domains": 1
+        },
+        {
+          "pid": 11,
+          "name": "微信",
+          "path": "c:\\games\\11.exe",
+          "verdict": "aside",
+          "load_pct": 0,
+          "domains": 1
+        }
+      ]
+    }
+  ],
+  "unrestricted": [
+    {
+      "pid": 12,
+      "name": "Microsoft Edge",
+      "path": "c:\\games\\12.exe",
+      "verdict": "lowered",
+      "load_pct": 18,
+      "domains": 2
+    }
+  ]
+}

@@ -153,4 +153,8 @@ public sealed partial class HomePage : Page
     private void OnOpenApps(object sender, RoutedEventArgs e) => Open(typeof(AppsPage));
 
     private void OnOpenDiagnose(object sender, RoutedEventArgs e) => Open(typeof(DiagnosePage));
+
+    private void OnOpenCores(object sender, RoutedEventArgs e) => Open(typeof(CoresPage));
+
+    private void OnOpenActivity(object sender, RoutedEventArgs e) => Open(typeof(ActivityPage));
 }

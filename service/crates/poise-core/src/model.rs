@@ -178,12 +178,21 @@ impl SystemMetrics {
     }
 }
 
+/// 一个逻辑处理器累计的忙碌时间与全部时间（100 纳秒），由 [`crate::activity::ActivityTracker`] 换算成占用。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ProcessorTime {
+    pub busy: u64,
+    pub total: u64,
+}
+
 /// 一次完整的采样。
 #[derive(Debug, Clone, Default)]
 pub struct Snapshot {
     pub at: Millis,
     pub processes: Vec<ProcessSample>,
     pub system: SystemMetrics,
+    /// 第 0 个处理器组各逻辑处理器的累计时间（按组内序号）；读不到时为空。
+    pub processors: Vec<ProcessorTime>,
 }
 
 impl Snapshot {

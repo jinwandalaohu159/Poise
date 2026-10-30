@@ -49,4 +49,13 @@ public sealed class PoiseApi(PoiseClient client)
 
     /// <summary>走势图的数据（只读、很轻）。</summary>
     public Task<Trend> GetTrendAsync() => Client.CallAsync<Trend>("trend");
+
+    /// <summary>核心与缓存面板（只读、很轻）。</summary>
+    public Task<CoreMap> GetCoresAsync() => Client.CallAsync<CoreMap>("cores");
+
+    /// <summary>编号大于 <paramref name="after"/> 的日志（0 表示取最新的一批），从早到晚。</summary>
+    public Task<EventPage> GetEventsAsync(ulong after) => Client.CallAsync<EventPage>("events", new { after });
+
+    /// <summary>使用记录，最新的在前。</summary>
+    public Task<List<SessionRecord>> GetRecordsAsync() => Client.CallAsync<List<SessionRecord>>("records");
 }

@@ -2,7 +2,7 @@
 
 use std::ffi::c_void;
 
-use poise_core::model::SystemMetrics;
+use poise_core::model::{ProcessorTime, SystemMetrics};
 use windows::Win32::Foundation::FILETIME;
 use windows::Win32::System::Power::{
     CallNtPowerInformation, GetSystemPowerStatus, ProcessorInformation, SYSTEM_POWER_STATUS,
@@ -55,13 +55,20 @@ fn filetime(ft: FILETIME) -> u64 {
     ((ft.dwHighDateTime as u64) << 32) | ft.dwLowDateTime as u64
 }
 
-pub fn read_metrics() -> SystemMetrics {
+/// 整机指标。`processors` 是这一轮读到的各逻辑处理器的时间（见 `processors`）：只有一个处理器组时
+/// 整机 CPU 时间由它们相加，不再单独查一次（系统查整机时间也是逐个处理器读出来再相加）。
+pub fn read_metrics(processors: &[ProcessorTime]) -> SystemMetrics {
     let mut m = SystemMetrics {
         logical_cpus: logical_cpus(),
         uptime_ms: uptime_ms(),
         ..Default::default()
     };
-    read_cpu_times(&mut m);
+    if !processors.is_empty() && super::processors::single_group() {
+        m.cpu_total_time = processors.iter().map(|p| p.total).sum();
+        m.cpu_busy_time = processors.iter().map(|p| p.busy).sum();
+    } else {
+        read_cpu_times(&mut m);
+    }
     read_memory(&mut m);
     read_frequency(&mut m);
     m
@@ -166,7 +173,7 @@ pub fn active_console_session() -> u32 {
 mod tests {
     #[test]
     fn reads_plausible_metrics() {
-        let m = super::read_metrics();
+        let m = super::read_metrics(&crate::observe::processors::read_processor_times());
         assert!(m.logical_cpus >= 1);
         assert!(m.mem_total > m.mem_available);
         assert!(m.commit_limit >= m.commit_total);

@@ -131,6 +131,8 @@
                 <StackPanel Margin="0,20,0,0" Spacing="{StaticResource CardGap}">
                     <c:NavigationRow Glyph="&#xE71D;" Title="{l:L Key=home.apps}" Description="{l:L Key=home.apps.desc}" Click="OnOpenApps" />
                     <c:NavigationRow Glyph="&#xE9D9;" Title="{l:L Key=home.diagnose}" Description="{l:L Key=home.diagnose.desc}" Click="OnOpenDiagnose" />
+                    <c:NavigationRow Glyph="&#xE950;" Title="{l:L Key=home.cores}" Description="{l:L Key=home.cores.desc}" Click="OnOpenCores" />
+                    <c:NavigationRow Glyph="&#xE81C;" Title="{l:L Key=home.activity}" Description="{l:L Key=home.activity.desc}" Click="OnOpenActivity" />
                 </StackPanel>
             </StackPanel>
         </ScrollViewer>

@@ -1,4 +1,5 @@
-//! 命名管道服务端：每个连接一个线程，请求交给引擎处理。
+//! 命名管道服务端：每个连接一个线程，请求交给引擎处理；日志与使用记录由日志系统直接回答，
+//! 不等引擎的锁（界面看日志时不会和调度抢）。
 //!
 //! 服务模式下额外校验客户端：必须是安装目录里的 Poise 程序。
 
@@ -10,11 +11,12 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use poise_core::model::Pid;
+use poise_logbook::Logbook;
 use poise_platform::ipc::pipe::{PipeConnection, PipeServer};
 use poise_platform::win::handle::image_path;
 use poise_platform::win::security::SERVICE_PIPE_SDDL;
 use poise_protocol::{
-    ErrorCode, FramingError, PIPE_NAME, RequestEnvelope, ResponseEnvelope, read_message,
+    ErrorCode, FramingError, PIPE_NAME, Request, RequestEnvelope, ResponseEnvelope, read_message,
     write_message,
 };
 
@@ -31,7 +33,11 @@ pub struct IpcServer {
 }
 
 impl IpcServer {
-    pub fn start(engine: Arc<Mutex<Engine>>, mode: RunMode) -> anyhow::Result<Self> {
+    pub fn start(
+        engine: Arc<Mutex<Engine>>,
+        logbook: Logbook,
+        mode: RunMode,
+    ) -> anyhow::Result<Self> {
         let sddl = (mode == RunMode::Service).then_some(SERVICE_PIPE_SDDL);
         let server = PipeServer::new(PIPE_NAME, sddl)?;
         let allowed_dir = (mode == RunMode::Service)
@@ -43,7 +49,14 @@ impl IpcServer {
         let thread = std::thread::Builder::new()
             .name("ipc-accept".into())
             .spawn(move || {
-                accept_loop(&server, &engine, &stop_flag, &active, allowed_dir.as_ref())
+                accept_loop(
+                    &server,
+                    &engine,
+                    &logbook,
+                    &stop_flag,
+                    &active,
+                    allowed_dir.as_ref(),
+                )
             })?;
         Ok(Self {
             stop,
@@ -67,6 +80,7 @@ impl IpcServer {
 fn accept_loop(
     server: &PipeServer,
     engine: &Arc<Mutex<Engine>>,
+    logbook: &Logbook,
     stop: &AtomicBool,
     active: &Arc<AtomicUsize>,
     allowed_dir: Option<&PathBuf>,
@@ -94,18 +108,47 @@ fn accept_loop(
             continue;
         }
         let engine = engine.clone();
+        let logbook = logbook.clone();
         let active = active.clone();
         let spawned = std::thread::Builder::new()
             .name(format!("ipc-{pid}"))
             .spawn(move || {
                 // 界面的请求（前台切换的通知也走这里）要及时处理。
                 poise_platform::act::self_tune::responsive_thread();
-                serve(conn, pid, &engine);
+                serve(conn, pid, &engine, &logbook);
                 active.fetch_sub(1, Ordering::SeqCst);
             });
         if spawned.is_err() {
             log::error!("无法创建连接线程");
         }
+    }
+}
+
+/// 交给引擎处理（要等它的锁：采样进行中时会等一会儿）。
+fn ask_engine(engine: &Mutex<Engine>, pid: Pid, id: u64, request: Request) -> ResponseEnvelope {
+    let started = Instant::now();
+    let name = request_name(&request);
+    if let Some(max_age) = Catalog::freshness_for(&request)
+        && let Ok((catalog, user)) = engine.lock().map(|e| e.catalog_handle())
+    {
+        // 慢的枚举在引擎锁外进行。
+        catalog.refresh(user.as_ref(), max_age);
+    }
+    match engine.lock() {
+        Ok(mut eng) => {
+            let waited = started.elapsed();
+            let response = eng.handle(id, pid, request);
+            let total = started.elapsed();
+            if total > SLOW_REQUEST {
+                log::info!(
+                    "请求 {name} 耗时 {} ms（等待采样 {} ms）",
+                    total.as_millis(),
+                    waited.as_millis()
+                );
+            }
+            response
+        }
+        Err(_) => ResponseEnvelope::error(id, ErrorCode::Internal, "服务内部错误"),
     }
 }
 
@@ -130,7 +173,7 @@ fn request_name(request: &impl std::fmt::Debug) -> String {
         .to_string()
 }
 
-fn serve(conn: PipeConnection, pid: Pid, engine: &Mutex<Engine>) {
+fn serve(conn: PipeConnection, pid: Pid, engine: &Mutex<Engine>, logbook: &Logbook) {
     let mut reader = BufReader::new(conn);
     loop {
         let envelope: RequestEnvelope = match read_message(&mut reader) {
@@ -152,29 +195,12 @@ fn serve(conn: PipeConnection, pid: Pid, engine: &Mutex<Engine>) {
                 break;
             }
         };
-        let started = Instant::now();
-        let name = request_name(&envelope.request);
-        if let Some(max_age) = Catalog::freshness_for(&envelope.request)
-            && let Ok((catalog, user)) = engine.lock().map(|e| e.catalog_handle())
-        {
-            // 慢的枚举在引擎锁外进行。
-            catalog.refresh(user.as_ref(), max_age);
-        }
-        let response = match engine.lock() {
-            Ok(mut eng) => {
-                let waited = started.elapsed();
-                let response = eng.handle(envelope.id, pid, envelope.request);
-                let total = started.elapsed();
-                if total > SLOW_REQUEST {
-                    log::info!(
-                        "请求 {name} 耗时 {} ms（等待采样 {} ms）",
-                        total.as_millis(),
-                        waited.as_millis()
-                    );
-                }
-                response
+        let response = match envelope.request {
+            Request::Events { after } => {
+                ResponseEnvelope::ok(envelope.id, &logbook.events_after(after))
             }
-            Err(_) => ResponseEnvelope::error(envelope.id, ErrorCode::Internal, "服务内部错误"),
+            Request::Records => ResponseEnvelope::ok(envelope.id, &logbook.records()),
+            request => ask_engine(engine, pid, envelope.id, request),
         };
         if write_message(reader.get_mut(), &response).is_err() {
             break;

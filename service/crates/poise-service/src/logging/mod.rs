@@ -1,14 +1,14 @@
-//! 日志：写到数据目录的 poise.log（超过 2MB 时清空重写）；控制台模式同时输出到终端。
+//! 文本日志：写到数据目录的 poise.log（超过 2MB 时换成 poise.1.log 继续写，见 [`rotating`]）；
+//! 控制台模式同时输出到终端。给界面看的结构化日志见 `crate::events`。
 
-use std::fs::OpenOptions;
+mod rotating;
+
 use std::path::Path;
 
 use simplelog::{
     ColorChoice, CombinedLogger, ConfigBuilder, LevelFilter, SharedLogger, TermLogger,
     TerminalMode, WriteLogger,
 };
-
-const MAX_LOG_BYTES: u64 = 2 * 1024 * 1024;
 
 pub fn init(data_dir: &Path, to_terminal: bool) {
     let level = if std::env::var_os("POISE_DEBUG").is_some() {
@@ -31,16 +31,8 @@ pub fn init(data_dir: &Path, to_terminal: bool) {
             ColorChoice::Auto,
         ));
     }
-    let path = data_dir.join("poise.log");
-    let too_big = std::fs::metadata(&path).is_ok_and(|m| m.len() > MAX_LOG_BYTES);
-    let file = OpenOptions::new()
-        .create(true)
-        .append(!too_big)
-        .write(true)
-        .truncate(too_big)
-        .open(&path);
-    if let Ok(f) = file {
-        loggers.push(WriteLogger::new(level, config, f));
+    if let Some(file) = rotating::RotatingFile::open(data_dir.join("poise.log")) {
+        loggers.push(WriteLogger::new(level, config, file));
     }
     let _ = CombinedLogger::init(loggers);
 }

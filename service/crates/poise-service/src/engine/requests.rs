@@ -2,7 +2,7 @@
 
 use poise_core::model::Pid;
 use poise_core::prefs::Mode;
-use poise_protocol::{ErrorCode, HelloResult, PROTOCOL_VERSION, Request, ResponseEnvelope};
+use poise_protocol::{ErrorCode, Event, HelloResult, PROTOCOL_VERSION, Request, ResponseEnvelope};
 use serde::Serialize;
 
 use super::Engine;
@@ -106,6 +106,9 @@ impl Engine {
                 ok(id, &())
             }
             Request::SetSmartSchedule { enabled } => {
+                if self.settings.smart_schedule != enabled {
+                    self.logbook.event(Event::SmartSchedule { enabled });
+                }
                 self.settings.smart_schedule = enabled;
                 self.save_settings();
                 // 关闭时立即撤销全部进程调整，打开时立即按类别调整。
@@ -139,6 +142,11 @@ impl Engine {
             Request::RevertAll => reply(id, self.revert_optimizations()),
             Request::Diagnose => reply(id, self.diagnose().ok_or_else(not_ready)),
             Request::Trend => ok(id, &self.trend()),
+            Request::Cores => ok(id, &self.core_map()),
+            // 日志与记录由日志系统直接回答（见 `ipc_server`），不经过引擎。
+            Request::Events { .. } | Request::Records => {
+                ResponseEnvelope::error(id, ErrorCode::InvalidRequest, "日志与记录不经过引擎")
+            }
         }
     }
 }

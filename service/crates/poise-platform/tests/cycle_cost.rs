@@ -127,8 +127,12 @@ fn measure_system_metrics() {
         }
         println!("{name}：每次 {} 微秒", t.elapsed().as_micros() / 50);
     };
-    time("read_metrics 全部", &|| {
-        std::hint::black_box(system::read_metrics());
+    time("各逻辑处理器的时间", &|| {
+        std::hint::black_box(poise_platform::observe::processors::read_processor_times());
+    });
+    let times = poise_platform::observe::processors::read_processor_times();
+    time("整机指标（处理器时间已读好）", &|| {
+        std::hint::black_box(system::read_metrics(&times));
     });
     time("on_battery", &|| {
         std::hint::black_box(system::on_battery());

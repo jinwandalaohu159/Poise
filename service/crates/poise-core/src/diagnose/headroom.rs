@@ -52,6 +52,11 @@ impl HeadroomWatch {
     pub fn exhausted(&self) -> bool {
         self.last.exhausted()
     }
+
+    /// 最近一次是否正被固件限速。
+    pub fn limited(&self) -> bool {
+        self.last.limited
+    }
 }
 
 #[cfg(test)]

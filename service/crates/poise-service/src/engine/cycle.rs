@@ -8,6 +8,7 @@ use poise_core::classify::{Classification, ClassifyInput};
 use poise_core::diagnose::{self, DiagnoseConfig, Health, HealthInput, Sample};
 use poise_core::model::{Millis, Pid, Snapshot};
 use poise_hardware::{HardwareReading, SensorLevel};
+use poise_protocol::Event;
 
 use super::phases::Phases;
 use super::schedule::ScheduleOutcome;
@@ -70,6 +71,7 @@ impl Engine {
             reading,
             health,
         });
+        self.report_round();
         self.remember_running_apps(now);
         phases.done("记录运行的程序");
         self.guard_power(now);
@@ -211,12 +213,12 @@ impl Engine {
         let (headroom, limited_changed) =
             self.headroom
                 .observe(&cfg, reading.thermals, &snapshot.system, now);
-        match (limited_changed, headroom.limit_pct) {
-            (Some(true), Some(p)) => {
-                log::info!("处理器正被限速（性能上限 {p:.0}%），后台更早让路")
-            }
-            (Some(false), _) => log::info!("处理器不再被限速"),
-            _ => {}
+        match limited_changed {
+            Some(true) => self.logbook.event(Event::Throttled {
+                limit_pct: headroom.limit_pct,
+            }),
+            Some(false) => self.logbook.event(Event::Unthrottled),
+            None => {}
         }
         let cpu_pct = self.activity.system_cpu_pct();
         let preview = self.cleanup_preview(snapshot, classes, now);
@@ -235,13 +237,15 @@ impl Engine {
 
     /// 走势图：整机 CPU、大核 / 小核负载、内存、CPU 温度。
     fn record_history(&mut self, snapshot: &Snapshot, reading: &HardwareReading, now: Millis) {
-        let cores = self.core_load_meter.sample();
+        let classes = self
+            .activity
+            .class_loads(&self.topology.performance_by_index);
         self.history.push(
             now,
             Sample {
                 cpu_pct: self.activity.system_cpu_pct(),
-                performance_pct: cores.map(|c| c.performance_pct),
-                efficiency_pct: cores.map(|c| c.efficiency_pct),
+                performance_pct: classes.map(|c| c.0),
+                efficiency_pct: classes.map(|c| c.1),
                 mem_pct: snapshot.system.mem_used_pct(),
                 cpu_temp: reading.thermals.cpu_temp,
             },

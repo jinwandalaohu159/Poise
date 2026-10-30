@@ -9,7 +9,7 @@ use poise_core::cleanup::{
 };
 use poise_core::model::{Millis, Pid, Snapshot};
 use poise_core::safety::Trigger;
-use poise_protocol::{CleanupOverview, CleanupResult, CleanupTrigger, LastCleanup};
+use poise_protocol::{CleanupOverview, CleanupResult, CleanupTrigger, Event, LastCleanup};
 
 use super::{Engine, convert, unix_now_ms};
 
@@ -119,6 +119,7 @@ impl Engine {
             CleanupTrigger::Manual,
             result.freed_bytes,
             result.handled.len(),
+            result.failed.len(),
         );
         self.cleanup.deferred = plan.deferred;
         // 清理过的进程不再沿用旧的泄漏判断，等下一轮重新计算。
@@ -200,7 +201,7 @@ impl Engine {
                 Err(e) => log::info!("延后的清理项 {} 未执行：{e}", step.name),
             }
         }
-        self.record_cleanup(CleanupTrigger::Deferred, freed, handled);
+        self.record_cleanup(CleanupTrigger::Deferred, freed, handled, 0);
     }
 
     /// 自动清理：只做无感项目，一次只处理一个，游戏/全屏/高负载时不做。
@@ -221,17 +222,29 @@ impl Engine {
         match self.execute_step(step, Trigger::Auto) {
             Ok(_) => {
                 log::info!("自动清理：{}", step.name);
-                self.record_cleanup(CleanupTrigger::Auto, step.memory_bytes, 1);
+                self.record_cleanup(CleanupTrigger::Auto, step.memory_bytes, 1, 0);
             }
             Err(e) => log::info!("自动清理 {} 未执行：{e}", step.name),
         }
     }
 
-    /// 记录真正做了事的清理（观察模式下什么都没做，不记录）。
-    fn record_cleanup(&mut self, trigger: CleanupTrigger, freed_bytes: u64, handled: usize) {
+    /// 记录真正做了事的清理（观察模式下什么都没做，不记录），并记一条日志事件。
+    fn record_cleanup(
+        &mut self,
+        trigger: CleanupTrigger,
+        freed_bytes: u64,
+        handled: usize,
+        failed: usize,
+    ) {
         if handled == 0 || self.cfg.dry_run {
             return;
         }
+        self.logbook.event(Event::Cleaned {
+            trigger,
+            freed_bytes,
+            handled: handled as u32,
+            failed: failed as u32,
+        });
         self.cleanup.last = Some(LastCleanup {
             at_unix_ms: unix_now_ms(),
             trigger,

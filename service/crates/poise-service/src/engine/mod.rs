@@ -2,8 +2,11 @@
 //!
 //! - [`cycle`]：每个采样周期（采集 → 分类 → 调度 → 健康评估与处理器余量），并串起下面各部分；
 //!   [`phases`] 给每轮分段计时
-//! - [`schedule`]：按调度计划调整进程、临时全速、停止时撤销，[`decision_log`] 把调度决定写成日志；[`adjusted_record`]：记下调整过的进程，
-//!   异常退出后下次启动时恢复
+//! - [`schedule`]：按调度计划调整进程、临时全速、停止时撤销，[`decision_events`] 把调度决定写成日志事件；
+//!   [`adjusted_record`]：记下调整过的进程，异常退出后下次启动时恢复
+//! - [`cores`]：核心与缓存面板（核心域、缓存、负载、程序放在哪里）
+//! - 日志与使用记录交给独立的日志系统（`poise_logbook::Logbook`）：[`decision_events`] 把调度决定写成事件，
+//!   [`round_summary`] 把每轮调度的结果整理成记录系统的输入。引擎只管交过去，不等、不写盘
 //! - [`presence`]：托盘代理在线时才起作用，退出时撤销全部影响
 //! - [`auto`]：把用户模式（含"自动"）换算成具体模式
 //! - [`mode`]：把实际模式落到电源计划与散热上（慢的硬件操作在硬件执行线程里），风扇加速
@@ -14,7 +17,7 @@
 //!   [`game_prefs`]：程序类别与游戏对应的系统设置
 //! - [`changes`]：持久修改的唯一出口（设置存储 + 变更日志）
 //! - [`session`]：用户会话、界面是否显示
-//! - [`status`]：给界面的状态、诊断；[`apps`]：程序列表与运行过的程序（保存在本机）
+//! - [`status`]：给界面的状态、诊断；[`apps`]：程序列表；[`remembered`]：运行过的程序（保存在本机）
 //! - [`requests`]：把 IPC 请求分派到上面各部分，[`error`] 是请求失败的原因
 
 mod adjusted_record;
@@ -24,8 +27,9 @@ pub(crate) mod catalog;
 pub(crate) mod changes;
 mod cleanup;
 mod convert;
+mod cores;
 mod cycle;
-mod decision_log;
+mod decision_events;
 mod error;
 mod game_prefs;
 mod growth;
@@ -34,7 +38,9 @@ mod optimizer;
 mod phases;
 mod power_guard;
 mod presence;
+mod remembered;
 mod requests;
+mod round_summary;
 mod schedule;
 mod session;
 mod status;
@@ -57,19 +63,18 @@ use poise_core::model::{Millis, Pid, Snapshot};
 use poise_core::prefs::{Mode, Settings};
 use poise_core::safety::GuardedExecutor;
 use poise_core::schedule::{CoreLayout, GameInfo, ScheduleConfig, Scheduler};
-use poise_core::seen_apps::SeenApps;
 use poise_hardware::{Hardware, HardwareReading};
+use poise_logbook::Logbook;
 use poise_platform::act::executor::WinExecutor;
 use poise_platform::act::launcher::{DirectLauncher, Launcher, UserSessionLauncher};
 use poise_platform::act::self_tune;
-use poise_platform::observe::core_load::CoreLoadMeter;
 use poise_platform::observe::process::snapshot::Snapshotter;
 use poise_platform::observe::system;
 use poise_platform::observe::topology::CpuTopology;
 use poise_platform::persist::paths;
 use poise_platform::persist::storage::JsonFile;
 use poise_platform::settings::user::UserContext;
-use poise_protocol::LastCleanup;
+use poise_protocol::{Event, LastCleanup};
 
 use crate::config::{RunConfig, RunMode};
 use crate::gpu_feed::GpuFeed;
@@ -126,10 +131,8 @@ pub struct Engine {
     auto_mode: AutoMode,
     /// 最近几分钟的整机指标（主页与卡顿诊断的走势图）。
     history: MetricHistory,
-    /// 处理器的大小核组成（设置页显示）。
+    /// 处理器的大小核组成与核心域（设置页、核心与缓存面板显示，调度按它分配核心）。
     topology: CpuTopology,
-    /// 每个周期读取大核、小核各自的负载，记入走势。
-    core_load_meter: CoreLoadMeter,
     executor: GuardedExecutor,
     hardware: Hardware,
     /// 硬件读数在采集线程里进行，这里只取最近一次的结果。
@@ -143,10 +146,7 @@ pub struct Engine {
     settings_file: JsonFile<Settings>,
     session: SessionTracker,
     /// 运行过的程序（程序偏好页"未运行"一栏）。
-    seen: SeenApps,
-    seen_file: JsonFile<SeenApps>,
-    /// 上次记录运行的程序的时间。
-    seen_checked_at: Option<Millis>,
+    seen: remembered::RememberedApps,
     /// Poise 自己的进程（服务和已连接的界面），永不触碰。
     own_pids: HashSet<Pid>,
     cleanup: CleanupState,
@@ -156,10 +156,12 @@ pub struct Engine {
     adjusted: adjusted_record::AdjustedRecord,
     /// 最近一次调整了程序、决定变了或前台切换的时间（决定采样快慢，见 `cycle`）。
     last_change_at: Millis,
+    /// 日志系统与记录系统（独立线程，见 `poise_logbook`）。
+    logbook: Logbook,
 }
 
 impl Engine {
-    pub fn new(cfg: RunConfig) -> anyhow::Result<Self> {
+    pub fn new(cfg: RunConfig, logbook: Logbook) -> anyhow::Result<Self> {
         paths::ensure_dir(&cfg.data_dir, cfg.mode == RunMode::Service)?;
         let topology = CpuTopology::detect();
         self_tune::apply(&topology);
@@ -177,22 +179,23 @@ impl Engine {
         let settings = settings_file.load().unwrap_or_default();
         let baseline_file = JsonFile::new(cfg.data_dir.join(growth::BASELINE_FILE));
         let mut hardware = Hardware::detect(topology.top_class);
-        let seen_file = JsonFile::new(cfg.data_dir.join(apps::SEEN_FILE));
         let growth = GrowthWatch::new(
             GrowthConfig::default(),
             baseline_file.load(),
             growth::boot_unix_s(system::uptime_ms()),
         );
-        log::info!(
-            "Poise 启动：{:?} 模式，{}，大核 {:?}，小核 {:?}",
-            cfg.mode,
-            if cfg.dry_run {
-                "观察模式（不执行）"
-            } else {
-                "正常执行"
+        logbook.event_with(
+            Event::Started {
+                version: env!("CARGO_PKG_VERSION").into(),
+                observe_only: cfg.dry_run,
             },
-            topology.performance_count,
-            topology.efficiency_count
+            format!(
+                "{:?} 方式运行，大核 {:?}，小核 {:?}，核心域 {:?}",
+                cfg.mode,
+                topology.performance_count,
+                topology.efficiency_count,
+                topology.domain_threads()
+            ),
         );
         let mut engine = Self {
             started: Instant::now(),
@@ -213,7 +216,6 @@ impl Engine {
             headroom: HeadroomWatch::default(),
             auto_mode: AutoMode::default(),
             history: MetricHistory::default(),
-            core_load_meter: CoreLoadMeter::new(&topology),
             executor: GuardedExecutor::new(
                 Box::new(WinExecutor::new(topology.clone(), launcher)),
                 cfg.dry_run,
@@ -225,9 +227,7 @@ impl Engine {
             power_guard: power_guard::PowerGuard::default(),
             settings,
             settings_file,
-            seen: seen_file.load().unwrap_or_default(),
-            seen_file,
-            seen_checked_at: None,
+            seen: remembered::RememberedApps::open(&cfg.data_dir),
             session: SessionTracker::new(system::active_console_session()),
             own_pids: HashSet::from([std::process::id()]),
             cleanup: CleanupState::default(),
@@ -235,10 +235,10 @@ impl Engine {
             view: None,
             adjusted: adjusted_record::AdjustedRecord::open(&cfg.data_dir),
             last_change_at: 0,
+            logbook,
             topology,
             cfg,
         };
-        engine.prune_seen_apps();
         engine.resync_game_settings();
         Ok(engine)
     }
@@ -263,6 +263,7 @@ impl Engine {
 
     /// 服务停止：撤销所有进程调整，还原硬件模式。系统优化项保留（它们是用户选择的）。
     pub fn shutdown(&mut self) {
+        self.logbook.end_session();
         self.release_processes();
         self.restore_hardware();
         log::info!("Poise 已停止，进程调整与硬件模式已还原");

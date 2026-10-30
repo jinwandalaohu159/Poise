@@ -13,6 +13,7 @@ use poise_core::prefs::Mode;
 use poise_core::setting::SettingStore;
 use poise_hardware::Hardware;
 use poise_platform::observe::system;
+use poise_protocol::Event;
 
 use super::Engine;
 use super::changes::ChangeError;
@@ -42,13 +43,17 @@ impl Engine {
                 let settings = self
                     .hardware
                     .describe_power(&self.changes.store, on_battery);
-                log::info!(
-                    "模式切换为 {mode:?}（电池：{on_battery}）：{settings}（写入 {} 毫秒，读回 {} 毫秒）",
+                let detail = format!(
+                    "{settings}（写入 {} 毫秒，读回 {} 毫秒）",
                     written_in.as_millis(),
                     (started.elapsed() - written_in).as_millis()
                 );
+                self.logbook
+                    .event_with(Event::ModeChanged { mode, on_battery }, detail);
             }
-            Err(e) => log::warn!("切换模式失败：{e}"),
+            Err(e) => self
+                .logbook
+                .event_with(Event::ModeFailed { mode }, e.to_string()),
         }
         mode
     }
