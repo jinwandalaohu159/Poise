@@ -2,24 +2,23 @@
 
 use std::ffi::c_void;
 
+use poise_core::setting::Value;
 use windows::Win32::Foundation::{HLOCAL, LocalFree, WIN32_ERROR};
 use windows::Win32::System::Power::{
     PowerGetActiveScheme, PowerReadACDefaultIndex, PowerReadACValueIndex, PowerReadDCDefaultIndex,
     PowerReadDCValueIndex, PowerSetActiveScheme, PowerWriteACValueIndex, PowerWriteDCValueIndex,
 };
+use windows::Win32::System::Registry::HKEY_LOCAL_MACHINE;
 use windows::core::GUID;
+
+use crate::observe::system;
+use crate::win::registry;
 
 /// Windows"平衡"计划（也是计划的"个性"之一：OEM 自定义的计划多数以它为基础）。
 pub const BALANCED: GUID = GUID::from_u128(0x381b4222_f694_41f0_9685_ff5bb260df2e);
 
 /// 电源模式滑块的"最佳能效"：它会盖住计划里的能效偏好、最小处理器状态等设置。
 pub const OVERLAY_BETTER_BATTERY: GUID = GUID::from_u128(0x961cc777_2547_4f9d_8174_7d86181b8a7a);
-
-#[link(name = "powrprof", kind = "raw-dylib")]
-unsafe extern "system" {
-    /// 当前实际生效的电源模式滑块（全零表示没有覆盖，即"平衡"）。Windows 10 1709 起提供，未写入 SDK 头文件。
-    fn PowerGetEffectiveOverlayScheme(overlay: *mut GUID) -> u32;
-}
 
 fn check(code: u32) -> Result<(), WIN32_ERROR> {
     WIN32_ERROR(code)
@@ -136,12 +135,23 @@ pub fn default_value(
     Ok(value)
 }
 
-/// 当前生效的电源模式滑块；没有覆盖时为 None。
+/// 系统记录当前计划与电源模式滑块的位置。
+const SCHEMES_KEY: &str = r"SYSTEM\CurrentControlSet\Control\Power\User\PowerSchemes";
+
+/// 当前电源（插电或电池）下的电源模式滑块；没有覆盖时为 None。
+///
+/// 读系统记在注册表里的滑块位置，不到一毫秒；对应的 API（`PowerGetEffectiveOverlayScheme`）
+/// 实测每次要 300 多毫秒，定期检查时会让调度停顿。
 pub fn effective_overlay() -> Option<GUID> {
-    let mut guid = GUID::zeroed();
-    // SAFETY: 输出到本地变量。
-    let code = unsafe { PowerGetEffectiveOverlayScheme(&mut guid) };
-    (code == 0 && guid != GUID::zeroed()).then_some(guid)
+    let name = if system::on_battery() {
+        "ActiveOverlayDcPowerScheme"
+    } else {
+        "ActiveOverlayAcPowerScheme"
+    };
+    match registry::read_value(HKEY_LOCAL_MACHINE, SCHEMES_KEY, name) {
+        Ok(Some(Value::String(s))) => parse_guid(&s).filter(|g| *g != GUID::zeroed()),
+        _ => None,
+    }
 }
 
 #[cfg(test)]

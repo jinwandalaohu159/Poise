@@ -24,6 +24,9 @@ pub enum SensorLevel {
     /// 后台：机型接口只读处理器温度。不访问显卡（避免唤醒休眠中的独显），不读风扇。
     #[default]
     Basic,
+    /// 有重点程序（正在用的程序在持续干重活，不是游戏）：完全不调用机型接口（每次调用都可能让所有核心
+    /// 短暂停顿），也不访问显卡、不刷新硬盘信息。是否被限速由处理器自己报告，不需要温度。
+    Focused,
     /// 玩游戏、界面没显示：完全不调用机型接口（每次调用都可能让所有核心短暂停顿，表现为掉帧）。
     /// 显卡温度和占用从显卡驱动读（独显本来就醒着），不刷新硬盘信息。
     Gaming,
@@ -57,7 +60,7 @@ impl Sensors {
     /// 按详细程度读取温度、显卡、风扇、硬盘（见 [`SensorLevel`]）。
     /// 不玩游戏时，机型接口能从主板读显卡温度就优先用它，不会唤醒独显。
     pub fn read(&mut self, level: SensorLevel, now: Millis) -> HardwareReading {
-        let gpu = if level == SensorLevel::Basic {
+        let gpu = if matches!(level, SensorLevel::Basic | SensorLevel::Focused) {
             self.nvml.release_if_idle();
             Default::default()
         } else {
@@ -76,7 +79,7 @@ impl Sensors {
             self.fans.clear();
             self.fans_at = None;
         }
-        let storage = if level == SensorLevel::Gaming {
+        let storage = if matches!(level, SensorLevel::Gaming | SensorLevel::Focused) {
             self.storage.latest()
         } else {
             self.storage.read(now)
@@ -95,7 +98,7 @@ impl Sensors {
     /// 这一次要从机型接口读的项（见 [`SensorLevel`]）。
     fn machine_need(&self, level: SensorLevel, now: Millis) -> MachineNeed {
         match level {
-            SensorLevel::Gaming => MachineNeed::default(),
+            SensorLevel::Gaming | SensorLevel::Focused => MachineNeed::default(),
             SensorLevel::Basic => MachineNeed {
                 cpu_temp: true,
                 ..Default::default()
@@ -144,9 +147,10 @@ mod tests {
     }
 
     #[test]
-    fn gaming_never_calls_the_machine_interface() {
+    fn gaming_and_focused_work_never_call_the_machine_interface() {
         let (mut s, calls) = sensors();
         s.read(SensorLevel::Gaming, 0);
+        s.read(SensorLevel::Focused, 2_000);
         assert!(calls.lock().unwrap().is_empty());
     }
 

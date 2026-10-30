@@ -54,7 +54,7 @@ pub struct Demand {
 
 /// 后台忙碌：有需求时，在后台持续占用处理器或磁盘的程序让路；让路后保持，直到它回到"正在用"
 /// （前台、发声、游戏等）、退出、长时间没有需求（没人需要资源了，后台的工作应该全速完成），
-/// 或者需求降低后它已远低于新的门槛（玩游戏时按更低的门槛让路的程序，游戏结束后恢复）。
+/// 或者需求降低后它已远低于新的门槛（有重点程序时按更低的门槛让路的程序，重点程序结束后恢复）。
 /// 不因为它一时闲下来就恢复，避免反复调整。按进程树（程序）判断。
 #[derive(Debug, Default)]
 pub struct BusyTracker {
@@ -129,6 +129,13 @@ impl BusyTracker {
             self.yielded.insert(root, demand.pressure);
         }
         true
+    }
+
+    /// 程序不久前还在"正在用"（见 [`BusyRule::reyield_after_ms`]）：先不挪动它。
+    pub fn settling(&self, root: &ProcessKey, now: Millis, rule: BusyRule) -> bool {
+        self.last_used
+            .get(root)
+            .is_some_and(|t| now.saturating_sub(*t) < rule.reyield_after_ms)
     }
 
     pub fn retain_alive(&mut self, alive: &HashSet<ProcessKey>) {

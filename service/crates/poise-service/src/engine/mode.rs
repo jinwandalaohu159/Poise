@@ -5,6 +5,8 @@
 //! 本来就工作在 90～100°C）。以前温度一高就退回低功耗模式、5 分钟后再切回来，结果是玩游戏时反复切换、
 //! 大部分时间跑在低功耗模式下。
 
+use std::time::Instant;
+
 use poise_core::journal::{Journal, JournalError};
 use poise_core::model::Millis;
 use poise_core::prefs::Mode;
@@ -31,13 +33,21 @@ impl Engine {
         if !self.hardware.needs_apply(mode, on_battery) {
             return mode;
         }
-        match self.edit_hardware(|h, s, j| h.apply_mode(mode, on_battery, s, j, now)) {
-            // 读回实际的设置，确认真的写进去了。
-            Ok(()) => log::info!(
-                "模式切换为 {mode:?}（电池：{on_battery}）：{}",
-                self.hardware
-                    .describe_power(&self.changes.store, on_battery)
-            ),
+        let started = Instant::now();
+        let result = self.edit_hardware(|h, s, j| h.apply_mode(mode, on_battery, s, j, now));
+        let written_in = started.elapsed();
+        match result {
+            // 读回实际的设置，确认真的写进去了。记下写入和读回各用了多久（切换期间调度在等它）。
+            Ok(()) => {
+                let settings = self
+                    .hardware
+                    .describe_power(&self.changes.store, on_battery);
+                log::info!(
+                    "模式切换为 {mode:?}（电池：{on_battery}）：{settings}（写入 {} 毫秒，读回 {} 毫秒）",
+                    written_in.as_millis(),
+                    (started.elapsed() - written_in).as_millis()
+                );
+            }
             Err(e) => log::warn!("切换模式失败：{e}"),
         }
         mode

@@ -16,6 +16,14 @@ use super::{Engine, View};
 /// 采样间隔。前台切换不等采样，会立即触发一次调度。
 pub const TICK: Duration = Duration::from_secs(2);
 
+/// 平静时的采样间隔：一段时间里没有调整任何程序、没有新的决定，也没有游戏、重点程序、全屏程序、
+/// 打开的界面（见 [`Engine::next_tick_in`]）。采集进程表是每轮最贵的一步（系统要列出所有线程），
+/// 这时少采一半；前台切换照样立即调度，不受影响。
+const CALM_TICK: Duration = Duration::from_secs(4);
+
+/// 最近一次变化（调整了程序、决定变了、前台切换）之后多久算平静。
+const CALM_AFTER_MS: Millis = 20_000;
+
 /// 没人在用电脑时的采样间隔（见 [`Engine::next_tick_in`]）。
 const IDLE_TICK: Duration = Duration::from_secs(6);
 
@@ -40,9 +48,10 @@ impl Engine {
         phases.done("托盘代理状态");
         let classes = self.classify(&snapshot, now);
         phases.done("分类");
+        self.restore_leftovers(&snapshot, &classes);
         let outcome = self.schedule_if(active, &snapshot, &classes);
         phases.done("调度");
-        let reading = self.read_sensors(outcome.game.is_some(), now);
+        let reading = self.read_sensors(&outcome, now);
         let health = self.assess(&snapshot, &classes, &outcome, &reading, now);
         self.record_history(&snapshot, &reading, now);
         phases.done("健康评估");
@@ -57,6 +66,7 @@ impl Engine {
             classes,
             effective_mode,
             game: outcome.game,
+            focused: outcome.focused,
             reading,
             health,
         });
@@ -72,17 +82,26 @@ impl Engine {
         phases.finish();
     }
 
-    /// 下一轮采样前等多久。用户离开、没在玩游戏、界面也没显示时放慢：没人用的时候调度没什么可做的，
-    /// 用户一回来（前台变化）就会立即重新调度，不受影响。所有判断都按时间而不是轮数，间隔变了结果不变。
+    /// 下一轮采样前等多久。用户离开、没在玩游戏、界面也没显示时放慢到 [`IDLE_TICK`]；平静时
+    /// 放慢到 [`CALM_TICK`]；其余时候 [`TICK`]。用户一有动作（前台变化）就会立即重新调度，不受影响。
+    /// 所有判断都按时间而不是轮数，间隔变了结果不变。
     pub fn next_tick_in(&self) -> Duration {
         let now = self.now();
         let session = self.session.current(now);
-        let gaming = self.view.as_ref().is_some_and(|v| v.game.is_some());
+        let (gaming, focused) = self
+            .view
+            .as_ref()
+            .map_or((false, false), |v| (v.game.is_some(), v.focused));
+        let ui = self.session.ui_visible(now);
         let away = session.idle_ms >= AWAY_AFTER_MS || self.paused;
-        if away && !gaming && !self.session.ui_visible(now) {
-            IDLE_TICK
-        } else {
+        if away && !gaming && !ui {
+            return IDLE_TICK;
+        }
+        let changing = now.saturating_sub(self.last_change_at) < CALM_AFTER_MS;
+        if ui || gaming || focused || session.fullscreen || changing {
             TICK
+        } else {
+            CALM_TICK
         }
     }
 
@@ -92,6 +111,7 @@ impl Engine {
     /// 这样紧接着的状态查询就是最终结果（包括实际生效的模式），界面不会先显示一个中间状态。
     pub fn reschedule_now(&mut self) {
         let now = self.now();
+        self.last_change_at = now;
         if !self.ensure_presence(now) {
             return;
         }
@@ -113,6 +133,7 @@ impl Engine {
             classes,
             effective_mode,
             game: outcome.game,
+            focused: outcome.focused,
             reading: view.reading,
             health: view.health,
         });
@@ -163,12 +184,15 @@ impl Engine {
     }
 
     /// 取采集线程最近一次的读数（不等待），并告诉它需要的详细程度：界面显示着时全读；
-    /// 玩游戏时尽量少调用机型接口；其余时候不访问显卡（在 Optimus 笔记本上读显卡会唤醒休眠中的独显）。
-    fn read_sensors(&mut self, gaming: bool, now: Millis) -> HardwareReading {
+    /// 玩游戏、有重点程序时不调用机型接口（可能让所有核心短暂停顿）；其余时候不访问显卡
+    /// （在 Optimus 笔记本上读显卡会唤醒休眠中的独显）。
+    fn read_sensors(&mut self, outcome: &ScheduleOutcome, now: Millis) -> HardwareReading {
         self.sensors.set_level(if self.session.ui_visible(now) {
             SensorLevel::Full
-        } else if gaming {
+        } else if outcome.game.is_some() {
             SensorLevel::Gaming
+        } else if outcome.focused {
+            SensorLevel::Focused
         } else {
             SensorLevel::Basic
         });

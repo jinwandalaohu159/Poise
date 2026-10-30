@@ -1,5 +1,6 @@
-//! 单个进程的显卡 3D 引擎占用：性能计数器 GPU Engine（任务管理器"GPU"列的同一来源）。
-//! 一次只测一个进程（前台全屏程序），用来判断它是不是正在渲染画面的游戏。
+//! 后备办法：性能计数器 GPU Engine（同样是任务管理器"GPU"列的来源）。不用打开进程，被反作弊保护、
+//! 拿不到进程句柄的游戏也能测；但打开查询要枚举全系统所有进程的所有显卡引擎，一次约 0.5 秒处理器时间，
+//! 所以只在直接问显卡内核不行时才用（见 `kmt`）。
 
 use poise_core::model::Pid;
 use windows::Win32::System::Performance::{
@@ -11,31 +12,7 @@ use windows::core::PCWSTR;
 
 use crate::win::wide::WideString;
 
-/// 测量某个进程的 3D 引擎占用。换测别的进程时重建计数器。
-#[derive(Default)]
-pub struct GpuMeter {
-    query: Option<Query>,
-}
-
-impl GpuMeter {
-    /// 进程在上次调用以来的 3D 引擎占用（0～100，多个显卡引擎相加）。
-    /// 第一次测某个进程时还没有可比较的两次采样，返回 None；进程没用显卡时返回 0。
-    pub fn usage_3d(&mut self, pid: Pid) -> Option<f32> {
-        if self.query.as_ref().map(|q| q.pid) != Some(pid) {
-            self.query = Query::open(pid);
-            return None;
-        }
-        self.query.as_mut()?.read()
-    }
-
-    /// 不再需要测量时释放计数器。
-    pub fn stop(&mut self) {
-        self.query = None;
-    }
-}
-
-struct Query {
-    pid: Pid,
+pub(super) struct Query {
     handle: PDH_HQUERY,
     counter: PDH_HCOUNTER,
 }
@@ -44,7 +21,7 @@ struct Query {
 unsafe impl Send for Query {}
 
 impl Query {
-    fn open(pid: Pid) -> Option<Self> {
+    pub(super) fn open(pid: Pid) -> Option<Self> {
         // 实例名形如 pid_1234_luid_..._phys_0_eng_0_engtype_3D；通配符在每次采集时重新展开。
         let path = WideString::new(&format!(
             r"\GPU Engine(pid_{pid}_*engtype_3D)\Utilization Percentage"
@@ -56,19 +33,26 @@ impl Query {
                 return None;
             }
             let mut query = Self {
-                pid,
                 handle,
                 counter: PDH_HCOUNTER::default(),
             };
             if PdhAddEnglishCounterW(handle, path.as_pcwstr(), 0, &mut query.counter) != 0 {
                 return None;
             }
-            PdhCollectQueryData(handle);
+            query.collect();
             Some(query)
         }
     }
 
-    fn read(&mut self) -> Option<f32> {
+    /// 采一次样，作为下次读数的起点。
+    pub(super) fn collect(&self) {
+        // SAFETY: 句柄在 Query 存活期间有效。
+        unsafe {
+            PdhCollectQueryData(self.handle);
+        }
+    }
+
+    pub(super) fn read(&mut self) -> Option<f32> {
         // SAFETY: 句柄在 Query 存活期间有效；缓冲区按 PDH 返回的大小分配，并按条目类型对齐。
         unsafe {
             match PdhCollectQueryData(self.handle) {
@@ -127,19 +111,5 @@ impl Drop for Query {
         unsafe {
             PdhCloseQuery(self.handle);
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_process_without_rendering_reads_zero_after_the_first_sample() {
-        let mut meter = GpuMeter::default();
-        let pid = std::process::id();
-        assert_eq!(meter.usage_3d(pid), None);
-        std::thread::sleep(std::time::Duration::from_millis(200));
-        assert_eq!(meter.usage_3d(pid), Some(0.0));
     }
 }

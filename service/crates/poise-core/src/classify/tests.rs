@@ -61,7 +61,12 @@ impl World {
     }
 
     fn classify(&self) -> HashMap<Pid, Classification> {
-        Classifier::new(ClassifyConfig::default()).classify_all(&ClassifyInput {
+        self.classify_with(&mut Classifier::new(ClassifyConfig::default()))
+    }
+
+    /// 用同一个分类器连续分类（它记得上一轮的进程树）。
+    fn classify_with(&self, classifier: &mut Classifier) -> HashMap<Pid, Classification> {
+        classifier.classify_all(&ClassifyInput {
             snapshot: &self.snap,
             session: &self.session,
             activity: &self.activity,
@@ -120,6 +125,27 @@ fn child_of_multi_service_host_is_not_attributed() {
     let child = system(proc_(601, Some(600), "helper.exe", 0));
     let c = World::new(vec![host, child]).classify();
     assert_eq!(c[&601].role, Role::SystemOther);
+}
+
+/// 终端里跑的命令行工具拉起了编译服务进程，然后自己退出了：服务进程仍归终端这个程序。
+/// 终端也关了，它才自成一个程序。
+#[test]
+fn orphaned_workers_stay_with_the_program_that_started_them() {
+    let shell = proc_(100, None, "explorer.exe", 1);
+    let terminal = proc_(200, Some(100), "terminal.exe", 1);
+    let cli = proc_(201, Some(200), "dotnet.exe", 1);
+    let worker = proc_(202, Some(201), "dotnet.exe", 1);
+    let mut classifier = Classifier::new(ClassifyConfig::default());
+    let w = World::new(vec![shell.clone(), terminal.clone(), cli, worker.clone()]);
+    assert_eq!(w.classify_with(&mut classifier)[&202].root_pid, 200);
+
+    let w = World::new(vec![shell.clone(), terminal, worker.clone()]);
+    assert_eq!(w.classify_with(&mut classifier)[&202].root_pid, 200);
+    // 再下一轮依然记得。
+    assert_eq!(w.classify_with(&mut classifier)[&202].root_pid, 200);
+
+    let w = World::new(vec![shell, worker]);
+    assert_eq!(w.classify_with(&mut classifier)[&202].root_pid, 202);
 }
 
 #[test]

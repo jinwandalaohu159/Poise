@@ -3,8 +3,8 @@
 
 use std::collections::HashMap;
 
-use super::policy::Desired;
 use super::trackers::Pressure;
+use crate::action::CoreSet;
 use crate::model::ProcessKey;
 
 /// 对一个程序（进程树）的决定，按它的主进程算。
@@ -14,24 +14,16 @@ pub enum Verdict {
     Normal,
     /// 按游戏调度。
     Playing,
-    /// 后台忙，给别人让路。
+    /// 重点程序：正被直接使用、持续需要处理器，优先用大核。
+    Focused,
+    /// 后台忙，完整让路（让开主域、节能、降优先级）。
     Yielded,
-    /// 玩游戏时后台忙的发声程序，移到小核。
+    /// 后台忙，只降优先级（正在用的程序需要时优先）。
+    Lowered,
+    /// 后台忙、但不能降优先级的程序（发声、自己设为高优先级），有重点程序时移到小核。
     Backseat,
-}
-
-impl Verdict {
-    pub fn of(desired: Desired) -> Self {
-        if desired == Desired::PLAYING || desired == Desired::GAME {
-            Self::Playing
-        } else if desired == Desired::BACKSEAT {
-            Self::Backseat
-        } else if desired == Desired::YIELDED {
-            Self::Yielded
-        } else {
-            Self::Normal
-        }
-    }
+    /// 有重点程序时，没在用的程序移到小核。数量多、变化频繁，不逐个记录（见 [`Decision::Aside`]）。
+    Aside,
 }
 
 /// 程序不（再）让路的原因。
@@ -59,10 +51,11 @@ pub enum Cause {
     Exited,
 }
 
-/// 一个程序此刻的决定与负载（单核百分比、磁盘读写 MB/s），以及不让路时的原因。
+/// 一个程序此刻的决定、核心范围与负载（单核百分比、磁盘读写 MB/s），以及不让路时的原因。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ProgramState {
     pub verdict: Verdict,
+    pub cores: CoreSet,
     pub load_pct: u32,
     pub disk_mb_s: u32,
     pub cause: Option<Cause>,
@@ -73,19 +66,22 @@ pub struct ProgramState {
 pub enum Decision {
     /// 对处理器的需求变了。
     Pressure(Pressure),
-    /// 对一个程序的决定变了（`state` 是变化后的）。
+    /// 对一个程序的决定变了，或重点程序占用的核心变了（`state` 是变化后的）。
     Program {
         root: ProcessKey,
         from: Verdict,
         state: ProgramState,
     },
+    /// 移到小核、给重点程序让出大核的程序：开始时报告有几个，全部移回时报告 0。
+    Aside(usize),
 }
 
 /// 记着上一轮的决定，每轮报告变化。退出的程序直接忘掉；只有游戏退出时报告一次。
 #[derive(Debug, Default)]
 pub struct DecisionLog {
     pressure: Pressure,
-    programs: HashMap<ProcessKey, Verdict>,
+    programs: HashMap<ProcessKey, (Verdict, CoreSet)>,
+    aside: usize,
 }
 
 impl DecisionLog {
@@ -100,21 +96,27 @@ impl DecisionLog {
             changes.push(Decision::Pressure(pressure));
         }
         let mut current = HashMap::with_capacity(self.programs.len());
+        let mut aside = 0;
         for (root, state) in programs {
-            let from = self.programs.remove(&root).unwrap_or(Verdict::Normal);
-            if from != state.verdict {
+            let (from, cores) = self
+                .programs
+                .remove(&root)
+                .unwrap_or((Verdict::Normal, CoreSet::All));
+            aside += usize::from(state.verdict == Verdict::Aside);
+            if reportable(from, cores, &state) {
                 changes.push(Decision::Program { root, from, state });
             }
-            current.insert(root, state.verdict);
+            current.insert(root, (state.verdict, state.cores));
         }
         // 剩下的是这一轮不在了的程序。
-        for (root, from) in std::mem::replace(&mut self.programs, current) {
+        for (root, (from, cores)) in std::mem::replace(&mut self.programs, current) {
             if from == Verdict::Playing {
                 changes.push(Decision::Program {
                     root,
                     from,
                     state: ProgramState {
                         verdict: Verdict::Normal,
+                        cores,
                         load_pct: 0,
                         disk_mb_s: 0,
                         cause: Some(Cause::Exited),
@@ -122,8 +124,21 @@ impl DecisionLog {
                 });
             }
         }
+        if (aside == 0) != (self.aside == 0) {
+            changes.push(Decision::Aside(aside));
+        }
+        self.aside = aside;
         changes
     }
+}
+
+/// 要不要记录这次变化：决定变了（移到小核、从小核移回不逐个记录），或者重点程序占用的核心变了。
+fn reportable(from: Verdict, cores: CoreSet, state: &ProgramState) -> bool {
+    let quiet = |v| matches!(v, Verdict::Normal | Verdict::Aside);
+    if from != state.verdict {
+        return !(quiet(from) && quiet(state.verdict));
+    }
+    matches!(from, Verdict::Playing | Verdict::Focused) && cores != state.cores
 }
 
 #[cfg(test)]
@@ -135,6 +150,7 @@ mod tests {
     fn state(verdict: Verdict, load_pct: u32) -> ProgramState {
         ProgramState {
             verdict,
+            cores: CoreSet::All,
             load_pct,
             disk_mb_s: 0,
             cause: None,
@@ -178,5 +194,33 @@ mod tests {
             [Decision::Program { from: Verdict::Playing, state, .. }] if state.cause == Some(Cause::Exited)
         ));
         assert!(log.update(Pressure::High, []).is_empty());
+    }
+
+    #[test]
+    fn programs_moved_aside_are_summarized_and_core_changes_of_focused_ones_reported() {
+        let mut log = DecisionLog::default();
+        let other = ProcessKey { pid: 8, created: 1 };
+        let changes = log.update(
+            Pressure::High,
+            [
+                (KEY, state(Verdict::Focused, 300)),
+                (other, state(Verdict::Aside, 0)),
+            ],
+        );
+        assert_eq!(changes.len(), 3);
+        assert_eq!(changes[2], Decision::Aside(1));
+        let wider = ProgramState {
+            cores: CoreSet::Domains(0b11),
+            ..state(Verdict::Focused, 1000)
+        };
+        let changes = log.update(
+            Pressure::High,
+            [(KEY, wider), (other, state(Verdict::Aside, 0))],
+        );
+        assert!(
+            matches!(changes.as_slice(), [Decision::Program { state, .. }] if state.cores == wider.cores)
+        );
+        let changes = log.update(Pressure::High, [(other, state(Verdict::Normal, 0))]);
+        assert_eq!(changes, vec![Decision::Aside(0)]);
     }
 }

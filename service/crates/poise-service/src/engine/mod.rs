@@ -2,7 +2,8 @@
 //!
 //! - [`cycle`]：每个采样周期（采集 → 分类 → 调度 → 健康评估与处理器余量），并串起下面各部分；
 //!   [`phases`] 给每轮分段计时
-//! - [`schedule`]：按调度计划调整进程、临时全速、停止时撤销
+//! - [`schedule`]：按调度计划调整进程、临时全速、停止时撤销，[`decision_log`] 把调度决定写成日志；[`adjusted_record`]：记下调整过的进程，
+//!   异常退出后下次启动时恢复
 //! - [`presence`]：托盘代理在线时才起作用，退出时撤销全部影响
 //! - [`auto`]：把用户模式（含"自动"）换算成具体模式
 //! - [`mode`]：把实际模式落到电源计划与散热上（慢的硬件操作在硬件执行线程里），风扇加速
@@ -16,6 +17,7 @@
 //! - [`status`]：给界面的状态、诊断；[`apps`]：程序列表与运行过的程序（保存在本机）
 //! - [`requests`]：把 IPC 请求分派到上面各部分，[`error`] 是请求失败的原因
 
+mod adjusted_record;
 mod apps;
 mod auto;
 pub(crate) mod catalog;
@@ -23,6 +25,7 @@ pub(crate) mod changes;
 mod cleanup;
 mod convert;
 mod cycle;
+mod decision_log;
 mod error;
 mod game_prefs;
 mod growth;
@@ -82,6 +85,8 @@ pub struct View {
     pub classes: HashMap<Pid, Classification>,
     pub effective_mode: Mode,
     pub game: Option<GameInfo>,
+    /// 有重点程序（见 `poise_core::schedule::SchedulePlan::focused`）。
+    pub focused: bool,
     pub reading: HardwareReading,
     pub health: Health,
 }
@@ -148,6 +153,9 @@ pub struct Engine {
     /// 观察模式下最近一次记录的硬件状态（只用于日志去重）。
     observed: mode::Observed,
     view: Option<View>,
+    adjusted: adjusted_record::AdjustedRecord,
+    /// 最近一次调整了程序、决定变了或前台切换的时间（决定采样快慢，见 `cycle`）。
+    last_change_at: Millis,
 }
 
 impl Engine {
@@ -195,10 +203,7 @@ impl Engine {
             activity: ActivityTracker::new(ActivityConfig::default()),
             classifier: Classifier::new(ClassifyConfig::default()),
             scheduler: Scheduler::new(ScheduleConfig {
-                cores: CoreLayout {
-                    performance_threads: topology.performance_count.threads,
-                    efficiency_threads: topology.efficiency_count.threads,
-                },
+                cores: CoreLayout::new(&topology.domain_threads()),
                 ..Default::default()
             }),
             leaks: LeakDetector::new(LeakConfig::default()),
@@ -228,6 +233,8 @@ impl Engine {
             cleanup: CleanupState::default(),
             observed: mode::Observed::default(),
             view: None,
+            adjusted: adjusted_record::AdjustedRecord::open(&cfg.data_dir),
+            last_change_at: 0,
             topology,
             cfg,
         };

@@ -13,6 +13,7 @@ use poise_protocol::{Request, Status};
 use windows::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx};
 
 use crate::session;
+use crate::session::audio::AudioSessions;
 use pipe::{CallError, PipeClient};
 
 /// 会话心跳：每 3 秒采集一次（音频会话只在心跳里重新枚举，开始发声的后台程序最迟 3 秒内被照顾到），
@@ -94,12 +95,15 @@ impl Worker {
         // 音频会话枚举使用 COM。
         // SAFETY: 本线程加入多线程套间，线程结束前一直有效。
         let _ = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
+        // COM 对象只能在这个线程里用，所以在这里创建，而不是放在随线程移动的 Worker 里。
+        let mut audio = AudioSessions::default();
         let mut next_heartbeat = Instant::now();
         let mut next_status = Instant::now();
         loop {
             let now = Instant::now();
             if now >= next_heartbeat {
-                self.report(true);
+                self.audio = audio.active_pids();
+                self.report();
                 next_heartbeat = now + HEARTBEAT;
             }
             if now >= next_status {
@@ -126,7 +130,7 @@ impl Worker {
     fn handle(&mut self, job: Job) -> bool {
         match job {
             Job::ForegroundChanged => {
-                self.report(false);
+                self.report();
                 false
             }
             Job::SetMode(mode) => self.fire(Request::SetMode { mode }),
@@ -142,11 +146,9 @@ impl Worker {
         true
     }
 
-    fn report(&mut self, heartbeat: bool) {
-        let state = session::capture((!heartbeat).then_some(self.audio.as_slice()));
-        if heartbeat {
-            self.audio = state.audio_pids.clone();
-        }
+    /// 上报会话状态（音频沿用心跳里最近一次的结果），没变化时不报。
+    fn report(&mut self) {
+        let state = session::capture(&self.audio);
         let unchanged = self.last_report.as_ref().is_some_and(|(last, at)| {
             at.elapsed() < KEEPALIVE && session::same_desktop(last, &state)
         });

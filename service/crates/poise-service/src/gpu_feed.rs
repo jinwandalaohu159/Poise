@@ -1,7 +1,7 @@
 //! 显卡占用测量线程：测量指定进程（前台全屏的那个）的 3D 占用，把最近一次的结果放在共享位置。
 //!
-//! 打开显卡计数器查询要几百毫秒（系统要枚举所有进程的显卡引擎），放在独立线程里，
-//! 调度引擎只取"最近一次"的结果，前台切换和界面请求不用等它。
+//! 平时直接问显卡内核，很快；但受保护的进程只能退回性能计数器，打开一次要几百毫秒（系统要枚举所有
+//! 进程的显卡引擎）。所以放在独立线程里，调度引擎只取"最近一次"的结果，前台切换和界面请求不用等它。
 
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
@@ -9,6 +9,9 @@ use std::time::Duration;
 
 use poise_core::model::Pid;
 use poise_platform::observe::gpu::GpuMeter;
+
+/// 换了测量的进程后，隔这么久就读第一次（计数器需要两次采样才有读数），不必等一整个测量间隔。
+const FIRST_READING_AFTER: Duration = Duration::from_millis(500);
 
 /// 要测量的进程变了（`None` 表示停止测量），或者结束线程。
 enum Signal {
@@ -34,19 +37,26 @@ impl GpuFeed {
             .spawn(move || {
                 let mut meter = GpuMeter::default();
                 let mut target: Option<Pid> = None;
+                let mut switched = false;
                 loop {
                     let reading = target.and_then(|pid| meter.usage_3d(pid).map(|pct| (pid, pct)));
                     if let Ok(mut l) = shared.lock() {
                         *l = reading;
                     }
+                    let wait = if std::mem::take(&mut switched) {
+                        FIRST_READING_AFTER
+                    } else {
+                        every
+                    };
                     let signal = if target.is_some() {
-                        rx.recv_timeout(every)
+                        rx.recv_timeout(wait)
                     } else {
                         rx.recv().map_err(|_| RecvTimeoutError::Disconnected)
                     };
                     match signal {
                         Ok(Signal::Target(t)) => {
                             target = t;
+                            switched = t.is_some();
                             if t.is_none() {
                                 meter.stop();
                             }

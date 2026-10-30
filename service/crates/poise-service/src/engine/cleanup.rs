@@ -23,10 +23,14 @@ const PREVIEW_EVERY_MS: Millis = 10_000;
 const SUSPECTS_EVERY_MS: Millis = 60_000;
 
 impl Engine {
-    /// 前台有游戏或全屏程序：会打扰的清理延后，自动清理暂停。
+    /// 前台有游戏、全屏程序，或者正在用的程序在持续干重活（重点程序）：会打扰的清理延后，自动清理暂停。
     fn foreground_immersive(&self) -> bool {
         let now = self.now();
-        self.session.current(now).fullscreen || self.view.as_ref().is_some_and(|v| v.game.is_some())
+        self.session.current(now).fullscreen
+            || self
+                .view
+                .as_ref()
+                .is_some_and(|v| v.game.is_some() || v.focused)
     }
 
     /// 每个采样周期调用：到时间就重新计算泄漏嫌疑和异常增长。

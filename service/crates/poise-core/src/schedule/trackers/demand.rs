@@ -5,11 +5,12 @@
 //!
 //! | 需求 | 情况 | 后台怎样算在忙 |
 //! |---|---|---|
-//! | 高 | 正在玩游戏；处理器接近温度上限（功耗和温度要留给正在用的程序） | 很低的负载就让路 |
-//! | 一般 | 前台程序在忙；整机繁忙；用电池（让路的同时省电） | 一般 |
+//! | 高 | 有重点程序（游戏会话中、正在用的程序在持续干重活，结束后保持一会儿）；处理器接近温度上限 | 很低的负载就让路 |
+//! | 一般 | 正在用的程序在忙；整机繁忙、并且正在用的程序也在动；用电池（让路的同时省电） | 一般 |
 //! | 无 | 以上都不是 | 不让路；已经让路的在持续无需求一段时间后恢复 |
 //!
-//! 需求出现后保持一段时间（前台的负载时有时无，例如滚动网页），不会每轮来回变化。
+//! 需求只看正在用的程序：后台程序自己把整机跑满，不算有人需要——否则它会为"没有人"让路，
+//! 白白慢下来。需求出现后保持一段时间（前台的负载时有时无，例如滚动网页），不会每轮来回变化。
 
 use crate::model::Millis;
 
@@ -24,12 +25,13 @@ pub enum Pressure {
 /// 判断需求的依据（每轮一份）。
 #[derive(Debug, Clone, Copy, Default)]
 pub struct DemandSignals {
-    pub gaming: bool,
+    /// 有重点程序（正在玩的游戏，或正在用、持续干重活的程序）。
+    pub focused: bool,
     /// 处理器接近温度上限。
     pub hot: bool,
     pub on_battery: bool,
-    /// 前台进程树此刻的负载（单核百分比）。
-    pub foreground_core_pct: f32,
+    /// 正在用的程序此刻的负载之和（单核百分比）。
+    pub in_use_core_pct: f32,
     /// 整机处理器占用（0～100）。
     pub system_pct: f32,
 }
@@ -37,10 +39,13 @@ pub struct DemandSignals {
 /// 需求的判断规则。
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct DemandRule {
-    /// 前台进程树的负载达到这么多（单核百分比）算前台在忙。
-    pub foreground_core_pct: f32,
+    /// 正在用的程序的负载达到这么多（单核百分比）算它们在忙。
+    pub in_use_core_pct: f32,
     /// 整机处理器占用达到这么多算整机繁忙。
     pub system_pct: f32,
+    /// 整机繁忙时，正在用的程序的负载达到这么多（单核百分比）就算需要处理器：整机被占满时，
+    /// 正在用的程序拿不到处理器，量到的负载本来就偏低。
+    pub in_use_active_pct: f32,
     /// 需求出现后保持多久。
     pub hold_ms: Millis,
 }
@@ -56,12 +61,12 @@ pub struct DemandTracker {
 impl DemandTracker {
     /// 每轮调用一次，返回此刻的需求。
     pub fn update(&mut self, s: DemandSignals, now: Millis, rule: DemandRule) -> Pressure {
-        if s.gaming || s.hot {
+        if s.focused || s.hot {
             self.last_high_at = Some(now);
         }
         if s.on_battery
-            || s.foreground_core_pct >= rule.foreground_core_pct
-            || s.system_pct >= rule.system_pct
+            || s.in_use_core_pct >= rule.in_use_core_pct
+            || (s.system_pct >= rule.system_pct && s.in_use_core_pct >= rule.in_use_active_pct)
         {
             self.last_normal_at = Some(now);
         }
@@ -92,8 +97,9 @@ mod tests {
     use super::*;
 
     const RULE: DemandRule = DemandRule {
-        foreground_core_pct: 25.0,
+        in_use_core_pct: 25.0,
         system_pct: 50.0,
+        in_use_active_pct: 5.0,
         hold_ms: 30_000,
     };
 
@@ -101,7 +107,7 @@ mod tests {
     fn demand_is_held_for_a_while_and_then_released() {
         let mut d = DemandTracker::default();
         let busy_foreground = DemandSignals {
-            foreground_core_pct: 60.0,
+            in_use_core_pct: 60.0,
             ..Default::default()
         };
         assert_eq!(d.update(busy_foreground, 0, RULE), Pressure::Normal);
@@ -116,11 +122,29 @@ mod tests {
         );
         assert_eq!(d.idle_for(70_000), 30_000);
         let gaming = DemandSignals {
-            gaming: true,
+            focused: true,
             ..Default::default()
         };
         assert_eq!(d.update(gaming, 80_000, RULE), Pressure::High);
         assert_eq!(d.idle_for(80_000), 0);
+    }
+
+    #[test]
+    fn a_busy_machine_counts_only_when_someone_in_use_is_active() {
+        let mut d = DemandTracker::default();
+        // 后台自己把整机跑满，用户没在动：没人需要。
+        let alone = DemandSignals {
+            system_pct: 95.0,
+            in_use_core_pct: 1.0,
+            ..Default::default()
+        };
+        assert_eq!(d.update(alone, 0, RULE), Pressure::None);
+        // 用户在动（量到的负载被挤得偏低）：算有需要。
+        let squeezed = DemandSignals {
+            in_use_core_pct: 8.0,
+            ..alone
+        };
+        assert_eq!(d.update(squeezed, 2_000, RULE), Pressure::Normal);
     }
 
     #[test]

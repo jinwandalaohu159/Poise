@@ -30,13 +30,41 @@ pub enum ResourcePriority {
 }
 
 /// 进程可用的核心集合。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+///
+/// 核心按"核心域"划分（见平台层 `CpuTopology::domains`）：同一个域里的核心效率等级相同、共用一块缓存，
+/// 按适合跑重点程序的程度排序。第 0 个是主域：大小核处理器的大核，多 CCD 锐龙里缓存最大的那个 CCD；
+/// 其余是副域：小核（按共用的二级缓存分组）、另一个 CCD。只有一个域的处理器不限制核心。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 pub enum CoreSet {
     /// 不限制。
     #[default]
     All,
+    /// 主域（大核）。
     Performance,
+    /// 全部副域（小核）。
     Efficiency,
+    /// 具体的几个核心域（第 n 位对应第 n 个域）：调度按负载和缓存分配的结果。
+    Domains(u16),
+}
+
+impl CoreSet {
+    /// 只用副域（让开了主域，例如让到小核）。
+    pub fn is_efficiency(self) -> bool {
+        match self {
+            Self::Efficiency => true,
+            Self::Domains(m) => m != 0 && m & 1 == 0,
+            _ => false,
+        }
+    }
+
+    /// 用主域、并且有限制（重点程序放在大核上，需要时加上几个副域）。
+    pub fn is_performance(self) -> bool {
+        match self {
+            Self::Performance => true,
+            Self::Domains(m) => m & 1 != 0,
+            _ => false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -111,11 +139,15 @@ impl Action {
                 EcoQos::Off => ActionKind::Boost,
                 EcoQos::On => ActionKind::Demote,
             },
-            Self::SetCoreSet { set, .. } => match set {
-                CoreSet::All => ActionKind::Restore,
-                CoreSet::Performance => ActionKind::Boost,
-                CoreSet::Efficiency => ActionKind::Demote,
-            },
+            Self::SetCoreSet { set, .. } => {
+                if set.is_performance() {
+                    ActionKind::Boost
+                } else if set.is_efficiency() {
+                    ActionKind::Demote
+                } else {
+                    ActionKind::Restore
+                }
+            }
             Self::SetResourcePriority { priority, .. } => match priority {
                 ResourcePriority::Default => ActionKind::Restore,
                 ResourcePriority::Low => ActionKind::Demote,

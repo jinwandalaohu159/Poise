@@ -51,4 +51,4 @@ public sealed record AppSchedule(
 public enum CoreUse { Any, Performance, Efficiency }
 
 /// <summary>none：没有调整；yielded：让路（能效核、较低优先级）；protected：不让系统节能限速；raised：标记的游戏，优先级高一级。</summary>
-public enum Adjustment { None, Yielded, Protected, Raised }
+public enum Adjustment { None, Yielded, Placed, Protected, Raised }

@@ -46,9 +46,9 @@ fn short_audio_pauses_do_not_flip_the_state() {
     assert_eq!(sim.adjustments_per_process(), HashMap::from([(2, 1)]));
     // 停了很久，又一直在后台占处理器，而用户正在干活：按普通程序的规则让路。
     sim.proc_mut(2).audio = false;
-    sim.proc_mut(1).cpu_pct = 80.0;
+    sim.proc_mut(1).cpu_pct = 50.0;
     sim.run_for(60_000);
-    assert!(sim.is_yielded(2));
+    assert!(sim.is_lowered(2));
 }
 
 /// 复盘"玩游戏时开着很忙的发声程序（例如直播、带声音的录屏）"：只让到小核，不降优先级、不节能，

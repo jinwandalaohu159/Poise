@@ -1,15 +1,22 @@
-//! 智能调度：让路为主——在后台持续占用处理器的程序挪到小核并节能，正在用的程序不动；
-//! 正在玩、正在发声的程序不让系统自动限速；标记的游戏提高一级；游戏模式；临时全速。规则见 [`policy`]。
+//! 智能调度：重点程序（正在玩的游戏、正在用又在持续干重活的程序）按需要的线程占用核心，其余没在用的
+//! 程序让到副域；后台持续占用处理器或磁盘的程序按需求分档让路；正在用、正在发声的程序不动；标记的游戏
+//! 提高一级；游戏模式；临时全速。规则见 [`policy`]。
 //!
 //! 对外只有 [`Scheduler`]：每个采样周期调用一次 [`Scheduler::plan`]，
 //! 把动作交给安全执行器后用 [`Scheduler::report`] 回报结果。
 //!
-//! 每一轮：`trackers` 跨周期观察（前台、游戏、发声、负载、需求、忙碌）→ `program` 判断每个程序
-//! （进程树）→ `policy` 决定每个进程应有的状态 → `reconcile` 与已应用的比较，得到动作 →
-//! `decisions` 记下程序级的变化供日志。参数在 `config`。
+//! 每一轮：`trackers` 跨周期观察（前台、游戏、发声、负载、需求、忙碌、重点程序）→ `judge` 判断每个程序
+//! （进程树，见 `program`）、算出需求、给让到副域的程序分配核心域（`placement`）→ `policy` 决定每个进程
+//! 应有的状态（各种状态见 `desired`）→ `reconcile` 与已应用的比较，得到动作 → `explain` 解释决定，
+//! `decisions` 记下变化供日志。参数与处理器的核心域在 `config`。
 
 mod config;
 mod decisions;
+mod desired;
+mod explain;
+mod judge;
+mod leftovers;
+mod placement;
 mod policy;
 mod program;
 mod reconcile;
@@ -25,17 +32,19 @@ use crate::prefs::Mode;
 
 pub use config::{CoreLayout, ScheduleConfig};
 pub use decisions::{Cause, Decision, ProgramState, Verdict};
-pub use policy::Desired;
+pub use desired::Desired;
+pub use leftovers::Adjusted;
 pub use reconcile::{PlannedAction, ProcessSchedule};
 
 use decisions::DecisionLog;
+use placement::GroupPlacer;
 use program::Program;
 use reconcile::Reconciler;
 use trackers::{
-    AudioTracker, BusyTracker, DemandSignals, DemandTracker, ForegroundTracker, GameCores,
+    AudioTracker, BusyTracker, DemandTracker, FocusTracker, Footprint, ForegroundTracker,
     GameTracker, TempBoosts, TreeLoad,
 };
-pub use trackers::{BusyRule, DemandRule, ForegroundHold, Pressure};
+pub use trackers::{BusyRule, DemandRule, FocusRule, ForegroundHold, LoadSmoothing, Pressure};
 
 pub struct ScheduleInput<'a> {
     pub snapshot: &'a Snapshot,
@@ -65,6 +74,8 @@ pub struct SchedulePlan {
     /// 实际生效的模式（玩游戏时可能被切到全力或极限模式）。
     pub effective_mode: Mode,
     pub game: Option<GameInfo>,
+    /// 有重点程序（或刚结束不久，见 `trackers::focus`）。
+    pub focused: bool,
     pub actions: Vec<PlannedAction>,
     /// 和上一轮相比，需求和对各程序的决定有什么变化（供日志记录）。
     pub decisions: Vec<Decision>,
@@ -77,7 +88,11 @@ pub struct Scheduler {
     games: GameTracker,
     /// 正在玩的游戏所在的进程树（每轮更新）。
     game_roots: HashSet<Pid>,
-    game_cores: GameCores,
+    /// 像游戏、还在等待确认的进程树：先放到大核，不等确认（每轮更新）。
+    pending_game_roots: HashSet<Pid>,
+    focus: FocusTracker,
+    footprint: Footprint,
+    placer: GroupPlacer,
     audio: AudioTracker,
     load: TreeLoad,
     demand: DemandTracker,
@@ -85,7 +100,7 @@ pub struct Scheduler {
     pressure: Pressure,
     idle_for: Millis,
     busy: BusyTracker,
-    /// 玩游戏时，发声又在忙的程序（只让到小核）。
+    /// 有重点程序时，发声又在忙的程序（只让到小核）。
     busy_with_audio: BusyTracker,
     boosts: TempBoosts,
     decisions: DecisionLog,
@@ -103,15 +118,17 @@ impl Scheduler {
     pub fn plan(&mut self, input: &ScheduleInput) -> SchedulePlan {
         let effective_mode = self.observe(input);
         let programs = if input.enabled {
-            self.judge_programs(input.classes, input.snapshot)
+            self.judge_programs(input)
         } else {
             HashMap::new()
         };
+        let focused = programs.values().any(|p| p.focusing);
         let actions = self.diff(input, &programs);
         let decisions = self.record_decisions(input.classes, &programs);
         SchedulePlan {
             effective_mode,
             game: self.current_game(input.snapshot),
+            focused,
             actions,
             decisions,
         }
@@ -150,12 +167,27 @@ impl Scheduler {
         self.reconciler.applied_count()
     }
 
+    /// 所有已调整的进程（服务把它存下来，见 [`Adjusted`]）。
+    pub fn adjusted(&self) -> Vec<Adjusted> {
+        self.reconciler.adjusted()
+    }
+
+    /// 恢复上次运行留下的调整所需的动作（只对还在运行的同一个进程，见 [`Adjusted`]）。
+    pub fn restore_leftovers(&self, leftovers: &[Adjusted], snap: &Snapshot) -> Vec<PlannedAction> {
+        leftovers
+            .iter()
+            .filter(|l| snap.find(l.key.pid).is_some_and(|p| p.facts.key == l.key))
+            .flat_map(leftovers::restore_actions)
+            .collect()
+    }
+
     /// 一个进程当前的调度状态（程序偏好页显示）。
     pub fn state(&self, key: &ProcessKey) -> ProcessSchedule {
         self.reconciler.state(key)
     }
 
-    /// 更新各项跟踪（前台、游戏、发声、临时全速、负载、需求），返回实际生效的模式。
+    /// 更新各项跟踪（前台、游戏、发声、临时全速、负载），返回实际生效的模式。需求要等判断完哪些程序
+    /// 正在用之后才算（见 `program`）。
     fn observe(&mut self, input: &ScheduleInput) -> Mode {
         let snap = input.snapshot;
         let now = snap.at;
@@ -168,7 +200,9 @@ impl Scheduler {
         self.boosts.expire(now);
         let alive: HashSet<ProcessKey> = snap.processes.iter().map(|p| p.facts.key).collect();
         self.reconciler.retain_alive(&alive);
-        self.game_cores.retain_alive(&alive);
+        self.focus.retain_alive(&alive);
+        self.footprint.retain_alive(&alive);
+        self.placer.retain_alive(&alive);
         if input.enabled {
             self.busy.retain_alive(&alive);
             self.busy_with_audio.retain_alive(&alive);
@@ -184,22 +218,25 @@ impl Scheduler {
             .filter_map(|k| input.classes.get(&k.pid))
             .map(|c| c.root_pid)
             .collect();
+        // 只认自己就是一个程序的候选（游戏本体）：挂在启动器名下的不算，不把启动器整棵树搬到大核。
+        self.pending_game_roots = self
+            .games
+            .pending_keys()
+            .filter(|k| {
+                input
+                    .classes
+                    .get(&k.pid)
+                    .is_some_and(|c| c.root_pid == k.pid)
+            })
+            .map(|k| k.pid)
+            .collect();
         self.load.update(
             snap,
             input.classes,
             input.activity,
             now,
-            self.cfg.load_smoothing_ms,
+            self.cfg.load_smoothing,
         );
-        let signals = DemandSignals {
-            gaming: self.games.any_active(),
-            hot: input.hot,
-            on_battery: input.on_battery,
-            foreground_core_pct: self.load.foreground(),
-            system_pct: input.activity.system_cpu_pct(),
-        };
-        self.pressure = self.demand.update(signals, now, self.cfg.demand);
-        self.idle_for = self.demand.idle_for(now);
         match input.game_mode {
             Some(game) if self.games.in_session(now, self.cfg.game_session_hold_ms) => game,
             _ => input.user_mode,
@@ -224,7 +261,7 @@ impl Scheduler {
             let desired = match programs.get(&class.root_pid) {
                 Some(program) => {
                     let emitting = class.emits_audio || self.audio.emitting(&key);
-                    self.desired(class, program, emitting)
+                    self.desired(class, program, emitting).0
                 }
                 None => Desired::NEUTRAL,
             };

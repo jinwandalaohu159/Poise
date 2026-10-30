@@ -40,15 +40,31 @@ fn replay_gaming_with_an_idle_background() {
     sim.run_for(5 * 60_000);
 
     assert_eq!(sim.mode(), Mode::Full);
-    // 后台什么都没干：闲着的程序一个都没碰。游戏放到大核、浏览器里输出声音的进程不受限速，
-    // 各只调整一次，切来切去也不再动；浏览器的其他进程交给它自己和系统管理。
-    let expected: HashMap<Pid, usize> = [GAME, 4].map(|p| (p, 1)).into();
+    // 游戏一开就放到大核，确认后再不让系统节能限速（两次）；浏览器里输出声音的进程不受限速；
+    // 闲着的托盘程序只让到小核（大核留给游戏，不降优先级、不节能），各只调整一次，
+    // 切来切去也不再动；浏览器的其他进程在发声，交给它自己和系统管理。
+    let mut expected: HashMap<Pid, usize> = (10..30).map(|p| (p, 1)).collect();
+    expected.extend([(GAME, 2), (4, 1)]);
     assert_eq!(sim.adjustments_per_process(), expected);
+    for idle in 10..30 {
+        assert!(
+            sim.actions_on(idle)
+                .iter()
+                .all(|a| matches!(a, Action::SetCoreSet { set, .. } if set.is_efficiency()))
+        );
+        assert_eq!(sim.state_of(idle), Some(Desired::ASIDE));
+    }
+    // 托盘程序分摊在两组小核上，没有一组留给游戏（游戏只用大核就够）。
+    let groups: HashSet<CoreSet> = (10..30).map(|p| sim.cores_of(p)).collect();
+    assert_eq!(
+        groups,
+        HashSet::from([CoreSet::Domains(0b010), CoreSet::Domains(0b100)])
+    );
     assert_eq!(sim.state_of(GAME), Some(Desired::PLAYING));
     assert!(sim.never_lowered(GAME));
     assert!(sim.only_protected(4) && sim.is_protected(4));
-    // 切出去看一眼不算结束游戏：日志里只有一条"按游戏调度"。
-    assert_eq!(sim.verdicts_of(GAME), [Verdict::Playing]);
+    // 一开始先按重点程序放到大核，确认后按游戏调度；切出去看一眼不算结束游戏，不再有别的记录。
+    assert_eq!(sim.verdicts_of(GAME), [Verdict::Focused, Verdict::Playing]);
 }
 
 #[test]
@@ -63,8 +79,10 @@ fn games_switch_the_mode_and_stay_active_when_alt_tabbed() {
     ]);
     sim.foreground = Some(1);
     sim.run_for(TICK_MS);
-    // 自动识别的游戏要持续几秒才确认。
+    // 自动识别的游戏要持续几秒才确认，但不等确认就先放到大核；别的程序不等确认不让路。
     assert_eq!(sim.mode(), Mode::Balanced);
+    assert_eq!(sim.cores_of(1), CoreSet::Domains(0b1));
+    assert_eq!(sim.state_of(2), None);
     sim.run_for(6_000);
     assert_eq!(sim.mode(), Mode::Full);
     assert_eq!(
@@ -79,9 +97,9 @@ fn games_switch_the_mode_and_stay_active_when_alt_tabbed() {
     assert!(sim.never_lowered(1));
     assert!(sim.actions_on(1).contains(&&Action::SetCoreSet {
         pid: 1,
-        set: CoreSet::Performance
+        set: CoreSet::Domains(0b1)
     }));
-    assert_eq!(sim.adjustments_per_process().get(&1), Some(&1));
+    assert_eq!(sim.adjustments_per_process().get(&1), Some(&2));
 }
 
 /// 复盘"一局结束回到客户端，选完英雄再进下一局"：中间不切回日常模式（每次切换散热模式都卡一下）。
@@ -120,7 +138,7 @@ fn game_mode_is_kept_between_matches() {
 #[test]
 fn heavily_threaded_games_may_use_every_core() {
     let cfg = ScheduleConfig::default();
-    assert_eq!(cfg.cores.performance_threads, 12);
+    assert_eq!(cfg.cores.threads(0), 12);
     let light = Proc {
         cpu_pct: 150.0,
         preference: AppPreference::Game,
@@ -201,17 +219,20 @@ fn foreground_flickers_while_gaming_do_not_flip_programs() {
         sim.foreground = Some(GAME);
         sim.run_for(4_000);
     }
-    // 第一次被抢时恢复，之后一直保持（以前每次被抢都要恢复、再让路，3 分钟里来回 60 次）。
-    assert_eq!(sim.adjustments_per_process().get(&CHAT), Some(&2));
+    // 游戏一开先让到小核，在忙再让路（同一组小核，不再挪动）；第一次被抢时恢复，之后一直保持
+    // （以前每次被抢都要恢复、再让路，3 分钟里来回 60 次）。
+    assert_eq!(sim.adjustments_per_process().get(&CHAT), Some(&3));
     // 不再被打扰 20 秒后，依然在忙，再让路。
     sim.run_for(30_000);
     assert!(sim.is_yielded(CHAT));
-    assert_eq!(sim.adjustments_per_process().get(&CHAT), Some(&3));
+    assert_eq!(sim.adjustments_per_process().get(&CHAT), Some(&4));
     use Verdict::{Normal, Yielded};
     assert_eq!(sim.verdicts_of(CHAT), [Yielded, Normal, Yielded]);
 }
 
-/// 一局结束：玩游戏时按更低的门槛让路的轻负载程序恢复，依然很忙的继续让路。
+/// 不玩了：游戏会话结束后（最后一局结束一段时间，见 `game_session_hold_ms`），玩游戏时按更低的门槛
+/// 让路的轻负载程序恢复；依然很忙的继续让路，但只降优先级（没有重点程序了，空闲的核心照样给它用）。
+/// 会话结束之前（两局之间）照样让路，不来回切换。
 #[test]
 fn light_programs_come_back_after_the_game() {
     const GAME: Pid = 1;
@@ -233,7 +254,7 @@ fn light_programs_come_back_after_the_game() {
             ..app(HEAVY)
         },
         Proc {
-            cpu_pct: 80.0,
+            cpu_pct: 50.0,
             ..app(USER_APP)
         },
     ]);
@@ -243,7 +264,78 @@ fn light_programs_come_back_after_the_game() {
     // 游戏退出，用户回到自己的程序继续忙。
     sim.procs.retain(|p| p.pid != GAME);
     sim.foreground = Some(USER_APP);
+    sim.run_for(90_000);
+    assert!(sim.is_yielded(LIGHT) && sim.is_yielded(HEAVY));
+    sim.run_for(3 * 60_000);
+    assert_eq!(sim.state_of(LIGHT), None);
+    assert!(sim.is_lowered(HEAVY));
+}
+
+/// 复盘一整段英雄联盟：客户端里排队 → 进游戏 → 中途切出去看两次浏览器 → 一局结束回客户端选英雄 →
+/// 再来一局 → 不玩了。开着语音、浏览器、一个在后台更新的程序和一堆托盘程序。
+/// 托盘程序在整段时间里只挪动一次（开局让到小核）、最后恢复一次；两局之间不来回挪。
+#[test]
+fn replay_two_matches_with_a_lobby_in_between() {
+    const CLIENT: Pid = 1;
+    const GAME: Pid = 2;
+    const VOICE: Pid = 3;
+    const BROWSER: Pid = 4;
+    const UPDATER: Pid = 5;
+    let game = Proc {
+        cpu_pct: 250.0,
+        renders_fullscreen: true,
+        ..app(GAME)
+    };
+    let mut procs = vec![
+        Proc {
+            cpu_pct: 40.0,
+            ..app(CLIENT)
+        },
+        Proc {
+            cpu_pct: 3.0,
+            audio: true,
+            ..app(VOICE)
+        },
+        app(BROWSER),
+        Proc {
+            cpu_pct: 30.0,
+            ..app(UPDATER)
+        },
+    ];
+    procs.extend((5..10).map(|i| child(BROWSER * 10 + i, BROWSER)));
+    procs.extend((100..110).map(app));
+    let mut sim = Sim::new(procs);
+    sim.foreground = Some(CLIENT);
     sim.run_for(60_000);
-    assert!(!sim.is_yielded(LIGHT));
-    assert!(sim.is_yielded(HEAVY));
+    for round in 0..2 {
+        // 进游戏：客户端闲下来。
+        sim.procs.push(game.clone());
+        sim.proc_mut(CLIENT).cpu_pct = 5.0;
+        sim.foreground = Some(GAME);
+        sim.run_for(5 * 60_000);
+        for _ in 0..2 {
+            sim.foreground = Some(BROWSER);
+            sim.run_for(15_000);
+            sim.foreground = Some(GAME);
+            sim.run_for(3 * 60_000);
+        }
+        // 一局结束，回客户端；第一局之后选英雄 90 秒。
+        sim.procs.retain(|p| p.pid != GAME);
+        sim.proc_mut(CLIENT).cpu_pct = 40.0;
+        sim.foreground = Some(CLIENT);
+        sim.run_for(if round == 0 { 90_000 } else { 5 * 60_000 });
+    }
+    // 两局之间（选英雄）后台照样完整让路，不在"只降优先级"和"完整让路"之间来回切换。
+    use Verdict::{Lowered, Yielded};
+    assert_eq!(sim.verdicts_of(UPDATER), [Lowered, Yielded, Lowered]);
+    for tray in 100..110 {
+        assert_eq!(sim.adjustments_per_process()[&tray], 2, "托盘程序 {tray}");
+        assert_eq!(sim.state_of(tray), None);
+    }
+    // 语音从头到尾只被保护一次。
+    assert!(sim.only_protected(VOICE));
+    assert_eq!(sim.adjustments_per_process()[&VOICE], 1);
+    // 不玩了：模式回到日常，更新程序最多只降优先级（用户在客户端里忙）。
+    assert_eq!(sim.mode(), Mode::Balanced);
+    assert!(sim.state_of(UPDATER).is_none_or(|d| d == Desired::LOWERED));
 }

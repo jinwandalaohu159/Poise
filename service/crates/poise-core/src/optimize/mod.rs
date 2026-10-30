@@ -28,7 +28,7 @@ pub fn status(
     items
         .iter()
         .map(|item| {
-            let state = state(item, store);
+            let state = state(item, store, journal);
             ItemStatus {
                 revertible: journal.owns(&item.id)
                     || (state == ItemState::Optimized && item.system_default.is_known()),
@@ -39,10 +39,14 @@ pub fn status(
         .collect()
 }
 
-/// 每一处都是优化值才算已优化；有一处不是就算未优化。
-fn state(item: &OptimizationItem, store: &dyn SettingStore) -> ItemState {
+/// 每一处都是优化值才算已优化；有一处不是就算未优化。被别的来源暂时盖住的位置（例如安静模式关掉了睿频）
+/// 算已优化：下面仍是优化值，上层撤销后就回来，不必（也不能）重新应用。
+fn state(item: &OptimizationItem, store: &dyn SettingStore, journal: &Journal) -> ItemState {
     let mut state = ItemState::Optimized;
     for target in &item.targets {
+        if journal.covered(store, &item.id, target) {
+            continue;
+        }
         match store.read(target) {
             Ok(v) if item.is_optimized(v.as_ref()) => {}
             Ok(_) => return ItemState::NotOptimized,
@@ -115,7 +119,7 @@ pub fn reverted_power_items<'a>(
         .filter(|item| {
             item.group == Group::Power
                 && journal.owns(&item.id)
-                && state(item, store) == ItemState::NotOptimized
+                && state(item, store, journal) == ItemState::NotOptimized
         })
         .collect()
 }
@@ -286,6 +290,21 @@ mod tests {
         // 还原仍回到最初的原值（不存在则删除）。
         j.revert(&store, "idle").unwrap();
         assert_eq!(store.read(&reg("class1")).unwrap(), None);
+    }
+
+    #[test]
+    fn power_items_covered_by_a_mode_count_as_optimized_and_are_not_reapplied() {
+        let store = MemStore::default();
+        let items = [power("idle", &["class0"])];
+        let mut j = Journal::default();
+        apply(&items[0], &store, &mut j, 0).unwrap();
+        // 当前模式在同一位置叠了别的值（例如安静模式关掉睿频）：不是被别处改掉，不重新应用。
+        j.apply(&store, "mode", &reg("class0"), &Value::Dword(100), 1)
+            .unwrap();
+        assert!(reverted_power_items(&items, &store, &j).is_empty());
+        assert_eq!(status(&items, &store, &j)[0].state, ItemState::Optimized);
+        j.revert(&store, "mode").unwrap();
+        assert_eq!(store.read(&reg("class0")).unwrap(), Some(Value::Dword(5)));
     }
 
     #[test]

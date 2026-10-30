@@ -239,6 +239,9 @@ public sealed class PresentationTests
         // 正在玩的游戏：固定在大核。
         Assert.Equal("后台 · 性能核 · 不受系统节能限速",
             ScheduleText.State(new AppSchedule(ScheduleState.Scheduled, false, CoreUse.Performance, PriorityLevel.Normal, Adjustment.Protected)));
+        // 重点程序（前台持续高负载）：只安排了核心。
+        Assert.Equal("前台 · 性能核 · 优先级正常",
+            ScheduleText.State(new AppSchedule(ScheduleState.Scheduled, true, CoreUse.Performance, PriorityLevel.Normal, Adjustment.Placed)));
         Assert.Equal("前台 · 性能核 · 优先级较高 · 不受系统节能限速",
             ScheduleText.State(new AppSchedule(ScheduleState.Scheduled, true, CoreUse.Performance, PriorityLevel.Higher, Adjustment.Raised)));
         Assert.Equal("未调整（由程序自行管理）",

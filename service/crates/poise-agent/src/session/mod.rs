@@ -5,16 +5,16 @@ pub mod desktop;
 
 use poise_core::model::{Pid, SessionState};
 
-/// 采集一次会话状态。`audio` 为 None 时重新枚举音频会话（相对较贵），否则沿用给定的结果。
+/// 采集一次会话状态。`audio` 是正在发声的进程（见 [`audio::AudioSessions`]，由调用方决定什么时候重新枚举）。
 /// 进程列表排好序：窗口层叠顺序变了不算状态变化（服务只关心有哪些进程）。
-pub fn capture(audio: Option<&[Pid]>) -> SessionState {
+pub fn capture(audio: &[Pid]) -> SessionState {
     let foreground = desktop::foreground_window();
     SessionState {
         session_id: current_session(),
-        foreground_pid: desktop::pid_of(foreground),
+        foreground_pid: desktop::app_pid(foreground),
         fullscreen: desktop::is_fullscreen(foreground),
         visible_window_pids: sorted(desktop::visible_window_pids()),
-        audio_pids: sorted(audio.map_or_else(audio::active_pids, <[Pid]>::to_vec)),
+        audio_pids: sorted(audio.to_vec()),
         shell_pid: desktop::shell_pid(),
         idle_ms: desktop::idle_ms(),
     }

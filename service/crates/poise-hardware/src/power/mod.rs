@@ -4,7 +4,7 @@
 //! Poise 只保证两件事：处理器的动态范围是完整的，以及各模式的能效偏好。
 //!
 //! - 所有模式的底线：最小处理器状态取 Windows 平衡计划的出厂值（空闲时能降下来），最大处理器状态 100%
-//!   （有负载时能升上去），核心停放也取出厂值（插电时小核不停放：后台程序和让路的程序都在小核上，
+//!   （有负载时能升上去），核心停放也取出厂值（但大小核处理器插电时小核不停放：后台程序和让路的程序都在小核上，
 //!   实测小核被停放到只剩几个时，它们挤在一起排队），每个效率等级都设。用户的计划被别的程序改坏了（实测有电脑开机后被改成
 //!   最小状态 100%、睿频被关，处理器空闲时不降频、有负载时又只能跑到基础频率）也不受影响。
 //! - 均衡：睿频方式与能效偏好也取 Windows 平衡计划的出厂值。
@@ -25,14 +25,15 @@ use poise_core::journal::{Journal, JournalError};
 use poise_core::model::Millis;
 use poise_core::power_settings::{BOOST_MODE, CP_MIN_CORES, EPP, MAX_STATE, MIN_STATE, target};
 use poise_core::prefs::Mode;
-use poise_core::setting::{SettingStore, Value};
+use poise_core::setting::{SettingStore, Target, Value};
 
 /// 变更日志里属于电源模式的条目。
 pub const OWNER: &str = "hardware:power";
 
-/// 写入某个模式的电源设置：先撤销上一个模式写入的值，再写入新的，保证不同模式的设置不会残留叠加。
-/// 整个过程是一批写入；返回写入结果，以及是否需要重新激活电源计划才能生效——
-/// 激活要两三百毫秒，由调用方放到硬件执行线程里做（见 `actuator`）。
+/// 写入某个模式的电源设置：只写和此刻不同的值（模式之间多数设置相同），新模式不再设置的位置撤销，
+/// 保证不同模式的设置不会残留叠加；原值始终是 Poise 接管之前的。整个过程是一批写入；返回写入结果，
+/// 以及是否需要重新激活电源计划才能生效——没有写入时不需要；激活要两三百毫秒，由调用方放到硬件执行线程里做
+/// （见 `actuator`）。
 pub fn write(
     mode: Mode,
     top_class: u8,
@@ -41,10 +42,18 @@ pub fn write(
     journal: &mut Journal,
     now: Millis,
 ) -> (Result<(), JournalError>, bool) {
+    let wanted = settings_for(mode, top_class, baseline);
     batch(store, || {
-        revert_owned(store, journal)?;
-        for (t, v) in settings_for(mode, top_class, baseline) {
-            journal.apply(store, OWNER, &t, &v, now)?;
+        // 换了电源计划之后，记录里的位置属于旧计划：按具体位置比较，旧计划里的撤销（写回旧计划）。
+        let places: Vec<Target> = wanted
+            .iter()
+            .filter_map(|(t, _)| store.resolve(t).ok())
+            .collect();
+        journal.revert_where(store, OWNER, |t| !places.iter().any(|p| p.same_place(t)))?;
+        for (t, v) in &wanted {
+            if !journal.holds(store, OWNER, t, v) {
+                journal.apply(store, OWNER, t, v, now)?;
+            }
         }
         Ok(())
     })
@@ -180,6 +189,43 @@ mod tests {
         revert(&store, &mut j).0.unwrap();
         assert!(j.owns("cpu_idle_downclock"));
         assert_eq!(read(&store, MIN_STATE[1]), Some(Value::Dword(5)));
+    }
+
+    /// 记下写入次数的存储。
+    #[derive(Default)]
+    struct Counting {
+        inner: Mem,
+        writes: RefCell<usize>,
+    }
+    impl SettingStore for Counting {
+        fn read(&self, t: &Target) -> Result<Option<Value>, StoreError> {
+            self.inner.read(t)
+        }
+        fn write(&self, t: &Target, v: &Value) -> Result<(), StoreError> {
+            *self.writes.borrow_mut() += 1;
+            self.inner.write(t, v)
+        }
+        fn delete(&self, t: &Target) -> Result<(), StoreError> {
+            self.inner.delete(t)
+        }
+    }
+
+    #[test]
+    fn switching_modes_writes_only_what_differs() {
+        let store = Counting::default();
+        let mut j = Journal::default();
+        apply(Mode::Balanced, &store, &mut j);
+        let first = *store.writes.borrow();
+        // 同一模式再写一遍：一个都不写。
+        apply(Mode::Balanced, &store, &mut j);
+        assert_eq!(*store.writes.borrow(), first);
+        apply(Mode::Full, &store, &mut j);
+        let changed = *store.writes.borrow() - first;
+        // 全力模式只改睿频方式、两级能效偏好、大核停放（各两项：插电、电池）。
+        assert!(changed <= 8, "{changed}");
+        // 原值仍是接管之前的：撤销后回到 50。
+        revert(&store, &mut j).0.unwrap();
+        assert_eq!(read(&store.inner, EPP[1]), Some(Value::Dword(50)));
     }
 
     #[test]

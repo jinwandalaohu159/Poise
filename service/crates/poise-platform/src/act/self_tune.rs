@@ -3,7 +3,9 @@
 //!
 //! 例外是关键路径上的少数线程（[`responsive_thread`]）：每轮采样与调度、界面的请求。它们每轮只用几毫秒，
 //! 但如果和被让路的后台程序一起在小核上排队，实测一轮要等 0.1～9 秒才轮到（自身只要 6～35 毫秒），
-//! 前台切换、让路与恢复都跟着变慢。所以这几个线程以正常优先级、不降频运行——用的处理器时间不变，只是不再排队。
+//! 前台切换、让路与恢复都跟着变慢。所以这几个线程以正常优先级、不降频运行，并且不限于小核：
+//! 有重点程序时，没在用的程序都挪到了小核，小核忙的时候它们可以到空着的核心上跑一下——用的处理器时间
+//! 不变，只是不再排队。
 
 use std::ffi::c_void;
 
@@ -13,7 +15,7 @@ use windows::Win32::System::Threading::{
     PROCESS_POWER_THROTTLING_EXECUTION_SPEED, PROCESS_POWER_THROTTLING_IGNORE_TIMER_RESOLUTION,
     PROCESS_POWER_THROTTLING_STATE, ProcessMemoryPriority, ProcessPowerThrottling,
     SetPriorityClass, SetProcessDefaultCpuSets, SetProcessInformation, SetThreadInformation,
-    SetThreadPriority, THREAD_POWER_THROTTLING_CURRENT_VERSION,
+    SetThreadPriority, SetThreadSelectedCpuSets, THREAD_POWER_THROTTLING_CURRENT_VERSION,
     THREAD_POWER_THROTTLING_EXECUTION_SPEED, THREAD_POWER_THROTTLING_STATE,
     THREAD_PRIORITY_HIGHEST, ThreadPowerThrottling,
 };
@@ -48,18 +50,22 @@ pub fn apply(topology: &CpuTopology) {
             size_of::<MEMORY_PRIORITY_INFORMATION>() as u32,
         );
         if let Some(ids) = topology.ids_for(poise_core::action::CoreSet::Efficiency) {
-            let _ = SetProcessDefaultCpuSets(me, Some(ids));
+            let _ = SetProcessDefaultCpuSets(me, Some(&ids));
         }
     }
 }
 
 /// 让当前线程及时运行（见模块说明）：在"低于正常"的进程里取最高的线程优先级（相当于普通程序的正常优先级），
-/// 并且这个线程不受效率模式降频。仍然只在小核上运行。
+/// 这个线程不受效率模式降频，可以在任何核心上运行。
 pub fn responsive_thread() {
-    // SAFETY: 只作用于当前线程，参数为本地结构体。
+    let all = CpuTopology::detect().all_ids();
+    // SAFETY: 只作用于当前线程，参数为本地结构体或本地数组。
     unsafe {
         let me = GetCurrentThread();
         let _ = SetThreadPriority(me, THREAD_PRIORITY_HIGHEST);
+        if !all.is_empty() {
+            let _ = SetThreadSelectedCpuSets(me, &all);
+        }
         let state = THREAD_POWER_THROTTLING_STATE {
             Version: THREAD_POWER_THROTTLING_CURRENT_VERSION,
             ControlMask: THREAD_POWER_THROTTLING_EXECUTION_SPEED,

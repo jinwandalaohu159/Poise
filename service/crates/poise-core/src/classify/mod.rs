@@ -17,7 +17,7 @@ mod tree;
 use game::renders_fullscreen;
 use role::{AntiCheat, restartable_service, role_of};
 use scope::{preference_of, schedule_scope};
-use tree::{Marks, NeverScheduledPaths, roots};
+use tree::{Lineage, Marks, NeverScheduledPaths, roots};
 
 /// 进程的角色。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -136,6 +136,7 @@ pub struct ClassifyInput<'a> {
 pub struct Classifier {
     cfg: ClassifyConfig,
     never_scheduled_paths: NeverScheduledPaths,
+    lineage: Lineage,
 }
 
 impl Classifier {
@@ -143,6 +144,7 @@ impl Classifier {
         Self {
             cfg,
             never_scheduled_paths: NeverScheduledPaths::default(),
+            lineage: Lineage::default(),
         }
     }
 
@@ -153,7 +155,8 @@ impl Classifier {
         let marks = Marks::new(snap, input.session, &mut self.never_scheduled_paths);
         let visible = &marks.visible;
         let audio: HashSet<Pid> = input.session.audio_pids.iter().copied().collect();
-        let roots = roots(&by_pid, input, &marks);
+        let roots = roots(&by_pid, input, &marks, &self.lineage);
+        self.lineage.remember(&roots, &by_pid);
         let foreground_root = input
             .session
             .foreground_pid

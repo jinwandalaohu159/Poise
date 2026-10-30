@@ -89,10 +89,12 @@ pub(super) fn priority_level(p: PriorityClass) -> PriorityLevel {
 }
 
 pub(super) fn core_use(cores: CoreSet) -> CoreUse {
-    match cores {
-        CoreSet::All => CoreUse::Any,
-        CoreSet::Performance => CoreUse::Performance,
-        CoreSet::Efficiency => CoreUse::Efficiency,
+    if cores.is_performance() {
+        CoreUse::Performance
+    } else if cores.is_efficiency() {
+        CoreUse::Efficiency
+    } else {
+        CoreUse::Any
     }
 }
 
@@ -103,13 +105,15 @@ pub(super) fn adjustment(d: Desired) -> Adjustment {
     {
         Adjustment::Raised
     } else if d.priority.is_some()
-        || d.cores == CoreSet::Efficiency
+        || d.cores.is_efficiency()
         || d.eco == EcoQos::On
         || d.resources == ResourcePriority::Low
     {
         Adjustment::Yielded
     } else if d.eco == EcoQos::Off {
         Adjustment::Protected
+    } else if d.cores != CoreSet::All {
+        Adjustment::Placed
     } else {
         Adjustment::None
     }

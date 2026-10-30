@@ -6,16 +6,19 @@ use std::collections::HashMap;
 
 mod audio;
 mod background;
+mod focus;
 mod games;
 mod restore;
 
 use super::*;
 use crate::action::{Action, CoreSet, EcoQos, ResourcePriority};
 use crate::classify::{Role, ScheduleScope};
-use crate::model::{PriorityClass, ProcessFacts, ProcessMetrics};
+use crate::model::{PriorityClass, ProcessFacts, ProcessMetrics, SystemMetrics};
 use crate::prefs::AppPreference;
 
 const TICK_MS: Millis = 2_000;
+/// 模拟的处理器有多少个逻辑处理器（与默认的核心域一致：12 + 4 + 4）。
+const LOGICAL_CPUS: u64 = 20;
 
 /// 模拟里的一个进程。
 #[derive(Clone)]
@@ -73,6 +76,8 @@ struct Sim {
     decisions: Vec<Decision>,
     last_plan: Option<SchedulePlan>,
     on_battery: bool,
+    /// 整机累计的忙碌时间、总时间（100 纳秒）。
+    system_times: (u64, u64),
 }
 
 impl Sim {
@@ -93,6 +98,7 @@ impl Sim {
             decisions: Vec::new(),
             last_plan: None,
             on_battery: false,
+            system_times: (0, 0),
         }
     }
 
@@ -136,10 +142,23 @@ impl Sim {
                 }
             })
             .collect();
+        // 整机占用：各进程之和，不超过全部逻辑处理器。
+        let tick = TICK_MS * 10_000;
+        let busy: f64 = self
+            .procs
+            .iter()
+            .map(|p| f64::from(p.cpu_pct) / 100.0)
+            .sum();
+        self.system_times.0 += (busy.min(LOGICAL_CPUS as f64) * tick as f64) as u64;
+        self.system_times.1 += LOGICAL_CPUS * tick;
         Snapshot {
             at: self.now,
             processes,
-            ..Default::default()
+            system: SystemMetrics {
+                cpu_busy_time: self.system_times.0,
+                cpu_total_time: self.system_times.1,
+                ..Default::default()
+            },
         }
     }
 
@@ -236,17 +255,16 @@ impl Sim {
     }
 
     fn is_yielded(&self, pid: Pid) -> bool {
-        matches!(
-            self.scheduler.state(&ProcessKey { pid, created: 1 }),
-            ProcessSchedule::Adjusted(d) if d == Desired::YIELDED
-        )
+        self.state_of(pid) == Some(Desired::YIELDED)
+    }
+
+    /// 只降了优先级（正在用的程序在忙，而没有重点程序）。
+    fn is_lowered(&self, pid: Pid) -> bool {
+        self.state_of(pid) == Some(Desired::LOWERED)
     }
 
     fn is_protected(&self, pid: Pid) -> bool {
-        matches!(
-            self.scheduler.state(&ProcessKey { pid, created: 1 }),
-            ProcessSchedule::Adjusted(d) if d == Desired::PROTECTED
-        )
+        self.state_of(pid) == Some(Desired::PROTECTED)
     }
 
     /// 对这个进程只做过"不让系统节能限速"，没有改优先级、没有限核心。
@@ -262,18 +280,45 @@ impl Sim {
         })
     }
 
+    /// 进程已调整到的状态。分到哪个副域不论，都按"小核"算；只用主域按"大核"算（核心域另有测试）。
     fn state_of(&self, pid: Pid) -> Option<Desired> {
-        match self.scheduler.state(&ProcessKey { pid, created: 1 }) {
-            ProcessSchedule::Adjusted(d) => Some(d),
+        match self.scheduler.state(&self.key(pid)) {
+            ProcessSchedule::Adjusted(d) => Some(Desired {
+                cores: match d.cores {
+                    c if c.is_efficiency() => CoreSet::Efficiency,
+                    CoreSet::Domains(1) => CoreSet::Performance,
+                    c => c,
+                },
+                ..d
+            }),
             _ => None,
         }
+    }
+
+    /// 进程实际分到的核心范围（不调整时为 All）。
+    fn cores_of(&self, pid: Pid) -> CoreSet {
+        match self.scheduler.state(&self.key(pid)) {
+            ProcessSchedule::Adjusted(d) => d.cores,
+            _ => CoreSet::All,
+        }
+    }
+
+    fn key(&self, pid: Pid) -> ProcessKey {
+        ProcessKey { pid, created: 1 }
+    }
+
+    /// 对这个进程只挪过核心，没有降低优先级、没有节能限速。
+    fn never_lowered_priority(&self, pid: Pid) -> bool {
+        self.actions_on(pid)
+            .iter()
+            .all(|a| matches!(a, Action::SetCoreSet { .. }))
     }
 
     fn never_lowered(&self, pid: Pid) -> bool {
         self.actions_on(pid).iter().all(|a| match a {
             Action::SetPriority { class, .. } => class.rank() >= PriorityClass::Normal.rank(),
             Action::SetEcoQos { state, .. } => *state != EcoQos::On,
-            Action::SetCoreSet { set, .. } => *set != CoreSet::Efficiency,
+            Action::SetCoreSet { set, .. } => !set.is_efficiency(),
             Action::SetResourcePriority { priority, .. } => *priority != ResourcePriority::Low,
             _ => true,
         })

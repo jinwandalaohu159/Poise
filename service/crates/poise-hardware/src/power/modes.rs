@@ -31,12 +31,16 @@ pub fn settings_for(mode: Mode, top_class: u8, baseline: &Baseline) -> Vec<(Targ
     let classes = || EPP.iter().enumerate().take(top + 1);
     let full = matches!(mode, Mode::Full | Mode::Vendor);
     let mut values: Vec<Pair> = Vec::new();
-    // 底线：动态范围完整。全力模式下大核不停放。
+    // 底线：动态范围完整。全力模式下大核不停放。大小核处理器插电时小核不停放：让路的程序、
+    // 给重点程序让出大核的程序都在小核上，小核被停放到只剩几个时它们挤在一起排队
+    // （实测有机型的出厂值只保留 4%）。
     values.extend(MIN_STATE.iter().map(|s| from_baseline(baseline, s)));
     values.extend(MAX_STATE.iter().map(|s| same(s, FULL_STATE)));
     values.extend(CP_MIN_CORES.iter().enumerate().map(|(class, s)| {
         if full && class == top {
             same(s, FULL_STATE)
+        } else if top > 0 && class == 0 {
+            (*s, FULL_STATE, baseline.get(s, false))
         } else {
             from_baseline(baseline, s)
         }
@@ -104,6 +108,20 @@ mod tests {
         // 小核的核心停放按出厂值：插电时不停放。
         assert_eq!(full(CP_MIN_CORES[0], true), Some(100));
         assert_eq!(full(CP_MIN_CORES[0], false), Some(10));
+    }
+
+    #[test]
+    fn small_cores_are_never_parked_on_ac_even_if_the_factory_value_parks_them() {
+        let dell = Baseline::from_lookup(|s, _| (s == CP_MIN_CORES[0]).then_some(4));
+        for mode in [Mode::Quiet, Mode::Balanced, Mode::Full] {
+            assert_eq!(value(mode, HYBRID, &dell, CP_MIN_CORES[0], true), Some(100));
+            assert_eq!(value(mode, HYBRID, &dell, CP_MIN_CORES[0], false), Some(4));
+        }
+        // 不是大小核：按出厂值。
+        assert_eq!(
+            value(Mode::Balanced, 0, &dell, CP_MIN_CORES[0], true),
+            Some(4)
+        );
     }
 
     #[test]

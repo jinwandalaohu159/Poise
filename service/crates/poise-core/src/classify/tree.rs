@@ -4,7 +4,7 @@ use std::collections::{HashMap, HashSet};
 
 use super::ClassifyInput;
 use crate::known;
-use crate::model::{Pid, ProcessSample, SessionState, Snapshot};
+use crate::model::{Pid, ProcessKey, ProcessSample, SessionState, Snapshot};
 use crate::prefs::AppPreference;
 
 /// 子进程是不是一个独立的程序，而不是父程序的一部分：
@@ -95,12 +95,45 @@ impl Marks {
     }
 }
 
+/// 每个进程上一轮所属程序的主进程。中间的进程退出后（例如命令行工具拉起编译服务进程后自己退出了，
+/// 启动器拉起子进程后退出），留下的进程仍归原来的程序——它们干的是那个程序的活，用户在用那个程序时
+/// 它们不该被当成后台程序让路。原来的程序也退出了，它们才各自成为独立的程序。
+#[derive(Debug, Default)]
+pub(super) struct Lineage(HashMap<ProcessKey, ProcessKey>);
+
+impl Lineage {
+    /// 父进程已经不在了：归到它上一轮所属的程序（那个程序还在、同一会话、它自己也不是独立程序时）。
+    fn adopt(
+        &self,
+        p: &ProcessSample,
+        by_pid: &HashMap<Pid, &ProcessSample>,
+        input: &ClassifyInput,
+        marks: &Marks,
+    ) -> Option<Pid> {
+        let root = self.0.get(&p.facts.key)?;
+        let r = by_pid.get(&root.pid).filter(|r| r.facts.key == *root)?;
+        let same_session = r.facts.session_id != 0 && r.facts.session_id == p.facts.session_id;
+        (same_session && !is_independent(p, r, input, marks)).then_some(root.pid)
+    }
+
+    /// 记下这一轮各进程所属的程序（只记属于别的进程的；退出了的自然忘掉）。
+    pub fn remember(&mut self, roots: &HashMap<Pid, Pid>, by_pid: &HashMap<Pid, &ProcessSample>) {
+        let key = |pid: &Pid| by_pid.get(pid).map(|p| p.facts.key);
+        self.0 = roots
+            .iter()
+            .filter(|(pid, root)| pid != root)
+            .filter_map(|(pid, root)| Some((key(pid)?, key(root)?)))
+            .collect();
+    }
+}
+
 /// 每个进程所属进程树的根（见 [`parent_in_tree`]）。
 /// 沿途经过的进程一起记下结果，每个进程只判断一次，整体是线性的。
 pub(super) fn roots(
     by_pid: &HashMap<Pid, &ProcessSample>,
     input: &ClassifyInput,
     marks: &Marks,
+    lineage: &Lineage,
 ) -> HashMap<Pid, Pid> {
     let mut roots: HashMap<Pid, Pid> = HashMap::with_capacity(by_pid.len());
     let mut chain = Vec::new();
@@ -116,7 +149,7 @@ pub(super) fn roots(
             if chain.len() > 32 {
                 break current;
             }
-            match parent_in_tree(current, by_pid, input, marks) {
+            match parent_in_tree(current, by_pid, input, marks, lineage) {
                 Some(parent) => current = parent,
                 None => break current,
             }
@@ -128,21 +161,25 @@ pub(super) fn roots(
     roots
 }
 
-/// 进程在同一棵树里的父进程。遇到桌面外壳、会话 0、跨会话、PID 复用，
-/// 或者自己就是一个独立程序（见 [`is_independent`]）时为空：它自己就是根。
+/// 进程在同一棵树里的父进程。遇到桌面外壳、会话 0、跨会话，或者自己就是一个独立程序
+/// （见 [`is_independent`]）时为空：它自己就是根。父进程已经退出（或进程号被复用）时，
+/// 按它上一轮所属的程序算（见 [`Lineage`]）。
 fn parent_in_tree(
     pid: Pid,
     by_pid: &HashMap<Pid, &ProcessSample>,
     input: &ClassifyInput,
     marks: &Marks,
+    lineage: &Lineage,
 ) -> Option<Pid> {
     let proc_ = by_pid.get(&pid)?;
     let parent_pid = proc_.facts.parent_pid?;
-    let parent = by_pid.get(&parent_pid)?;
+    let parent = match by_pid.get(&parent_pid) {
+        Some(parent) if parent.is_parent_of(proc_) => parent,
+        _ => return lineage.adopt(proc_, by_pid, input, marks),
+    };
     let stop = Some(parent_pid) == input.session.shell_pid
         || parent.facts.session_id == 0
         || parent.facts.session_id != proc_.facts.session_id
-        || !parent.is_parent_of(proc_)
         || is_independent(proc_, parent, input, marks);
     (!stop).then_some(parent_pid)
 }

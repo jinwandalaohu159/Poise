@@ -7,14 +7,12 @@ use poise_core::classify::Classification;
 use poise_core::model::{Pid, ProcessKey, Snapshot};
 use poise_core::prefs::Mode;
 use poise_core::safety::{GuardedExecutor, Trigger};
-use poise_core::schedule::{
-    Cause, Decision, GameInfo, PlannedAction, Pressure, ProgramState, ScheduleInput, Verdict,
-};
+use poise_core::schedule::{GameInfo, PlannedAction, ScheduleInput};
 use poise_platform::observe::system;
 use poise_protocol::ErrorCode;
 
-use super::Engine;
 use super::error::RequestError;
+use super::{Engine, decision_log};
 
 /// 临时全速的最长时间（分钟）。
 const MAX_BOOST_MINUTES: u32 = 240;
@@ -22,6 +20,8 @@ const MAX_BOOST_MINUTES: u32 = 240;
 pub(super) struct ScheduleOutcome {
     pub effective_mode: Mode,
     pub game: Option<GameInfo>,
+    /// 有重点程序（见 `poise_core::schedule::SchedulePlan::focused`）。
+    pub focused: bool,
 }
 
 impl Engine {
@@ -38,6 +38,7 @@ impl Engine {
             ScheduleOutcome {
                 effective_mode: self.settings.mode,
                 game: None,
+                focused: false,
             }
         }
     }
@@ -61,10 +62,15 @@ impl Engine {
             hot: self.headroom.exhausted(),
         });
         self.execute_plan(&plan.actions, classes);
-        log_decisions(&plan.decisions, snapshot);
+        if !plan.actions.is_empty() || !plan.decisions.is_empty() {
+            self.last_change_at = now;
+        }
+        self.adjusted.update(self.scheduler.adjusted(), now);
+        decision_log::log(&plan.decisions, snapshot);
         ScheduleOutcome {
             effective_mode: plan.effective_mode,
             game: plan.game,
+            focused: plan.focused,
         }
     }
 
@@ -77,10 +83,42 @@ impl Engine {
             match &result {
                 Ok(_) if self.cfg.dry_run => log::info!("[观察] {:?}", planned.action),
                 Ok(_) => log::debug!("{:?}", planned.action),
+                // 系统拒绝访问的进程之后不再尝试（见 `Reconciler::report`），每个进程只记一次。
+                // 游戏被拒绝时，它就没能放到大核上：日志里要看得到。
+                Err(ExecError::AccessDenied) => {
+                    log::info!(
+                        "{:?} 未执行：{}，不再尝试",
+                        planned.action,
+                        ExecError::AccessDenied
+                    );
+                }
                 Err(e) => log::debug!("{:?} 未执行：{e}", planned.action),
             }
             self.scheduler.report(planned, &result);
         }
+    }
+
+    /// 上次运行异常退出、没能撤销的调整：把还在运行的那些进程恢复原样（启动后第一轮做一次，
+    /// 不管调度是否起作用）。随后的调度会按当前情况重新决定它们该怎样。
+    pub(super) fn restore_leftovers(
+        &mut self,
+        snapshot: &Snapshot,
+        classes: &HashMap<Pid, Classification>,
+    ) {
+        let Some(leftovers) = self.adjusted.take_leftovers() else {
+            return;
+        };
+        let actions = self.scheduler.restore_leftovers(&leftovers, snapshot);
+        let restored = actions
+            .iter()
+            .filter(|a| execute(&self.executor, a, classes).is_some_and(|r| r.is_ok()))
+            .map(|a| a.key)
+            .collect::<std::collections::HashSet<_>>()
+            .len();
+        log::info!(
+            "上次异常退出，留下 {} 个调整过的进程，已把还在运行的 {restored} 个恢复原样",
+            leftovers.len()
+        );
     }
 
     /// 撤销所有进程调整（服务停止、Poise 退出时）。按最新的进程快照撤销两遍：
@@ -104,6 +142,8 @@ impl Engine {
             });
             self.execute_plan(&plan.actions, &classes);
         }
+        let now = self.now();
+        self.adjusted.flush(self.scheduler.adjusted(), now);
     }
 
     /// 临时全速：在指定时间内按"始终优先"处理该程序。
@@ -135,69 +175,4 @@ fn execute(
         planned.original_priority,
         Trigger::Auto,
     ))
-}
-
-/// 记录调度决定的变化：需求的变化，以及哪个程序因为什么被调整、恢复。
-fn log_decisions(decisions: &[Decision], snapshot: &Snapshot) {
-    for d in decisions {
-        match d {
-            Decision::Pressure(p) => log::info!(
-                "处理器需求：{}",
-                match p {
-                    Pressure::None => "无（后台不必让路）",
-                    Pressure::Normal => "普通",
-                    Pressure::High => "高（玩游戏、发热）",
-                }
-            ),
-            Decision::Program { root, from, state } => {
-                let name = snapshot
-                    .find(root.pid)
-                    .map_or_else(|| root.pid.to_string(), |p| p.facts.friendly_name());
-                log::info!(
-                    "{name}（进程 {}，{}）：{}",
-                    root.pid,
-                    load_text(state),
-                    what_text(*from, state)
-                );
-            }
-        }
-    }
-}
-
-fn load_text(state: &ProgramState) -> String {
-    if state.disk_mb_s == 0 {
-        format!("负载 {}%", state.load_pct)
-    } else {
-        format!("负载 {}%，磁盘 {} MB/s", state.load_pct, state.disk_mb_s)
-    }
-}
-
-fn what_text(from: Verdict, state: &ProgramState) -> String {
-    let what = match state.verdict {
-        Verdict::Playing => "按游戏调度",
-        Verdict::Yielded if state.cause == Some(Cause::MarkedLow) => "让路",
-        Verdict::Yielded => "后台忙，让路",
-        Verdict::Backseat => "玩游戏时后台忙，移到小核",
-        Verdict::Normal if from == Verdict::Playing => "不再按游戏调度",
-        Verdict::Normal => "恢复",
-    };
-    match state.cause {
-        Some(cause) => format!("{what}（{}）", cause_text(cause)),
-        None => what.to_string(),
-    }
-}
-
-fn cause_text(cause: Cause) -> &'static str {
-    match cause {
-        Cause::Foreground => "在前台",
-        Cause::RecentlyUsed => "刚用过",
-        Cause::SelfElevated => "程序自己设为高优先级",
-        Cause::MarkedLow => "设为低优先级",
-        Cause::Audio => "在发声",
-        Cause::Boosted => "临时全速",
-        Cause::Marked => "设为始终优先或游戏",
-        Cause::NoDemand => "没人需要处理器",
-        Cause::LessDemand => "需求降低",
-        Cause::Exited => "已退出",
-    }
 }

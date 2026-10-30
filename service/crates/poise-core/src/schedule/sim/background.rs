@@ -29,7 +29,8 @@ fn replay_switching_between_busy_programs() {
 
 /// 复盘"后台有个程序在持续干活"：
 /// - 用户没在用电脑（前台闲着）：没人需要处理器，它全速干活，不让路；
-/// - 用户开始干活：它让路一次，之后时忙时闲也一直保持，不来回调整；
+/// - 用户开始干活：它让路一次——只降优先级，用户的程序需要时优先，其余时间空闲的核心照样给它用；
+///   之后时忙时闲也一直保持，不来回调整；
 /// - 用户点回它：立即恢复；用户离开一会儿（持续没有需求）：恢复全速，让后台的工作尽快完成。
 #[test]
 fn replay_background_work_yields_only_when_someone_needs_the_processor() {
@@ -46,10 +47,10 @@ fn replay_background_work_yields_only_when_someone_needs_the_processor() {
     sim.run_for(2 * 60_000);
     assert!(sim.log.is_empty(), "{:?}", sim.log);
 
-    // 用户开始干活：后台的它让路。
-    sim.proc_mut(USER_APP).cpu_pct = 80.0;
+    // 用户开始干活：后台的它让路（只降优先级）。
+    sim.proc_mut(USER_APP).cpu_pct = 50.0;
     sim.run_for(30_000);
-    assert!(sim.is_yielded(UPDATER));
+    assert!(sim.is_lowered(UPDATER));
     // 时忙时闲也不来回调整。
     for _ in 0..10 {
         sim.proc_mut(UPDATER).cpu_pct = 0.0;
@@ -57,30 +58,51 @@ fn replay_background_work_yields_only_when_someone_needs_the_processor() {
         sim.proc_mut(UPDATER).cpu_pct = 60.0;
         sim.run_for(10_000);
     }
-    assert!(sim.is_yielded(UPDATER));
+    assert!(sim.is_lowered(UPDATER));
     assert_eq!(sim.adjustments_per_process(), HashMap::from([(UPDATER, 1)]));
 
     // 用户离开电脑：持续没有需求后，它恢复全速。
     sim.proc_mut(USER_APP).cpu_pct = 0.0;
     sim.run_for(2 * 60_000);
-    assert!(!sim.is_yielded(UPDATER));
+    assert_eq!(sim.state_of(UPDATER), None);
     // 用户回来干活：它再让路。
-    sim.proc_mut(USER_APP).cpu_pct = 80.0;
+    sim.proc_mut(USER_APP).cpu_pct = 50.0;
     sim.run_for(30_000);
-    assert!(sim.is_yielded(UPDATER));
+    assert!(sim.is_lowered(UPDATER));
     // 用户点开它：立即恢复。
     sim.foreground = Some(UPDATER);
     sim.run_for(TICK_MS);
-    assert!(!sim.is_yielded(UPDATER));
+    assert_eq!(sim.state_of(UPDATER), None);
 
     assert!(sim.never_lowered(USER_APP));
     for pid in 10..20 {
         assert!(sim.actions_on(pid).is_empty());
     }
     // 日志里每次让路、恢复各一条，用户的程序和闲着的程序一条都没有。
-    use Verdict::{Normal, Yielded};
-    assert_eq!(sim.verdicts_of(UPDATER), [Yielded, Normal, Yielded, Normal]);
+    use Verdict::{Lowered, Normal};
+    assert_eq!(sim.verdicts_of(UPDATER), [Lowered, Normal, Lowered, Normal]);
     assert!((1..20).all(|pid| sim.verdicts_of(pid).is_empty()));
+}
+
+/// 复盘"后台在渲染、导出，把整机跑满了，用户只是开着别的程序看看"：整机繁忙是它自己造成的，
+/// 没有人需要处理器，它不让路；用户真的动起来（量到的负载被挤得偏低也算），它才让路。
+#[test]
+fn work_saturating_the_machine_alone_is_not_held_back() {
+    const USER_APP: Pid = 1;
+    const RENDER: Pid = 2;
+    let mut sim = Sim::new(vec![
+        app(USER_APP),
+        Proc {
+            cpu_pct: 1900.0,
+            ..app(RENDER)
+        },
+    ]);
+    sim.foreground = Some(USER_APP);
+    sim.run_for(3 * 60_000);
+    assert!(sim.log.is_empty(), "{:?}", sim.log);
+    sim.proc_mut(USER_APP).cpu_pct = 10.0;
+    sim.run_for(30_000);
+    assert!(sim.is_lowered(RENDER));
 }
 
 /// 复盘"后台编译"：编译器不断新建、几秒就退出的子进程，单看哪个进程都不忙，整个程序却很忙。
@@ -91,7 +113,7 @@ fn programs_are_judged_as_whole_process_trees() {
     const BUILD: Pid = 50;
     let mut sim = Sim::new(vec![
         Proc {
-            cpu_pct: 80.0,
+            cpu_pct: 50.0,
             ..app(USER_APP)
         },
         app(BUILD),
@@ -110,14 +132,14 @@ fn programs_are_judged_as_whole_process_trees() {
         }
         sim.run_for(4_000);
     }
-    assert!(sim.is_yielded(BUILD));
+    assert!(sim.is_lowered(BUILD));
     let children: Vec<Pid> = sim
         .procs
         .iter()
         .filter(|p| p.parent == Some(BUILD))
         .map(|p| p.pid)
         .collect();
-    assert!(children.iter().all(|&pid| sim.is_yielded(pid)));
+    assert!(children.iter().all(|&pid| sim.is_lowered(pid)));
 }
 
 /// 用户标记的游戏、始终优先的程序：在后台也不让系统限速（窗口化、没被自动识别的游戏靠标记）；
@@ -141,10 +163,7 @@ fn marked_programs_are_protected_in_the_background() {
     sim.run_for(5 * 60_000);
     assert_eq!(sim.mode(), Mode::Full);
     assert!(sim.is_protected(3) && sim.only_protected(3));
-    assert!(matches!(
-        sim.scheduler.state(&ProcessKey { pid: 2, created: 1 }),
-        ProcessSchedule::Adjusted(d) if d == Desired::GAME
-    ));
+    assert_eq!(sim.state_of(2), Some(Desired::GAME));
     assert!(sim.actions_on(2).contains(&&Action::SetPriority {
         pid: 2,
         class: PriorityClass::AboveNormal
@@ -170,10 +189,7 @@ fn low_priority_programs_stay_on_small_cores() {
     assert!(sim.is_yielded(2));
     sim.foreground = Some(2);
     sim.run_for(TICK_MS);
-    assert!(matches!(
-        sim.scheduler.state(&ProcessKey { pid: 2, created: 1 }),
-        ProcessSchedule::Adjusted(d) if d == Desired::LOW_IN_FOREGROUND
-    ));
+    assert_eq!(sim.state_of(2), Some(Desired::LOW_IN_FOREGROUND));
 }
 
 /// 复盘"用电池时后台在忙"：即使前台闲着，后台忙碌的程序也让路（在小核上节能运行，省电）；
@@ -227,10 +243,7 @@ fn non_hybrid_cpus_never_restrict_cores() {
 #[test]
 fn too_few_small_cores_are_not_used_for_yielding() {
     let cfg = ScheduleConfig {
-        cores: CoreLayout {
-            performance_threads: 8,
-            efficiency_threads: 2,
-        },
+        cores: CoreLayout::new(&[8, 2]),
         ..Default::default()
     };
     let mut sim = Sim::with(
@@ -273,9 +286,9 @@ fn heavy_disk_users_yield_when_someone_needs_the_machine() {
     sim.foreground = Some(USER_APP);
     sim.run_for(2 * 60_000);
     assert!(!sim.is_yielded(SYNC));
-    sim.proc_mut(USER_APP).cpu_pct = 80.0;
+    sim.proc_mut(USER_APP).cpu_pct = 50.0;
     sim.run_for(60_000);
-    assert!(sim.is_yielded(SYNC));
+    assert!(sim.is_lowered(SYNC));
     assert_eq!(
         sim.state_of(SYNC).map(|d| d.resources),
         Some(ResourcePriority::Low)
@@ -295,7 +308,7 @@ fn replay_a_recorder_that_raised_its_own_priority_keeps_it() {
     const GAME: Pid = 70;
     let mut sim = Sim::new(vec![
         Proc {
-            cpu_pct: 80.0,
+            cpu_pct: 50.0,
             ..app(USER_APP)
         },
         Proc {
@@ -314,7 +327,7 @@ fn replay_a_recorder_that_raised_its_own_priority_keeps_it() {
     ]);
     sim.foreground = Some(USER_APP);
     sim.run_for(2 * 60_000);
-    assert!(sim.is_yielded(UPDATER));
+    assert!(sim.is_lowered(UPDATER));
     assert!(
         sim.actions_on(RECORDER).is_empty(),
         "{:?}",

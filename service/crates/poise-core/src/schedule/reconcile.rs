@@ -8,7 +8,8 @@ use std::collections::{HashMap, HashSet};
 use crate::action::{Action, ExecError, ExecOutcome};
 use crate::model::{Millis, PriorityClass, ProcessKey};
 
-use super::policy::Desired;
+use super::desired::Desired;
+use super::leftovers::Adjusted;
 
 /// 程序连续几次自行改回优先级后放弃调整它。
 const MAX_FIGHTS: u8 = 3;
@@ -277,6 +278,20 @@ impl Reconciler {
         self.fights.retain(|k, _| alive.contains(k));
         self.self_managed.retain(|k| alive.contains(k));
         self.restored_low.retain(|k, _| alive.contains(k));
+    }
+
+    /// 所有已调整的进程（按进程号排序，便于比较有没有变化）。
+    pub fn adjusted(&self) -> Vec<Adjusted> {
+        let mut out: Vec<Adjusted> = self
+            .applied
+            .iter()
+            .map(|(key, a)| Adjusted {
+                key: *key,
+                original_priority: a.original_priority,
+            })
+            .collect();
+        out.sort_by_key(|a| (a.key.pid, a.key.created));
+        out
     }
 
     /// 恢复所有已调整的进程（服务停止时调用）。

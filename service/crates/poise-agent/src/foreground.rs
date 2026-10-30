@@ -16,7 +16,7 @@ pub struct LastForeground {
 impl LastForeground {
     /// 前台窗口变化时调用。
     pub fn observe(&mut self) {
-        let Some(pid) = desktop::pid_of(desktop::foreground_window()) else {
+        let Some(pid) = desktop::app_pid(desktop::foreground_window()) else {
             return;
         };
         if pid == std::process::id() || Some(pid) == desktop::shell_pid() {

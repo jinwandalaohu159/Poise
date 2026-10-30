@@ -12,8 +12,8 @@ use windows::Win32::UI::Shell::{
     QUNS_BUSY, QUNS_PRESENTATION_MODE, QUNS_RUNNING_D3D_FULL_SCREEN, SHQueryUserNotificationState,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    EnumWindows, GWL_STYLE, GetClassNameW, GetForegroundWindow, GetShellWindow, GetWindowLongPtrW,
-    GetWindowRect, GetWindowThreadProcessId, IsWindowVisible, WS_CAPTION,
+    EnumChildWindows, EnumWindows, GWL_STYLE, GetClassNameW, GetForegroundWindow, GetShellWindow,
+    GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId, IsWindowVisible, WS_CAPTION,
 };
 use windows::core::BOOL;
 
@@ -25,6 +25,42 @@ pub fn pid_of(hwnd: HWND) -> Option<Pid> {
     // SAFETY: 输出到本地变量。
     unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid)) };
     (pid != 0).then_some(pid)
+}
+
+/// 窗口真正属于哪个程序。商店（UWP）程序的窗口由 ApplicationFrameHost 托管：顶层窗口属于托管进程，
+/// 程序自己的窗口是它的子窗口。按托管进程算的话，用户正在用的程序既不算前台、也不算有窗口，
+/// 会被当成后台程序让路，所以换成子窗口所属的程序。
+pub fn app_pid(hwnd: HWND) -> Option<Pid> {
+    hosted_pid(hwnd).or_else(|| pid_of(hwnd))
+}
+
+/// 托管窗口（类名 ApplicationFrameWindow）里，属于别的进程的子窗口所属的进程；不是托管窗口、
+/// 或程序已挂起（最小化后子窗口会被移走）时为 None。
+fn hosted_pid(frame: HWND) -> Option<Pid> {
+    unsafe extern "system" fn find(child: HWND, lparam: LPARAM) -> BOOL {
+        // SAFETY: lparam 是下面传入的 (托管进程, 结果) 指针，枚举期间有效。
+        let (host, found) = unsafe { &mut *(lparam.0 as *mut (Pid, Option<Pid>)) };
+        match pid_of(child) {
+            Some(pid) if pid != *host => {
+                *found = Some(pid);
+                false.into()
+            }
+            _ => true.into(),
+        }
+    }
+    if class_name(frame) != "ApplicationFrameWindow" {
+        return None;
+    }
+    let mut state = (pid_of(frame)?, None);
+    // SAFETY: 回调只在 EnumChildWindows 返回前被调用。
+    let _ = unsafe {
+        EnumChildWindows(
+            Some(frame),
+            Some(find),
+            LPARAM(&mut state as *mut _ as isize),
+        )
+    };
+    state.1
 }
 
 pub fn foreground_window() -> HWND {
@@ -44,10 +80,10 @@ pub fn visible_window_pids() -> Vec<Pid> {
         // SAFETY: lparam 是下面传入的 HashSet 指针，枚举期间有效。
         let pids = unsafe { &mut *(lparam.0 as *mut HashSet<Pid>) };
         // SAFETY: 系统传入的窗口句柄。
-        if unsafe { IsWindowVisible(hwnd) }.as_bool()
-            && let Some(pid) = pid_of(hwnd)
-        {
-            pids.insert(pid);
+        if unsafe { IsWindowVisible(hwnd) }.as_bool() {
+            // 托管窗口：托管进程和程序自己都算有窗口。
+            pids.extend(pid_of(hwnd));
+            pids.extend(hosted_pid(hwnd));
         }
         true.into()
     }
@@ -98,11 +134,17 @@ fn has_caption(hwnd: HWND) -> bool {
 }
 
 fn is_desktop(hwnd: HWND) -> bool {
+    matches!(
+        class_name(hwnd).as_str(),
+        "Progman" | "WorkerW" | "Shell_TrayWnd"
+    )
+}
+
+fn class_name(hwnd: HWND) -> String {
     let mut name = [0u16; 64];
     // SAFETY: 缓冲区长度与传入一致。
     let len = unsafe { GetClassNameW(hwnd, &mut name) }.max(0) as usize;
-    let class = String::from_utf16_lossy(&name[..len]);
-    matches!(class.as_str(), "Progman" | "WorkerW" | "Shell_TrayWnd")
+    String::from_utf16_lossy(&name[..len])
 }
 
 /// 距离最后一次键盘或鼠标输入的毫秒数。
@@ -119,4 +161,34 @@ pub fn idle_ms() -> u64 {
     // SAFETY: 无参数。
     let now = unsafe { windows::Win32::System::SystemInformation::GetTickCount() };
     u64::from(now.wrapping_sub(info.dwTime))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 开着的商店程序（如果有）：按程序自己的进程算，而不是托管进程。
+    #[test]
+    fn hosted_store_apps_resolve_to_their_own_process() {
+        unsafe extern "system" fn collect(hwnd: HWND, lparam: LPARAM) -> BOOL {
+            // SAFETY: lparam 是下面传入的 Vec 指针，枚举期间有效。
+            let frames = unsafe { &mut *(lparam.0 as *mut Vec<HWND>) };
+            if class_name(hwnd) == "ApplicationFrameWindow" {
+                frames.push(hwnd);
+            }
+            true.into()
+        }
+        let mut frames: Vec<HWND> = Vec::new();
+        // SAFETY: 回调只在 EnumWindows 返回前被调用。
+        let _ = unsafe { EnumWindows(Some(collect), LPARAM(&mut frames as *mut _ as isize)) };
+        for frame in frames {
+            if let Some(app) = hosted_pid(frame) {
+                assert_ne!(Some(app), pid_of(frame));
+                assert_eq!(app_pid(frame), Some(app));
+            }
+        }
+        // 普通窗口按自己的进程算。
+        let shell = unsafe { GetShellWindow() };
+        assert_eq!(app_pid(shell), pid_of(shell));
+    }
 }

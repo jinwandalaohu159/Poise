@@ -107,13 +107,13 @@ fn set_eco_qos(pid: Pid, state: EcoQos) -> Result<ExecOutcome, ExecError> {
 
 impl WinExecutor {
     fn set_cores(&self, pid: Pid, set: CoreSet) -> Result<ExecOutcome, ExecError> {
-        if !self.topology.is_hybrid() {
+        if !self.topology.partitioned() {
             return Ok(ExecOutcome::default());
         }
         let ids = self.topology.ids_for(set);
         let h = open_process(pid, PROCESS_SET_LIMITED_INFORMATION)?;
         // SAFETY: ids 为 None 时清除默认 CPU Set（即不限制）。
-        let ok = unsafe { SetProcessDefaultCpuSets(h.raw(), ids) };
+        let ok = unsafe { SetProcessDefaultCpuSets(h.raw(), ids.as_deref()) };
         if ok.as_bool() {
             Ok(ExecOutcome::default())
         } else {

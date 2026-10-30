@@ -5,6 +5,7 @@ mod audio;
 mod boosts;
 mod busy;
 mod demand;
+mod focus;
 mod foreground;
 mod games;
 mod load;
@@ -13,9 +14,10 @@ pub use audio::AudioTracker;
 pub use boosts::TempBoosts;
 pub use busy::{BusyRule, BusyTracker, Demand};
 pub use demand::{DemandRule, DemandSignals, DemandTracker, Pressure};
+pub use focus::{FocusRule, FocusTracker, Footprint};
 pub use foreground::{ForegroundHold, ForegroundTracker};
-pub use games::{GameCores, GameTracker};
-pub use load::TreeLoad;
+pub use games::GameTracker;
+pub use load::{LoadSmoothing, TreeLoad};
 
 /// 测试用：进程 10 和 20 各是一个程序，`fg_root` 在前台。
 #[cfg(test)]

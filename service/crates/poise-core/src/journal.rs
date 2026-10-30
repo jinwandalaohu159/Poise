@@ -107,15 +107,24 @@ impl Journal {
         if !self.owns(owner) {
             return Err(JournalError::NotFound);
         }
+        self.revert_where(store, owner, |_| true)
+    }
+
+    /// 还原某个来源在部分位置上的修改（`drop` 选中的），其余保留。规则同 [`Journal::revert`]。
+    pub fn revert_where(
+        &mut self,
+        store: &dyn SettingStore,
+        owner: &str,
+        drop: impl Fn(&Target) -> bool,
+    ) -> Result<(), JournalError> {
         let mut first_error = None;
         for i in (0..self.entries.len()).rev() {
-            if self.entries[i].owner != owner {
+            let e = &self.entries[i];
+            if e.owner != owner || !drop(&e.target) {
                 continue;
             }
             match self.layer_above(i) {
-                Some(above) => {
-                    self.entries[above].original = self.entries[i].original.clone();
-                }
+                Some(above) => self.entries[above].original = self.entries[i].original.clone(),
                 None => {
                     if let Err(err) = restore(store, &self.entries[i]) {
                         first_error.get_or_insert(err);
@@ -126,6 +135,28 @@ impl Journal {
             self.entries.remove(i);
         }
         first_error.map_or(Ok(()), |e| Err(JournalError::Revert(e)))
+    }
+
+    /// 这个来源在这个位置上已经写入了 `value`，并且此刻生效的正是它（处在最上层、没被别处改掉）：
+    /// 再写一遍没有意义。
+    pub fn holds(
+        &self,
+        store: &dyn SettingStore,
+        owner: &str,
+        target: &Target,
+        value: &Value,
+    ) -> bool {
+        let Ok(target) = store.resolve(target) else {
+            return false;
+        };
+        self.entries
+            .iter()
+            .position(|e| e.owner == owner && e.target.same_place(&target))
+            .is_some_and(|i| {
+                self.entries[i].applied == *value
+                    && self.layer_above(i).is_none()
+                    && store.read(&target).is_ok_and(|v| v.as_ref() == Some(value))
+            })
     }
 
     /// 还原全部修改，返回失败的来源。按修改的相反顺序进行（同一位置的几层逐层撤销）。
@@ -159,6 +190,18 @@ impl Journal {
                 _ => None,
             })
             .collect()
+    }
+
+    /// `owner` 在这个位置的修改被别的来源叠在上面（例如优化项打底、当前模式叠在上面）：
+    /// 此刻生效的是上层的值，它自己的值等上层撤销后回来。没有这条修改、读不到位置时为否。
+    pub fn covered(&self, store: &dyn SettingStore, owner: &str, target: &Target) -> bool {
+        let Ok(target) = store.resolve(target) else {
+            return false;
+        };
+        self.entries
+            .iter()
+            .position(|e| e.owner == owner && e.target.same_place(&target))
+            .is_some_and(|i| self.layer_above(i).is_some())
     }
 
     /// 旧版本记下的位置可能是相对的（例如"当前电源计划"），换成具体的位置。返回是否有变化。
@@ -346,6 +389,41 @@ pub(crate) mod tests {
         let owners: Vec<_> = drifted.iter().map(|(e, _)| e.owner.as_str()).collect();
         assert_eq!(owners, ["mode", "opt"]);
         assert_eq!(drifted[0].1, Some(Value::Dword(100)));
+    }
+
+    #[test]
+    fn a_layer_under_another_owner_is_covered() {
+        let store = MemStore::default();
+        let mut j = Journal::default();
+        j.apply(&store, "item", &reg("a"), &Value::Dword(1), 0)
+            .unwrap();
+        assert!(!j.covered(&store, "item", &reg("a")));
+        j.apply(&store, "mode", &reg("a"), &Value::Dword(0), 1)
+            .unwrap();
+        assert!(j.covered(&store, "item", &reg("a")));
+        assert!(!j.covered(&store, "mode", &reg("a")));
+        assert!(!j.covered(&store, "other", &reg("a")));
+        j.revert(&store, "mode").unwrap();
+        assert!(!j.covered(&store, "item", &reg("a")));
+    }
+
+    #[test]
+    fn partial_reverts_keep_the_rest_and_held_values_are_recognized() {
+        let store = MemStore::default();
+        let mut j = Journal::default();
+        j.apply(&store, "mode", &reg("a"), &Value::Dword(1), 0)
+            .unwrap();
+        j.apply(&store, "mode", &reg("b"), &Value::Dword(2), 0)
+            .unwrap();
+        assert!(j.holds(&store, "mode", &reg("a"), &Value::Dword(1)));
+        assert!(!j.holds(&store, "mode", &reg("a"), &Value::Dword(3)));
+        j.revert_where(&store, "mode", |t| t.same_place(&reg("a")))
+            .unwrap();
+        assert_eq!(store.read(&reg("a")).unwrap(), None);
+        assert!(j.holds(&store, "mode", &reg("b"), &Value::Dword(2)));
+        // 被别处改掉了：不算。
+        store.write(&reg("b"), &Value::Dword(9)).unwrap();
+        assert!(!j.holds(&store, "mode", &reg("b"), &Value::Dword(2)));
     }
 
     #[test]

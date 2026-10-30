@@ -77,8 +77,12 @@ impl Changes {
         if self.dry_run {
             return Err(ChangeError::DryRun);
         }
+        let before = self.journal.clone();
         let result = f(&self.store, &mut self.journal);
-        self.file.save(self.journal.entries());
+        // 没有变化时不重写文件（模式没变、电源设置都还在时很常见）。
+        if self.journal != before {
+            self.file.save(self.journal.entries());
+        }
         Ok(result?)
     }
 
