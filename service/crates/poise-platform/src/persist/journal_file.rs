@@ -77,11 +77,11 @@ mod tests {
         assert_eq!(journal.load(), Ok(Vec::new()));
         let known = JournalEntry {
             owner: "a".into(),
-            target: poise_core::setting::Target::Registry {
-                hive: poise_core::setting::Hive::LocalMachine,
-                key: "K".into(),
-                name: "N".into(),
-            },
+            target: poise_core::setting::Target::registry(
+                poise_core::setting::Hive::LocalMachine,
+                "K",
+                "N",
+            ),
             original: None,
             applied: poise_core::setting::Value::Dword(1),
             at: 0,

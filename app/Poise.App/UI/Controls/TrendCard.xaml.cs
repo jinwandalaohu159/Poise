@@ -10,27 +10,54 @@ namespace Poise.App.UI.Controls;
 /// <summary>
 /// "最近 5 分钟"走势卡：图例、走势图、当前的性能核 / 能效核负载。主页与卡顿诊断用的是同一个控件，
 /// 数据都来自 <see cref="TrendFeed"/>：显示时登记，隐藏时注销，切换页面时新卡片直接接着画。
+/// 登记和注销成对、各只做一次（Loaded 可能连着来两次）；窗口关掉时 Unloaded 不一定来，
+/// 下一次收到数据时发现自己已经不在界面上，就自己注销。
 /// </summary>
 public sealed partial class TrendCard : UserControl
 {
     private readonly TrendFeed _feed = AppHost.Current.Trend;
+    private bool _attached;
 
     public TrendCard()
     {
         InitializeComponent();
         Chart.StartText = Loc.Get("trend.axis.start");
         Chart.EndText = Loc.Get("trend.axis.now");
-        Loaded += (_, _) =>
+        Loaded += (_, _) => Attach();
+        Unloaded += (_, _) => Detach();
+    }
+
+    private void Attach()
+    {
+        if (_attached)
         {
-            _feed.Updated += Render;
-            Render();
-            _feed.Attach();
-        };
-        Unloaded += (_, _) =>
+            return;
+        }
+        _attached = true;
+        _feed.Updated += OnUpdated;
+        Render();
+        _feed.Attach(this);
+    }
+
+    private void Detach()
+    {
+        if (!_attached)
         {
-            _feed.Updated -= Render;
-            _feed.Detach();
-        };
+            return;
+        }
+        _attached = false;
+        _feed.Updated -= OnUpdated;
+        _feed.Detach(this);
+    }
+
+    private void OnUpdated()
+    {
+        if (!IsLoaded || XamlRoot is null)
+        {
+            Detach();
+            return;
+        }
+        Render();
     }
 
     /// <summary>走势图的高度（主页较矮）。</summary>

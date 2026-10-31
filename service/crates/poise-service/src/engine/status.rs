@@ -36,6 +36,7 @@ impl Engine {
             adjusted_processes: self.scheduler.adjusted_count(),
             deferred_cleanup: self.deferred_count(),
             dry_run: self.cfg.dry_run,
+            paused: self.paused,
             last_cleanup: self.last_cleanup(),
         }
     }

@@ -22,6 +22,8 @@ pub struct SessionTracker {
     ui_visible_until: Option<Millis>,
     /// 显示着的界面在哪个会话里（快速切换用户后，另一个用户的界面开着不算有人在看）。
     ui_session: Option<u32>,
+    /// 熄屏、待机期间按住上报（见 [`SessionTracker::hold`]）。
+    held: bool,
 }
 
 impl SessionTracker {
@@ -36,6 +38,7 @@ impl SessionTracker {
             reporter: None,
             ui_visible_until: None,
             ui_session: None,
+            held: false,
         }
     }
 
@@ -65,6 +68,7 @@ impl SessionTracker {
             return false;
         }
         self.reported_at = None;
+        self.held = false;
         true
     }
 
@@ -77,9 +81,25 @@ impl SessionTracker {
         }
     }
 
+    /// 熄屏、进入待机（见 `standby`）：托盘代理随后可能被系统冻结，报不上来不等于退出了。它连着、那一刻
+    /// 上报还新鲜的话，按住上报不让它过期，直到 [`SessionTracker::release`]；它真的退出了（连接断开、
+    /// 进程结束）照样立即过期。
+    pub fn hold(&mut self, now: Millis) {
+        self.held = self.reporter.is_some() && self.is_fresh(now);
+    }
+
+    /// 亮屏、醒来：放开按住的上报，当作刚收到（托盘代理要过一会儿才再上报）。
+    pub fn release(&mut self, now: Millis) {
+        if std::mem::take(&mut self.held) {
+            self.reported_at = Some(now);
+        }
+    }
+
     pub fn is_fresh(&self, now: Millis) -> bool {
-        self.reported_at
-            .is_some_and(|t| now.saturating_sub(t) <= FRESH_FOR_MS)
+        self.held
+            || self
+                .reported_at
+                .is_some_and(|t| now.saturating_sub(t) <= FRESH_FOR_MS)
     }
 
     /// 当前会话状态（不复制，每轮要取好几次）。过期时只保留会话 ID，其余信息视为未知。
@@ -164,6 +184,28 @@ mod tests {
         stale.report(SessionState::default(), 7, 0);
         stale.resumed(60_000, 3_600_000);
         assert!(!stale.is_fresh(3_600_000));
+    }
+
+    #[test]
+    fn a_frozen_reporter_stays_fresh_until_the_screen_comes_back() {
+        let mut t = SessionTracker::default();
+        t.report(SessionState::default(), 7, 0);
+        t.hold(5_000);
+        // 待机一小时，托盘代理一直没报。
+        assert!(t.is_fresh(3_600_000));
+        t.release(3_600_000);
+        assert!(t.is_fresh(3_600_000 + FRESH_FOR_MS));
+        assert!(!t.is_fresh(3_600_000 + FRESH_FOR_MS + 1));
+        // 熄屏时已经过期的不按住；按住期间托盘代理退出了，立即过期。
+        let mut stale = SessionTracker::default();
+        stale.report(SessionState::default(), 7, 0);
+        stale.hold(FRESH_FOR_MS + 1);
+        assert!(!stale.is_fresh(FRESH_FOR_MS + 1));
+        let mut gone = SessionTracker::default();
+        gone.report(SessionState::default(), 7, 0);
+        gone.hold(1_000);
+        assert!(gone.forget_reporter(7, true));
+        assert!(!gone.is_fresh(2_000));
     }
 
     #[test]

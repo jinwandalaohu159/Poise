@@ -3,7 +3,7 @@
 use std::path::Path;
 
 use poise_core::prefs::AppPreference;
-use poise_core::setting::{Hive, Target, Value};
+use poise_core::setting::{Hive, SettingStore, Target, Value};
 use poise_protocol::{ErrorCode, Event};
 
 use super::Engine;
@@ -106,14 +106,18 @@ impl Engine {
         } else {
             Vec::new()
         };
-        let stale = self
-            .changes
-            .journal()
-            .entries()
+        // 只看当前用户的：别的用户的游戏设置是他的事（他登录时按偏好同步）。
+        let resolved: Vec<Target> = wanted
             .iter()
-            .any(|e| e.owner == owner && !wanted.iter().any(|(t, _)| t.same_place(&e.target)));
+            .filter_map(|(t, _)| self.changes.store.resolve(t).ok())
+            .collect();
+        let stale = self.changes.journal().entries().iter().any(|e| {
+            e.owner == owner
+                && self.changes.here(e)
+                && !resolved.iter().any(|t| t.same_place(&e.target))
+        });
         if stale {
-            self.changes.revert(&owner)?;
+            self.changes.revert_here(&owner)?;
         }
         let now = self.now();
         let mut first_error = None;
@@ -130,11 +134,7 @@ impl Engine {
 /// 游戏需要的系统设置：使用独立显卡。不设系统级的优先级预设——提高游戏优先级会和声音、输入抢资源。
 fn game_settings(path: &str) -> Vec<(Target, Value)> {
     vec![(
-        Target::Registry {
-            hive: Hive::CurrentUser,
-            key: GPU_PREFS_KEY.into(),
-            name: path.to_string(),
-        },
+        Target::registry(Hive::CurrentUser, GPU_PREFS_KEY, path.to_string()),
         Value::String("GpuPreference=2;".into()),
     )]
 }

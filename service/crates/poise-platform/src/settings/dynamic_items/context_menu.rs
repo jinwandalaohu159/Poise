@@ -100,11 +100,11 @@ pub fn context_menu_items(user: Option<&UserContext>) -> Vec<OptimizationItem> {
                 group: Group::ContextMenu,
                 title: Text::Plain(title),
                 description,
-                targets: vec![Target::Registry {
-                    hive: Hive::LocalMachine,
-                    key: BLOCKED_KEY.into(),
-                    name: clsid.to_uppercase(),
-                }],
+                targets: vec![Target::registry(
+                    Hive::LocalMachine,
+                    BLOCKED_KEY,
+                    clsid.to_uppercase(),
+                )],
                 optimized: Value::String(String::new()),
                 matcher: Matcher::Present,
                 in_one_click: false,

@@ -56,6 +56,34 @@ impl Journal {
         self.entries.iter().any(|e| e.owner == owner)
     }
 
+    /// 位置此刻归这里管：不按用户的位置，或者就是当前用户的。另一个用户（快速切换用户、另一个账户）的修改
+    /// 是那个用户的事：这里不显示成已改过，也不替他还原。
+    pub fn here(store: &dyn SettingStore, target: &Target) -> bool {
+        target.user().is_none()
+            || store
+                .resolve(&target.clone().any_user())
+                .is_ok_and(|t| t.same_place(target))
+    }
+
+    /// 这个来源在此刻归这里管的位置上有修改（见 [`Journal::here`]）。
+    pub fn owns_here(&self, store: &dyn SettingStore, owner: &str) -> bool {
+        self.entries
+            .iter()
+            .any(|e| e.owner == owner && Self::here(store, &e.target))
+    }
+
+    /// 还原某个来源在此刻归这里管的位置上的修改（见 [`Journal::here`]），别的用户的留着。
+    pub fn revert_here(
+        &mut self,
+        store: &dyn SettingStore,
+        owner: &str,
+    ) -> Result<(), JournalError> {
+        if !self.owns_here(store, owner) {
+            return Err(JournalError::NotFound);
+        }
+        self.revert_where(store, owner, |t| Self::here(store, t))
+    }
+
     /// 修改一个设置。
     ///
     /// 同一个位置可以有几层修改（例如系统优化项打底，硬件模式临时叠在上面），按修改的先后排列：
@@ -215,7 +243,20 @@ impl Journal {
             .is_some_and(|i| self.layer_above(i).is_some())
     }
 
-    /// 旧版本记下的位置可能是相对的（例如"当前电源计划"），换成具体的位置。返回是否有变化。
+    /// 把一个位置上的条目改回 `before` 里的样子（这次修改没能写下去时：日志要和设置一致）。
+    pub fn restore_place(&mut self, before: &Journal, place: &Target) {
+        self.entries.retain(|e| !e.target.same_place(place));
+        self.entries.extend(
+            before
+                .entries
+                .iter()
+                .filter(|e| e.target.same_place(place))
+                .cloned(),
+        );
+    }
+
+    /// 旧版本记下的位置可能是相对的（"当前电源计划"、没写明的当前用户），换成具体的位置。返回是否有变化。
+    /// 当前用户还不知道时（服务开机就启动、还没人登录）按用户的位置留着不写明，知道后再调用一次。
     pub fn resolve_places(&mut self, store: &dyn SettingStore) -> bool {
         let mut changed = false;
         for e in &mut self.entries {
@@ -266,11 +307,7 @@ pub(crate) mod tests {
     }
 
     pub fn reg(name: &str) -> Target {
-        Target::Registry {
-            hive: Hive::CurrentUser,
-            key: r"Software\Test".into(),
-            name: name.into(),
-        }
+        Target::registry(Hive::CurrentUser, r"Software\Test", name)
     }
 
     #[test]
@@ -368,16 +405,8 @@ pub(crate) mod tests {
     fn places_that_differ_only_in_case_are_one_place() {
         let store = MemStore::default();
         let mut j = Journal::default();
-        let upper = Target::Registry {
-            hive: Hive::CurrentUser,
-            key: r"Software\Test".into(),
-            name: r"D:\Games\Game.exe".into(),
-        };
-        let lower = Target::Registry {
-            hive: Hive::CurrentUser,
-            key: r"software\test".into(),
-            name: r"d:\games\game.exe".into(),
-        };
+        let upper = Target::registry(Hive::CurrentUser, r"Software\Test", r"D:\Games\Game.exe");
+        let lower = Target::registry(Hive::CurrentUser, r"software\test", r"d:\games\game.exe");
         j.apply(&store, "g", &upper, &Value::Dword(1), 1).unwrap();
         j.apply(&store, "g", &lower, &Value::Dword(2), 2).unwrap();
         assert_eq!(j.entries().len(), 1);
@@ -465,5 +494,51 @@ pub(crate) mod tests {
         let store = MemStore::default();
         let mut j = Journal::default();
         assert_eq!(j.revert(&store, "nope"), Err(JournalError::NotFound));
+    }
+
+    /// 当前用户可以换的存储：按用户的位置解析成当前用户。
+    #[derive(Default)]
+    struct UserStore {
+        mem: MemStore,
+        current: RefCell<String>,
+    }
+
+    impl SettingStore for UserStore {
+        fn read(&self, t: &Target) -> Result<Option<Value>, StoreError> {
+            self.mem.read(t)
+        }
+        fn write(&self, t: &Target, v: &Value) -> Result<(), StoreError> {
+            self.mem.write(t, v)
+        }
+        fn delete(&self, t: &Target) -> Result<(), StoreError> {
+            self.mem.delete(t)
+        }
+        fn resolve(&self, t: &Target) -> Result<Target, StoreError> {
+            Ok(if t.user().is_none() {
+                t.clone().for_user(&self.current.borrow())
+            } else {
+                t.clone()
+            })
+        }
+    }
+
+    #[test]
+    fn each_user_keeps_their_own_originals() {
+        let store = UserStore::default();
+        *store.current.borrow_mut() = "A".into();
+        let mut j = Journal::default();
+        j.apply(&store, "item", &reg("a"), &Value::Dword(1), 1)
+            .unwrap();
+        assert!(j.owns_here(&store, "item"));
+        // 换成另一个用户：A 的修改不算这里的，也不替他还原；B 自己应用一次，原值各记各的。
+        *store.current.borrow_mut() = "B".into();
+        assert!(!j.owns_here(&store, "item"));
+        assert_eq!(j.revert_here(&store, "item"), Err(JournalError::NotFound));
+        j.apply(&store, "item", &reg("a"), &Value::Dword(1), 2)
+            .unwrap();
+        assert_eq!(j.entries().len(), 2);
+        j.revert_here(&store, "item").unwrap();
+        assert_eq!(j.entries().len(), 1);
+        assert_eq!(j.entries()[0].target.user(), Some("A"));
     }
 }

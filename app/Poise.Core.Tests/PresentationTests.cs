@@ -80,9 +80,19 @@ public sealed class PresentationTests
     public void Observe_only_mode_is_a_plain_notice_and_otherwise_there_is_none()
     {
         // 样本里是观察模式。
-        var observe = HomeViewBuilder.Build(WithHealth(Full, HealthCode.Tired), Now).Notice!;
+        var running = Full with { Paused = false };
+        var observe = HomeViewBuilder.Build(WithHealth(running, HealthCode.Tired), Now).Notice!;
         Assert.Equal((Level.Good, false), (observe.Level, observe.CanSnooze));
-        Assert.Null(HomeViewBuilder.Build(WithHealth(Full with { DryRun = false }, HealthCode.Tired), Now).Notice);
+        Assert.Null(HomeViewBuilder.Build(WithHealth(running with { DryRun = false }, HealthCode.Tired), Now).Notice);
+    }
+
+    [Fact]
+    public void Paused_is_a_warning_after_restart()
+    {
+        // 样本里暂停着：比观察模式要紧，比建议重启次要。
+        var paused = HomeViewBuilder.Build(WithHealth(Full, HealthCode.Tired), Now).Notice!;
+        Assert.Equal(("已暂停", Level.Notice, false), (paused.Title, paused.Level, paused.CanSnooze));
+        Assert.True(HomeViewBuilder.Build(WithHealth(Full, HealthCode.RestartRecommended), Now).Notice!.CanSnooze);
     }
 
     [Fact]

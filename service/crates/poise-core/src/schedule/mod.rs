@@ -221,7 +221,7 @@ impl Scheduler {
         let snap = input.snapshot;
         let now = snap.at;
         self.foreground
-            .update(now, input.classes, self.cfg.foreground_hold);
+            .update(snap, now, input.classes, self.cfg.foreground_hold);
         self.games.update(
             snap,
             input.classes,

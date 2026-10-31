@@ -76,6 +76,7 @@
   "adjusted_processes": 7,
   "deferred_cleanup": 1,
   "dry_run": true,
+  "paused": true,
   "last_cleanup": {
     "at_unix_ms": 1800000000000,
     "trigger": "deferred",

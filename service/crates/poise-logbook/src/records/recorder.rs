@@ -19,6 +19,11 @@ const MIN_SESSION_MS: Millis = 30_000;
 const MAX_STEP_MS: Millis = 10_000;
 /// 两轮之间隔了这么久：电脑睡眠过，之前的一段结束。
 const GAP_SPLITS_MS: u64 = 60_000;
+/// 一段可能持续好几天（游戏一直开着、渲染机一直在算）：期间列着的重点程序超过这么多时，只留作为重点程序
+/// 最久的 [`KEEP_WHILE_OPEN`] 个；让路的程序最多数这么多个（再多也只记这么多）。
+const COMPACT_AT: usize = 64;
+const KEEP_WHILE_OPEN: usize = 16;
+const MAX_YIELDED: usize = 4096;
 
 #[derive(Debug, Default)]
 pub(crate) struct SessionRecorder {
@@ -108,8 +113,25 @@ impl Open {
             r.ended_unix_ms = round.unix_ms;
         }
         for f in &round.focus {
-            let i = match self.keys.iter().position(|(k, _)| *k == f.key) {
-                Some(i) => i,
+            // 同一个程序重新启动（之前的进程已经不在这一轮里）算同一个；同时开着的两个各算各的。
+            let keys = &self.keys;
+            let restarted = |i: usize| {
+                let p = &r.programs[i];
+                let same = match &f.path {
+                    Some(path) => p.path.as_ref() == Some(path),
+                    None => p.path.is_none() && p.name == f.name,
+                };
+                same && !round.focus.iter().any(|g| g.key == keys[i].0)
+            };
+            let found = keys
+                .iter()
+                .position(|(k, _)| *k == f.key)
+                .or_else(|| (0..keys.len()).find(|&i| restarted(i)));
+            let i = match found {
+                Some(i) => {
+                    self.keys[i].0 = f.key;
+                    i
+                }
                 None => {
                     self.keys.push((f.key, 0));
                     r.programs.push(RecordProgram {
@@ -133,7 +155,12 @@ impl Open {
             }
         }
         r.moved_aside_peak = r.moved_aside_peak.max(round.moved_aside);
-        self.yielded.extend(round.yielded.iter().copied());
+        for key in &round.yielded {
+            if self.yielded.len() >= MAX_YIELDED {
+                break;
+            }
+            self.yielded.insert(*key);
+        }
         if !r.modes.contains(&round.mode) {
             r.modes.push(round.mode);
         }
@@ -148,6 +175,25 @@ impl Open {
         if round.throttled {
             self.throttled_ms += step;
         }
+        if self.keys.len() > COMPACT_AT {
+            self.compact();
+        }
+    }
+
+    /// 只留作为重点程序最久的几个（见 [`COMPACT_AT`]）。
+    fn compact(&mut self) {
+        let mut order: Vec<usize> = (0..self.keys.len()).collect();
+        order.sort_by_key(|&i| std::cmp::Reverse(self.keys[i].1));
+        order.truncate(KEEP_WHILE_OPEN);
+        order.sort_unstable();
+        self.keys = order.iter().map(|&i| self.keys[i]).collect();
+        let programs = std::mem::take(&mut self.record.programs);
+        self.record.programs = programs
+            .into_iter()
+            .enumerate()
+            .filter(|(i, _)| order.binary_search(i).is_ok())
+            .map(|(_, p)| p)
+            .collect();
     }
 
     fn close(mut self) -> SessionRecord {
@@ -287,5 +333,35 @@ mod tests {
         assert_eq!(record.programs[0].widest_domains, 0b001);
         assert!(!record.programs[0].game);
         assert_eq!(record.throttled_secs, 0);
+    }
+
+    #[test]
+    fn a_restarted_program_is_one_program_and_a_long_session_stays_small() {
+        let mut r = SessionRecorder::default();
+        let mut game = focus(true, 100, 1);
+        r.observe(&round(0, true, vec![game.clone()], 60.0));
+        // 游戏重新启动：进程变了，还是同一个程序。
+        game.key = ProcessKey { pid: 8, created: 2 };
+        r.observe(&round(10, true, vec![game.clone()], 60.0));
+        // 好几天里很多不同的程序轮流当重点程序。
+        for i in 0..100u32 {
+            let mut other = focus(false, 50, 1);
+            other.key = ProcessKey {
+                pid: 100 + i,
+                created: 1,
+            };
+            other.name = format!("程序 {i}");
+            r.observe(&round(
+                20 + u64::from(i),
+                true,
+                vec![other, game.clone()],
+                60.0,
+            ));
+        }
+        let open = r.open.as_ref().unwrap();
+        assert!(open.keys.len() <= COMPACT_AT);
+        assert_eq!(open.keys.len(), open.record.programs.len());
+        let games = open.record.programs.iter().filter(|p| p.name == "英雄联盟");
+        assert_eq!(games.count(), 1);
     }
 }

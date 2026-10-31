@@ -27,6 +27,11 @@ impl Clients {
         true
     }
 
+    /// 连着的界面和托盘。
+    pub fn pids(&self) -> impl Iterator<Item = Pid> + '_ {
+        self.0.keys().copied()
+    }
+
     /// Poise 自己的进程：服务本身与连着的界面、托盘。
     pub fn own_pids(&self) -> Vec<Pid> {
         std::iter::once(std::process::id())

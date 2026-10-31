@@ -123,6 +123,9 @@ pub struct Status {
     pub deferred_cleanup: usize,
     /// 观察模式：只判断、不执行。
     pub dry_run: bool,
+    /// 暂停着：托盘代理没在上报（没运行、连不上服务），调整已撤销、不调度。
+    #[serde(default)]
+    pub paused: bool,
     /// 最近一次真正做了事的清理（手动、自动或游戏结束后补做）。
     pub last_cleanup: Option<LastCleanup>,
 }

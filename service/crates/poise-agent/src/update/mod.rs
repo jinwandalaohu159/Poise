@@ -2,7 +2,7 @@
 //! 只读取版本号；用户在界面里确认后，由更新助手（poise-updater）下载、安装并启动新版本。
 
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 
 /// 启动后多久第一次检查（避开登录时最忙的一段）。
 const FIRST_CHECK: Duration = Duration::from_secs(2 * 60);
@@ -78,13 +78,16 @@ fn run(available: &Mutex<Option<String>>, notify: &dyn Fn()) {
 
 /// 按钟表时间等：电脑睡眠的时间也算进去（`thread::sleep` 不算睡眠的时间，"每 4 小时"会变成
 /// "醒着 4 小时"，经常合上盖子的笔记本可能好几天都不检查）。分段睡，每段最多 [`SLEEP_STEP`]。
+/// 醒着的时间到了也算等够：系统时间被往回调了（手动改、对时）时不会一直等下去。
 fn sleep_wall_clock(wait: Duration) {
     const SLEEP_STEP: Duration = Duration::from_secs(10 * 60);
     let until = SystemTime::now() + wait;
+    let awake_until = Instant::now() + wait;
     while let Ok(left) = until.duration_since(SystemTime::now()) {
-        if left.is_zero() {
+        let awake_left = awake_until.saturating_duration_since(Instant::now());
+        if left.is_zero() || awake_left.is_zero() {
             return;
         }
-        std::thread::sleep(left.min(SLEEP_STEP));
+        std::thread::sleep(left.min(awake_left).min(SLEEP_STEP));
     }
 }

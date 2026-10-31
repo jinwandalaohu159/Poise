@@ -26,7 +26,7 @@ public sealed record FanView(string Speed, int Boost)
 }
 
 /// <summary>
-/// 主页上少见的提醒：需要重启（可以"稍后提醒"）优先，其次是观察模式。
+/// 主页上少见的提醒：需要重启（可以"稍后提醒"）优先，其次是已暂停、观察模式。
 /// <see cref="Level"/> 为 Notice 时按警告显示，否则按一般信息显示。
 /// </summary>
 public sealed record HomeNotice(Level Level, string Title, string Message, bool CanSnooze);
@@ -85,13 +85,14 @@ public static class HomeViewBuilder
         return new HomeView(true, status.DryRun,
             CpuLoad(m), Temperature("metric.cpu_temp", m.CpuTemp), Temperature("metric.gpu_temp", m.GpuTemp), MemoryMetric(m),
             status.Mode, status.EffectiveMode, ModeText.InUse(status), status.Hardware.VendorMode, status.GameMode,
-            restart, Notice(restart, status.DryRun),
+            restart, Notice(restart, status.Paused, status.DryRun),
             CleanupSummary(status, now),
             Fan(status));
     }
 
-    private static HomeNotice? Notice(bool restart, bool dryRun) =>
+    private static HomeNotice? Notice(bool restart, bool paused, bool dryRun) =>
         restart ? new HomeNotice(Level.Notice, Loc.Get("status.restart"), Loc.Get("status.restart.desc"), true)
+        : paused ? new HomeNotice(Level.Notice, Loc.Get("status.paused"), Loc.Get("status.paused.desc"), false)
         : dryRun ? new HomeNotice(Level.Good, Loc.Get("status.observe"), Loc.Get("status.observe.desc"), false)
         : null;
 

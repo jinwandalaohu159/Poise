@@ -6,14 +6,16 @@ mod window;
 pub use window::run;
 
 use poise_core::model::Pid;
+use poise_platform::win::power_notify::{self, DisplayNotify};
 use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
 use windows::Win32::System::RemoteDesktop::{
     NOTIFY_FOR_THIS_SESSION, WTSRegisterSessionNotification,
 };
 use windows::Win32::UI::Shell::{NIN_BALLOONUSERCLICK, NIN_SELECT};
 use windows::Win32::UI::WindowsAndMessaging::{
-    KillTimer, PBT_APMRESUMEAUTOMATIC, PostMessageW, RegisterWindowMessageW, SetTimer, WM_APP,
-    WM_CLOSE, WM_CONTEXTMENU, WM_POWERBROADCAST, WM_TIMER, WM_WTSSESSION_CHANGE,
+    KillTimer, PBT_APMRESUMEAUTOMATIC, PBT_POWERSETTINGCHANGE, PostMessageW,
+    RegisterWindowMessageW, SetTimer, WM_APP, WM_CLOSE, WM_CONTEXTMENU, WM_POWERBROADCAST,
+    WM_TIMER, WM_WTSSESSION_CHANGE,
 };
 use windows::core::w;
 
@@ -60,6 +62,8 @@ struct App {
     updates: UpdateChecker,
     /// 已经弹过通知的新版本（每个版本只提示一次）。
     notified: Option<String>,
+    /// 订阅着屏幕亮灭：现代待机醒来时只有亮屏，没有"从睡眠醒来"。
+    _display: Option<DisplayNotify>,
 }
 
 impl App {
@@ -80,6 +84,9 @@ impl App {
             // 收不到解锁、切回这个用户的通知：只是晚一次心跳（3 秒）再报。
             log::warn!("订阅会话切换通知失败：{e}");
         }
+        let display = DisplayNotify::for_window(hwnd)
+            .inspect_err(|e| log::warn!("订阅屏幕亮灭通知失败：{e}"))
+            .ok();
         let tray = Tray::new(
             hwnd,
             WM_TRAY,
@@ -94,6 +101,7 @@ impl App {
             promote_tries: 0,
             updates,
             notified: None,
+            _display: display,
         };
         app.foreground.observe();
         app.register_tray();
@@ -134,9 +142,16 @@ impl App {
                 self.foreground.observe();
                 self.link.send(Job::ForegroundChanged);
             }
-            // 睡眠醒来、会话切换（解锁、切回这个用户、远程连上）：立即上报，不等下一次心跳。
+            // 睡眠醒来、亮屏（现代待机醒来）、会话切换（解锁、切回这个用户、远程连上）：立即上报，
+            // 不等下一次心跳。
             WM_POWERBROADCAST if wparam.0 == PBT_APMRESUMEAUTOMATIC as usize => {
                 self.link.send(Job::Refresh);
+                return Reply::Unhandled;
+            }
+            WM_POWERBROADCAST if wparam.0 == PBT_POWERSETTINGCHANGE as usize => {
+                if power_notify::display_on(lparam) == Some(true) {
+                    self.link.send(Job::Refresh);
+                }
                 return Reply::Unhandled;
             }
             WM_WTSSESSION_CHANGE => self.link.send(Job::Refresh),

@@ -1,7 +1,7 @@
+using System.Buffers;
 using System.IO.Pipes;
 using System.Text;
 using System.Text.Json;
-using System.Text.Json.Nodes;
 
 namespace Poise.Core.Ipc;
 
@@ -93,14 +93,8 @@ internal sealed class PipeChannel : IDisposable
 
     private async Task<T?> SendAsync<T>(string method, object? parameters, CancellationToken ct)
     {
-        var request = new JsonObject { ["method"] = method };
-        if (parameters is not null)
-        {
-            request["params"] = JsonSerializer.SerializeToNode(parameters, parameters.GetType(), ProtocolJson.Options);
-        }
         var id = ++_nextId;
-        var envelope = new JsonObject { ["id"] = id, ["request"] = request };
-        await _writer!.WriteLineAsync(envelope.ToJsonString().AsMemory(), ct).ConfigureAwait(false);
+        await _writer!.WriteLineAsync(Encode(id, method, parameters).AsMemory(), ct).ConfigureAwait(false);
         var line = await _reader!.ReadLineAsync(ct).ConfigureAwait(false)
                    ?? throw new IOException("服务关闭了连接");
         var reply = JsonSerializer.Deserialize<Reply<T>>(line.Span, ProtocolJson.Options)
@@ -114,6 +108,30 @@ internal sealed class PipeChannel : IDisposable
             throw new ServiceErrorException(ParseCode(reply.Code), reply.Error ?? "服务返回错误");
         }
         return reply.Result;
+    }
+
+    /// <summary>
+    /// 一条请求（见 Rust 端 RequestEnvelope）：<c>{"id":…,"request":{"method":…,"params":…}}</c>。直接写成 UTF-8，
+    /// 参数按编译时生成的代码写（见 <see cref="ProtocolContext"/>），不经过文档树。
+    /// </summary>
+    internal static string Encode(ulong id, string method, object? parameters)
+    {
+        var buffer = new ArrayBufferWriter<byte>(256);
+        using (var w = new Utf8JsonWriter(buffer))
+        {
+            w.WriteStartObject();
+            w.WriteNumber("id", id);
+            w.WriteStartObject("request");
+            w.WriteString("method", method);
+            if (parameters is not null)
+            {
+                w.WritePropertyName("params");
+                JsonSerializer.Serialize(w, parameters, ProtocolJson.Options.GetTypeInfo(parameters.GetType()));
+            }
+            w.WriteEndObject();
+            w.WriteEndObject();
+        }
+        return Utf8.GetString(buffer.WrittenSpan);
     }
 
     /// <summary>较新的服务可能返回界面还不认识的代码，这时按"未知"处理。<paramref name="code"/> 是回复里的 code。</summary>
@@ -165,7 +183,7 @@ internal sealed class PipeChannel : IDisposable
         // 握手成功、协议版本一致才算连上；否则断开（不留着一条没握手的连接给下一次调用用）。
         try
         {
-            var hello = await SendAsync<HelloResult>("hello", new { protocol = ProtocolJson.Version }, ct).ConfigureAwait(false);
+            var hello = await SendAsync<HelloResult>("hello", new HelloParams(ProtocolJson.Version), ct).ConfigureAwait(false);
             if (hello is null || hello.Protocol != ProtocolJson.Version)
             {
                 throw new ServiceErrorException(ErrorCode.VersionMismatch, "服务的协议版本与界面不一致");

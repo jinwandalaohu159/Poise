@@ -31,6 +31,12 @@ pub fn exits_within(pid: u32, within: std::time::Duration) -> bool {
     }
 }
 
+/// 进程的创建时间（FILETIME，100ns）；打不开、已退出时为 None。和进程号一起认出"还是不是那个进程"。
+pub fn created(pid: u32) -> Option<u64> {
+    let h = open_process(pid, PROCESS_QUERY_LIMITED_INFORMATION).ok()?;
+    creation_time(&h)
+}
+
 /// 打开的目标进程。
 pub struct Target(OwnedHandle);
 

@@ -29,6 +29,8 @@ pub struct ServiceMap {
     hosts: Option<HashSet<ProcessKey>>,
     /// 各服务正在运行的依赖服务有几个，以及什么时候数的。
     dependents: HashMap<String, (u32, Instant)>,
+    /// 上次枚举失败的时刻：隔 [`ServiceMap::RETRY_AFTER`] 再试，不等兜底刷新。
+    failed_at: Option<Instant>,
 }
 
 impl ServiceMap {
@@ -39,6 +41,8 @@ impl ServiceMap {
     /// `hosts`：服务管理器拉起的进程；找不到服务管理器时为 None。
     /// 依赖服务的数目记多久。
     const DEPENDENTS_FOR: Duration = Duration::from_secs(10 * 60);
+    /// 枚举失败后隔多久再试。
+    const RETRY_AFTER: Duration = Duration::from_secs(5);
 
     pub fn refresh(&mut self, hosts: Option<HashSet<ProcessKey>>) {
         let every = if hosts.is_some() {
@@ -48,17 +52,34 @@ impl ServiceMap {
         };
         let stale = self.refreshed_at.is_none_or(|t| t.elapsed() >= every);
         let changed = hosts.is_some() && hosts != self.hosts;
-        if stale || changed {
-            match enumerate(&mut self.dependents) {
-                Ok(m) => self.by_pid = m,
-                // 关机时服务管理器不再回答：不是故障。
-                Err(e) if e.code() == ERROR_SHUTDOWN_IN_PROGRESS.to_hresult() => {
-                    log::debug!("枚举服务失败：{e}")
-                }
-                Err(e) => log::warn!("枚举服务失败：{e}"),
+        let waiting = self
+            .failed_at
+            .is_some_and(|t| t.elapsed() < Self::RETRY_AFTER);
+        if !(stale || changed) || waiting {
+            return;
+        }
+        match enumerate(&mut self.dependents) {
+            Ok(m) => {
+                self.by_pid = m;
+                self.refreshed_at = Some(Instant::now());
+                self.hosts = hosts;
+                self.failed_at = None;
             }
-            self.refreshed_at = Some(Instant::now());
-            self.hosts = hosts;
+            Err(e) => {
+                // 关机时服务管理器不再回答：不是故障。
+                if e.code() == ERROR_SHUTDOWN_IN_PROGRESS.to_hresult() {
+                    log::debug!("枚举服务失败：{e}");
+                } else {
+                    log::warn!("枚举服务失败：{e}");
+                }
+                // 不算刷新过，稍后再试。已经不是服务宿主的进程号上的旧结果去掉：进程号可能已被别的进程
+                // 用上，不能给它标上那个服务。
+                if let Some(hosts) = &hosts {
+                    let alive: HashSet<Pid> = hosts.iter().map(|k| k.pid).collect();
+                    self.by_pid.retain(|pid, _| alive.contains(pid));
+                }
+                self.failed_at = Some(Instant::now());
+            }
         }
     }
 

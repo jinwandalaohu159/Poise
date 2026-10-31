@@ -1,11 +1,13 @@
-//! 底层 Win32 封装：账户与 SID、句柄与要调整的进程、字符串、注册表、服务管理器、安全描述符、程序的版本信息、
-//! 系统版本、COM、WMI、任务计划程序。
+//! 底层 Win32 封装：账户与 SID、句柄与要调整的进程、临时加载的用户配置单元、字符串、注册表、服务管理器、安全描述符、程序的版本信息、
+//! 系统版本、COM、WMI、任务计划程序、屏幕亮灭的通知。
 
 pub(crate) mod account;
 pub mod com;
 pub mod console;
 pub mod env;
 pub mod handle;
+pub mod hive;
+pub mod power_notify;
 pub mod process;
 pub mod registry;
 pub mod scm;

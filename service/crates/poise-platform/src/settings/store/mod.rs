@@ -1,6 +1,8 @@
 //! `SettingStore` 的 Windows 实现：按位置的种类交给各自的后端（注册表值、用户目录下的配置文件、
-//! 电源计划中的设置），这里只负责分派、当前交互用户，以及批量写入时电源计划的重新激活。
+//! 电源计划中的设置），这里只负责分派、当前用户，以及批量写入时电源计划的重新激活；位置属于哪个用户见
+//! [`owner`]。
 
+mod owner;
 mod power_setting;
 mod registry_value;
 mod user_file;
@@ -25,6 +27,8 @@ pub struct WinSettingStore {
     power_pending: AtomicBool,
     /// 批内查到的当前电源计划：切换模式一次要写几十项，只查一次。批结束时清空。
     batch_scheme: Mutex<Option<GUID>>,
+    /// 没登录的用户的位置也读写：临时加载他的配置单元（只在卸载时还原一切用，见 [`crate::win::hive::LoadedHive`]）。
+    load_absent: AtomicBool,
 }
 
 impl WinSettingStore {
@@ -34,7 +38,13 @@ impl WinSettingStore {
             batch: AtomicU32::new(0),
             power_pending: AtomicBool::new(false),
             batch_scheme: Mutex::new(None),
+            load_absent: AtomicBool::new(false),
         }
+    }
+
+    /// 没登录的用户的位置也读写（临时加载他的配置单元）。
+    pub fn load_absent_users(&self, on: bool) {
+        self.load_absent.store(on, Ordering::Release);
     }
 
     pub fn set_user(&self, user: Option<UserContext>) {
@@ -82,14 +92,13 @@ fn reg_err(e: WIN32_ERROR) -> StoreError {
 
 impl SettingStore for WinSettingStore {
     fn read(&self, target: &Target) -> Result<Option<Value>, StoreError> {
-        let user = self.user();
         match target {
-            Target::Registry { hive, key, name } => {
-                registry_value::read(user.as_ref(), *hive, key, name)
-            }
-            Target::Ini { file, section, key } => {
-                user_file::read(user.as_ref(), *file, section, key)
-            }
+            Target::Registry {
+                hive, key, name, ..
+            } => self.as_owner(target, |user| registry_value::read(user, *hive, key, name)),
+            Target::Ini {
+                file, section, key, ..
+            } => self.as_owner(target, |user| user_file::read(user, *file, section, key)),
             Target::PowerSetting {
                 scheme,
                 subgroup,
@@ -102,14 +111,17 @@ impl SettingStore for WinSettingStore {
     }
 
     fn write(&self, target: &Target, value: &Value) -> Result<(), StoreError> {
-        let user = self.user();
         match target {
-            Target::Registry { hive, key, name } => {
-                registry_value::write(user.as_ref(), *hive, key, name, value)
-            }
-            Target::Ini { file, section, key } => {
-                user_file::write(user.as_ref(), *file, section, key, value)
-            }
+            Target::Registry {
+                hive, key, name, ..
+            } => self.as_owner(target, |user| {
+                registry_value::write(user, *hive, key, name, value)
+            }),
+            Target::Ini {
+                file, section, key, ..
+            } => self.as_owner(target, |user| {
+                user_file::write(user, *file, section, key, value)
+            }),
             Target::PowerSetting {
                 scheme,
                 subgroup,
@@ -126,21 +138,30 @@ impl SettingStore for WinSettingStore {
     }
 
     fn delete(&self, target: &Target) -> Result<(), StoreError> {
-        let user = self.user();
         match target {
-            Target::Registry { hive, key, name } => {
-                registry_value::delete(user.as_ref(), *hive, key, name)
-            }
-            Target::Ini { file, section, key } => {
-                user_file::delete(user.as_ref(), *file, section, key)
-            }
+            Target::Registry {
+                hive, key, name, ..
+            } => self.as_owner(target, |user| {
+                registry_value::delete(user, *hive, key, name)
+            }),
+            Target::Ini {
+                file, section, key, ..
+            } => self.as_owner(target, |user| user_file::delete(user, *file, section, key)),
             // 电源设置总是存在，还原时写回原值，不会走到删除。
             Target::PowerSetting { .. } => Err(StoreError::Unsupported),
         }
     }
 
-    /// 电源设置没写明计划时，补上当前计划。
+    /// 电源设置没写明计划时，补上当前计划；按用户的位置没写明用户时，补上当前用户（知道是谁时；控制台方式
+    /// 下就是运行 Poise 的用户，不写明）。
     fn resolve(&self, target: &Target) -> Result<Target, StoreError> {
+        if target.per_user() && target.user().is_none() {
+            let sid = self.user().and_then(|u| u.sid);
+            return Ok(match sid {
+                Some(sid) => target.clone().for_user(&sid),
+                None => target.clone(),
+            });
+        }
         match target {
             Target::PowerSetting {
                 scheme: None,
@@ -214,11 +235,7 @@ mod tests {
     fn journal_round_trip_on_real_registry() {
         let _guard = Scratch;
         let store = store_in(std::env::temp_dir());
-        let target = Target::Registry {
-            hive: Hive::CurrentUser,
-            key: SCRATCH.into(),
-            name: "Value".into(),
-        };
+        let target = Target::registry(Hive::CurrentUser, SCRATCH, "Value");
         store.write(&target, &Value::Dword(7)).unwrap();
         let mut j = Journal::default();
         j.apply(&store, "t", &target, &Value::Dword(1), 0).unwrap();
@@ -233,11 +250,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join(".wslconfig"), "[wsl2]\r\nmemory=8GB\r\n").unwrap();
         let store = store_in(dir.clone());
-        let target = Target::Ini {
-            file: UserFile::WslConfig,
-            section: "experimental".into(),
-            key: "autoMemoryReclaim".into(),
-        };
+        let target = Target::ini(UserFile::WslConfig, "experimental", "autoMemoryReclaim");
         let mut j = Journal::default();
         j.apply(&store, "wsl", &target, &Value::String("gradual".into()), 0)
             .unwrap();
@@ -280,11 +293,7 @@ mod tests {
     #[test]
     fn current_user_targets_need_a_user() {
         let store = WinSettingStore::new(None);
-        let target = Target::Registry {
-            hive: Hive::CurrentUser,
-            key: SCRATCH.into(),
-            name: "x".into(),
-        };
+        let target = Target::registry(Hive::CurrentUser, SCRATCH, "x");
         assert_eq!(store.read(&target), Err(StoreError::Unsupported));
     }
 }

@@ -7,7 +7,9 @@
 //! - [`cores`]：核心与缓存面板（核心域、缓存、负载、程序放在哪里）
 //! - 日志与使用记录交给独立的日志系统（`poise_logbook::Logbook`）：[`decision_events`] 把调度决定写成事件，
 //!   [`round_summary`] 把每轮调度的结果整理成记录系统的输入。引擎只管交过去，不等、不写盘
-//! - [`presence`]：托盘代理在线时才起作用，退出时撤销全部影响；[`clients`]：连着的界面和托盘
+//! - [`presence`]：托盘代理在线时才起作用，退出时撤销全部影响；[`clients`]：连着的界面和托盘；
+//!   [`agent_relaunch`]：更新后在各个用户会话里重新启动托盘代理；
+//!   [`standby`]：熄屏、待机期间托盘代理被冻结不算退出
 //! - [`auto`]：把用户模式（含"自动"）换算成具体模式
 //! - [`mode`]：把实际模式落到电源计划与散热上（慢的硬件操作在硬件执行线程里），风扇加速；
 //!   [`mode_attempts`]：等预读、失败后隔一阵再试
@@ -23,6 +25,7 @@
 //!   [`error`] 是请求失败的原因
 
 mod adjusted_record;
+mod agent_relaunch;
 mod answers;
 mod apps;
 mod auto;
@@ -51,13 +54,16 @@ mod round_summary;
 mod sampler;
 mod schedule;
 mod session;
+mod standby;
 mod status;
 #[cfg(test)]
 mod tick_cost;
 mod user_settings;
 
+pub use agent_relaunch::relaunch_agents;
 pub use cadence::TICK;
 pub use sampler::Sampler;
+pub use standby::PowerChange;
 
 use poise_core::fast_hash::HashMap;
 use std::sync::Arc;
@@ -151,6 +157,8 @@ pub struct Engine {
     /// 在后台线程里保存设置、调整记录、运行过的程序（变更日志除外：它必须先落盘再改设置）。
     files: FileWriter,
     session: SessionTracker,
+    /// 熄屏、待机（见 `standby`）。
+    standby: standby::Standby,
     /// 运行过的程序（程序偏好页"未运行"一栏）。
     seen: remembered::RememberedApps,
     /// 连着的界面和托盘（Poise 自己的进程，永不触碰）与各自的连接数：同一个进程可以有几条连接，
@@ -264,6 +272,7 @@ impl Engine {
             settings_file,
             seen: remembered::RememberedApps::open(&cfg.data_dir, files.clone()),
             session: SessionTracker::new(system::active_console_session()),
+            standby: standby::Standby::default(),
             clients: clients::Clients::default(),
             cleanup: cleanup::CleanupState::default(),
             observed: mode::Observed::default(),
@@ -314,6 +323,7 @@ impl Engine {
     pub fn shutdown(&mut self, system_shutdown: bool) {
         self.stopped = true;
         if !system_shutdown {
+            self.remember_agents();
             self.wait_manual_clean();
         }
         self.withdraw(if system_shutdown {

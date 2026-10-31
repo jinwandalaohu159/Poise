@@ -50,6 +50,7 @@ public sealed partial class HomePage : Page
     protected override async void OnNavigatedTo(NavigationEventArgs e)
     {
         _vm.Updated += OnUpdated;
+        AppHost.Current.Status.NeedFast(this);
         AppHost.Current.Presence.MainVisibilityChanged += OnMainVisibilityChanged;
         _vm.OptimizeUpdated += RenderOptimize;
         _vm.OpenOptimizations += OnOpenOptimizations;
@@ -63,6 +64,7 @@ public sealed partial class HomePage : Page
     protected override void OnNavigatedFrom(NavigationEventArgs e)
     {
         _vm.Updated -= OnUpdated;
+        AppHost.Current.Status.ReleaseFast(this);
         AppHost.Current.Presence.MainVisibilityChanged -= OnMainVisibilityChanged;
         _vm.OptimizeUpdated -= RenderOptimize;
         _vm.OpenOptimizations -= OnOpenOptimizations;

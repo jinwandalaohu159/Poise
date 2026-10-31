@@ -4,7 +4,7 @@
 //! 新程序的名称稍后补上（补上之前界面显示文件名）。每个路径只读一次。
 
 use std::collections::{HashMap, HashSet};
-use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 
 use crate::win::version_info;
 
@@ -26,14 +26,26 @@ struct Worker {
 }
 
 impl NameResolver {
-    /// 收下后台线程读到的名称（每次采样开始时调用）。
+    /// 收下后台线程读到的名称（每次采样开始时调用）。后台线程意外结束了的话，没有结果的路径之后重新问
+    /// （交给新的线程），不一直记在"已经问过"里。
     pub fn collect(&mut self) {
         let Some(worker) = &self.worker else {
             return;
         };
-        while let Ok((path, name)) = worker.answers.try_recv() {
-            self.asked.remove(&path);
-            self.known.insert(path, name);
+        loop {
+            match worker.answers.try_recv() {
+                Ok((path, name)) => {
+                    self.asked.remove(&path);
+                    self.known.insert(path, name);
+                }
+                Err(TryRecvError::Empty) => return,
+                Err(TryRecvError::Disconnected) => {
+                    log::warn!("读取程序名称的线程结束了，重新开始");
+                    self.worker = None;
+                    self.asked.clear();
+                    return;
+                }
+            }
         }
     }
 
@@ -42,9 +54,8 @@ impl NameResolver {
         if let Some(name) = self.known.get(path) {
             return name.clone();
         }
-        if !self.asked.contains(path) {
+        if !self.asked.contains(path) && self.worker().ask.send(path.to_string()).is_ok() {
             self.asked.insert(path.to_string());
-            let _ = self.worker().ask.send(path.to_string());
         }
         None
     }

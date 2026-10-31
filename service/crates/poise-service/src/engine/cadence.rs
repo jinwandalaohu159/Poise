@@ -6,7 +6,8 @@
 //!   负载按半分钟平滑，采得勤也不会更早做出决定；
 //! - 用户离开、没在玩游戏、界面也没显示：每 [`IDLE_TICK`]；
 //! - Poise 暂停着（托盘代理不在）、界面也没显示：每 [`PAUSED_TICK`]——不调度，只看着增长趋势；托盘代理一上报
-//!   就立即恢复（见 `requests`，那时重新采一次），之后最多一个间隔回到平常的节奏。
+//!   就立即恢复（见 `requests`，那时重新采一次），之后最多一个间隔回到平常的节奏；
+//! - 熄屏、待机（见 `standby`）：每 [`STANDBY_TICK`]——没人在用桌面；亮屏时立即采一轮。
 //!
 //! 前台切换、全屏切换不等采样，立即重新调度（见 `cycle`）。所有判断都按时间而不是轮数，间隔变了结果不变。
 
@@ -31,6 +32,9 @@ const IDLE_TICK: Duration = Duration::from_secs(6);
 /// 暂停着、界面也没显示时的采样间隔（不能太长：恢复后要等这一轮过去才回到平常的节奏）。
 const PAUSED_TICK: Duration = Duration::from_secs(10);
 
+/// 熄屏、待机时的采样间隔。
+const STANDBY_TICK: Duration = Duration::from_secs(30);
+
 /// 用户多久不操作算离开。
 const AWAY_AFTER_MS: Millis = 2 * 60_000;
 
@@ -47,6 +51,7 @@ impl Engine {
         let gaming = self.view.as_ref().is_some_and(|v| v.game.is_some());
         let away = self.session.current(now).idle_ms >= AWAY_AFTER_MS || self.paused;
         interval(Moment {
+            standby: self.standby.active(),
             ui: self.session.ui_visible(now),
             paused: self.paused,
             away,
@@ -59,6 +64,8 @@ impl Engine {
 /// 决定采样快慢的情况。
 #[derive(Debug, Clone, Copy, Default)]
 struct Moment {
+    /// 熄屏、待机着。
+    standby: bool,
     /// 界面显示着（走势图、核心面板每 2 秒刷新）。
     ui: bool,
     /// 用户离开了（或 Poise 暂停）。
@@ -71,7 +78,9 @@ struct Moment {
 }
 
 fn interval(m: Moment) -> Duration {
-    if m.paused && !m.ui {
+    if m.standby {
+        STANDBY_TICK
+    } else if m.paused && !m.ui {
         PAUSED_TICK
     } else if m.away && !m.gaming && !m.ui {
         IDLE_TICK
@@ -123,5 +132,14 @@ mod tests {
         };
         assert_eq!(interval(paused), PAUSED_TICK);
         assert_eq!(interval(Moment { ui: true, ..paused }), TICK);
+        // 熄屏、待机：最慢，开着的界面也没人看。
+        assert_eq!(
+            interval(Moment {
+                standby: true,
+                ui: true,
+                ..calm
+            }),
+            STANDBY_TICK
+        );
     }
 }

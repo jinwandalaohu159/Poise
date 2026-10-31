@@ -15,8 +15,8 @@ internal sealed class Reply<T>
 }
 
 /// <summary>
-/// 编译时生成的读写代码：界面启动时、每次读回复时不再靠反射摸索类型（第一次读状态更快，也少分配）。
-/// 没列在这里的类型（请求参数用的匿名类型）仍按反射处理，见 <see cref="ProtocolJson.Options"/>。
+/// 编译时生成的读写代码：界面启动时、每次读回复、写请求时不再靠反射摸索类型（第一次调用更快，也少分配）。
+/// 没列在这里的类型才按反射处理（见 <see cref="ProtocolJson.Options"/>），新加的请求参数要列进来。
 /// </summary>
 [JsonSourceGenerationOptions(
     PropertyNamingPolicy = JsonKnownNamingPolicy.SnakeCaseLower,
@@ -35,4 +35,13 @@ internal sealed class Reply<T>
 [JsonSerializable(typeof(Reply<Diagnosis>))]
 [JsonSerializable(typeof(Reply<EventPage>))]
 [JsonSerializable(typeof(Reply<List<SessionRecord>>))]
+[JsonSerializable(typeof(HelloParams))]
+[JsonSerializable(typeof(VisibleParams))]
+[JsonSerializable(typeof(ModeParams))]
+[JsonSerializable(typeof(GameModeParams))]
+[JsonSerializable(typeof(EnabledParams))]
+[JsonSerializable(typeof(FanBoostParams))]
+[JsonSerializable(typeof(AppPreferenceParams))]
+[JsonSerializable(typeof(IdParams))]
+[JsonSerializable(typeof(EventsParams))]
 internal sealed partial class ProtocolContext : JsonSerializerContext;

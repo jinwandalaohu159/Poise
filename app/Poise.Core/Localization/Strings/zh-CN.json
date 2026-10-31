@@ -8,6 +8,8 @@
   "status.disconnected": "未连接",
   "status.observe": "观察模式",
   "status.observe.desc": "仅分析，不执行任何更改",
+  "status.paused": "已暂停",
+  "status.paused.desc": "托盘程序没有运行或连不上服务：调整已撤销，调度已暂停。Poise 会尝试重新启动托盘程序",
   "metric.cpu_temp": "CPU 温度",
   "metric.cpu_load": "CPU 占用",
   "metric.gpu_temp": "显卡温度",

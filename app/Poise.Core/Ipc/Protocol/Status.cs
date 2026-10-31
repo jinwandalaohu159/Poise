@@ -62,6 +62,8 @@ public sealed record Status(
     int AdjustedProcesses,
     int DeferredCleanup,
     bool DryRun,
-    LastCleanup? LastCleanup);
+    LastCleanup? LastCleanup,
+    /// <summary>暂停着：托盘代理没在上报（没运行、连不上服务），调整已撤销、不调度。</summary>
+    bool Paused = false);
 
 public sealed record HelloResult(int Protocol, string ServiceVersion);

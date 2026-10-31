@@ -18,7 +18,8 @@ public sealed class TrendFeed : IDisposable
     private readonly PoiseApi _api;
     private readonly UiPresence _presence;
     private readonly DispatcherQueueTimer _timer;
-    private int _viewers;
+    /// <summary>显示着的走势卡（同一张卡登记几次也只算一次）。</summary>
+    private readonly HashSet<object> _viewers = [];
     private bool _busy;
 
     public TrendFeed(PoiseApi api, UiPresence presence, DispatcherQueue dispatcher)
@@ -40,22 +41,22 @@ public sealed class TrendFeed : IDisposable
     public event Action? Updated;
 
     /// <summary>走势卡显示时调用。</summary>
-    public void Attach()
+    public void Attach(object viewer)
     {
-        _viewers++;
+        _viewers.Add(viewer);
         UpdateTimer();
     }
 
     /// <summary>走势卡隐藏时调用。</summary>
-    public void Detach()
+    public void Detach(object viewer)
     {
-        _viewers = Math.Max(0, _viewers - 1);
+        _viewers.Remove(viewer);
         UpdateTimer();
     }
 
     private void UpdateTimer()
     {
-        if (_viewers > 0 && _presence.MainVisible)
+        if (_viewers.Count > 0 && _presence.MainVisible)
         {
             if (!_timer.IsRunning)
             {

@@ -30,7 +30,7 @@ pub fn status(
         .map(|item| {
             let state = state(item, store, journal);
             ItemStatus {
-                revertible: journal.owns(&item.id)
+                revertible: journal.owns_here(store, &item.id)
                     || (state == ItemState::Optimized && item.system_default.is_known()),
                 state,
                 item: item.clone(),

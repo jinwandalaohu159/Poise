@@ -56,11 +56,11 @@ pub fn navigation_items(user: Option<&UserContext>) -> Vec<OptimizationItem> {
                 group: Group::NavigationPane,
                 title: Text::Plain(name),
                 description: Text::Key("opt.nav.desc".into()),
-                targets: vec![Target::Registry {
-                    hive: Hive::CurrentUser,
-                    key: format!(r"Software\Classes\CLSID\{clsid}"),
-                    name: "System.IsPinnedToNameSpaceTree".into(),
-                }],
+                targets: vec![Target::registry(
+                    Hive::CurrentUser,
+                    format!(r"Software\Classes\CLSID\{clsid}"),
+                    "System.IsPinnedToNameSpaceTree",
+                )],
                 optimized: Value::Dword(0),
                 matcher: Matcher::Exact,
                 in_one_click: false,

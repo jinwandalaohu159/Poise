@@ -65,11 +65,11 @@ pub fn startup_items(user: Option<&UserContext>) -> Vec<OptimizationItem> {
                 group: Group::StartupApps,
                 title: Text::Plain(title),
                 description: Text::Plain(name.clone()),
-                targets: vec![Target::Registry {
+                targets: vec![Target::registry(
                     hive,
-                    key: format!(r"{APPROVED_KEY}\{approved}"),
+                    format!(r"{APPROVED_KEY}\{approved}"),
                     name,
-                }],
+                )],
                 optimized: Value::Binary(DISABLED_MARK.to_vec()),
                 matcher: Matcher::FirstByteOdd,
                 in_one_click: false,

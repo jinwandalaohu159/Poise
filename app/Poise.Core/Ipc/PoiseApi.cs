@@ -10,20 +10,20 @@ public sealed class PoiseApi(PoiseClient client)
     public Task<Status> GetStatusAsync(CancellationToken ct = default) => Client.CallAsync<Status>("get_status", null, ct);
 
     /// <summary>界面窗口是否正显示着。显示期间需要定期重复上报（服务据此决定是否读取显卡）。</summary>
-    public Task SetUiVisibleAsync(bool visible) => Client.CallAsync("set_ui_visible", new { visible });
+    public Task SetUiVisibleAsync(bool visible) => Client.CallAsync("set_ui_visible", new VisibleParams(visible));
 
     /// <summary>"建议重启"稍后再说。</summary>
     public Task SnoozeRestartAdviceAsync() => Client.CallAsync("snooze_restart_advice");
 
-    public Task SetModeAsync(Mode mode) => Client.CallAsync("set_mode", new { mode });
+    public Task SetModeAsync(Mode mode) => Client.CallAsync("set_mode", new ModeParams(mode));
 
-    public Task SetGameModeAsync(GameMode mode) => Client.CallAsync("set_game_mode", new { mode });
+    public Task SetGameModeAsync(GameMode mode) => Client.CallAsync("set_game_mode", new GameModeParams(mode));
 
-    public Task SetAutoCleanAsync(bool enabled) => Client.CallAsync("set_auto_clean", new { enabled });
-    public Task SetSmartScheduleAsync(bool enabled) => Client.CallAsync("set_smart_schedule", new { enabled });
+    public Task SetAutoCleanAsync(bool enabled) => Client.CallAsync("set_auto_clean", new EnabledParams(enabled));
+    public Task SetSmartScheduleAsync(bool enabled) => Client.CallAsync("set_smart_schedule", new EnabledParams(enabled));
 
     /// <summary>风扇加速，0～100（0 = 不加速）。</summary>
-    public Task SetFanBoostAsync(int percent) => Client.CallAsync("set_fan_boost", new { percent = (byte)Math.Clamp(percent, 0, 100) });
+    public Task SetFanBoostAsync(int percent) => Client.CallAsync("set_fan_boost", new FanBoostParams((byte)Math.Clamp(percent, 0, 100)));
 
     public Task<CleanupResult> CleanNowAsync() => Client.CallAsync<CleanupResult>("clean_now");
 
@@ -33,13 +33,13 @@ public sealed class PoiseApi(PoiseClient client)
     public Task<List<AppEntry>> ListAppsAsync() => Client.CallAsync<List<AppEntry>>("list_apps");
 
     public Task SetAppPreferenceAsync(string path, AppPreference preference) =>
-        Client.CallAsync("set_app_preference", new { path, preference });
+        Client.CallAsync("set_app_preference", new AppPreferenceParams(path, preference));
 
     public Task<List<ItemStatus>> ListOptimizationsAsync() => Client.CallAsync<List<ItemStatus>>("list_optimizations");
 
-    public Task ApplyOptimizationAsync(string id) => Client.CallAsync("apply_optimization", new { id });
+    public Task ApplyOptimizationAsync(string id) => Client.CallAsync("apply_optimization", new IdParams(id));
 
-    public Task RevertOptimizationAsync(string id) => Client.CallAsync("revert_optimization", new { id });
+    public Task RevertOptimizationAsync(string id) => Client.CallAsync("revert_optimization", new IdParams(id));
 
     public Task<ApplyReport> ApplyRecommendedAsync() => Client.CallAsync<ApplyReport>("apply_recommended");
 
@@ -54,7 +54,7 @@ public sealed class PoiseApi(PoiseClient client)
     public Task<CoreMap> GetCoresAsync() => Client.CallAsync<CoreMap>("cores");
 
     /// <summary>编号大于 <paramref name="after"/> 的日志（0 表示取最新的一批），从早到晚。</summary>
-    public Task<EventPage> GetEventsAsync(ulong after) => Client.CallAsync<EventPage>("events", new { after });
+    public Task<EventPage> GetEventsAsync(ulong after) => Client.CallAsync<EventPage>("events", new EventsParams(after));
 
     /// <summary>使用记录，最新的在前。</summary>
     public Task<List<SessionRecord>> GetRecordsAsync() => Client.CallAsync<List<SessionRecord>>("records");

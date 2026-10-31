@@ -59,6 +59,14 @@ impl UserContext {
         })
     }
 
+    /// 用户的配置单元加载着（登录着）。当前进程的用户总是加载着。
+    pub fn hive_loaded(&self) -> bool {
+        match &self.sid {
+            None => true,
+            Some(sid) => registry::open(HKEY_USERS, sid, false).is_ok(),
+        }
+    }
+
     /// 用户配置单元的根和路径前缀。
     pub fn registry_root(&self) -> (HKEY, String) {
         match &self.sid {

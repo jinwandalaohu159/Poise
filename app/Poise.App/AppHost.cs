@@ -1,5 +1,6 @@
 using Microsoft.UI.Dispatching;
 using Poise.Core.Ipc;
+using Poise.Core.Lifecycle;
 using Poise.Core.Localization;
 using Poise.Core.Monitoring;
 using Poise.Core.Settings;
@@ -22,6 +23,7 @@ public sealed class AppHost : IDisposable
         Client = new PoiseClient();
         Api = new PoiseApi(Client);
         Status = new StatusMonitor(Api);
+        AgentKeeper = new AgentKeeper(Status);
         Presence = new UiPresence(Status, Api, dispatcher);
         Presence.AnyShown += Client.RetryNow;
         Trend = new TrendFeed(Api, Presence, dispatcher);
@@ -44,6 +46,9 @@ public sealed class AppHost : IDisposable
     public PoiseApi Api { get; }
 
     public StatusMonitor Status { get; }
+
+    /// <summary>服务报告暂停时把托盘代理拉起来。</summary>
+    private AgentKeeper AgentKeeper { get; }
 
     public UiPresence Presence { get; }
 

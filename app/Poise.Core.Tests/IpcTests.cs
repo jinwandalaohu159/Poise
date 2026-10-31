@@ -66,4 +66,14 @@ public sealed class IpcTests
         Assert.Equal(ErrorCode.ObserveOnly, PipeChannel.ParseCode(reply.Code));
         Assert.Equal("dry run", reply.Error);
     }
+
+    [Fact]
+    public void Requests_are_written_with_snake_case_fields_and_values()
+    {
+        Assert.Equal("""{"id":3,"request":{"method":"set_mode","params":{"mode":"quiet"}}}""",
+            PipeChannel.Encode(3, "set_mode", new ModeParams(Mode.Quiet)));
+        Assert.Equal("""{"id":4,"request":{"method":"set_app_preference","params":{"path":"C:\\a.exe","preference":"always_fast"}}}""",
+            PipeChannel.Encode(4, "set_app_preference", new AppPreferenceParams(@"C:\a.exe", AppPreference.AlwaysFast)));
+        Assert.Equal("""{"id":5,"request":{"method":"get_status"}}""", PipeChannel.Encode(5, "get_status", null));
+    }
 }

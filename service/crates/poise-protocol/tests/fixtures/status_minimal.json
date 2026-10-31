@@ -46,5 +46,6 @@
   "adjusted_processes": 7,
   "deferred_cleanup": 1,
   "dry_run": true,
+  "paused": false,
   "last_cleanup": null
 }

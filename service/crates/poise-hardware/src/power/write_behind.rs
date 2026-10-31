@@ -211,11 +211,7 @@ mod tests {
         let queue = PowerQueue::default();
         let prefetched = Prefetched::default();
         let behind = WriteBehind::new(&store, &queue, &prefetched);
-        let registry = Target::Registry {
-            hive: poise_core::setting::Hive::LocalMachine,
-            key: "K".into(),
-            name: "N".into(),
-        };
+        let registry = Target::registry(poise_core::setting::Hive::LocalMachine, "K", "N");
         behind.write(&power(Some("A")), &Value::Dword(1)).unwrap();
         behind.write(&registry, &Value::Dword(2)).unwrap();
         behind.write(&power(Some("A")), &Value::Dword(3)).unwrap();

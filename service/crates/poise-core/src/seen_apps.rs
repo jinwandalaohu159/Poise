@@ -7,7 +7,9 @@ use serde::{Deserialize, Serialize};
 
 /// 超过这么久没再运行的程序不再列出（设置过类别的程序另由偏好列出，不受影响）。
 const KEEP_FOR_S: u64 = 90 * 24 * 3600;
-/// 最多记住这么多个程序，超过时去掉最久没运行的。
+/// 最多记住这么多个程序。满了再看到新程序时，去掉最久没运行、而且一天以上没看到的（这样的此刻一定没在
+/// 运行）；都是一天内看到的就不记新的——否则正在运行的程序超过上限时，每一轮都挤掉一个还在运行的、下一轮
+/// 再加回来，反复保存。
 const MAX_APPS: usize = 300;
 /// 最近运行时间只按天更新，避免频繁写盘。
 const TOUCH_EVERY_S: u64 = 24 * 3600;
@@ -43,6 +45,9 @@ impl SeenApps {
                 renamed || stale
             }
             None => {
+                if self.apps.len() >= MAX_APPS && !self.evict_one(now_s) {
+                    return false;
+                }
                 self.apps.insert(
                     path.to_string(),
                     SeenApp {
@@ -50,7 +55,6 @@ impl SeenApps {
                         last_seen_s: now_s,
                     },
                 );
-                self.trim();
                 true
             }
         }
@@ -64,18 +68,15 @@ impl SeenApps {
         self.apps.len() != before
     }
 
-    fn trim(&mut self) {
-        while self.apps.len() > MAX_APPS {
-            let oldest = self
-                .apps
-                .iter()
-                .min_by_key(|(_, a)| a.last_seen_s)
-                .map(|(p, _)| p.clone());
-            match oldest {
-                Some(p) => self.apps.remove(&p),
-                None => break,
-            };
-        }
+    /// 去掉一个最久没运行、一天以上没看到的；没有这样的时返回 false。
+    fn evict_one(&mut self, now_s: u64) -> bool {
+        let oldest = self
+            .apps
+            .iter()
+            .filter(|(_, a)| now_s.saturating_sub(a.last_seen_s) > TOUCH_EVERY_S)
+            .min_by_key(|(_, a)| a.last_seen_s)
+            .map(|(p, _)| p.clone());
+        oldest.is_some_and(|p| self.apps.remove(&p).is_some())
     }
 }
 
@@ -108,10 +109,17 @@ mod tests {
     #[test]
     fn keeps_at_most_the_most_recent_programs() {
         let mut s = SeenApps::default();
-        for i in 0..=MAX_APPS as u64 {
+        for i in 0..MAX_APPS as u64 {
             s.observe(&format!("{i}.exe"), "App", i);
         }
+        // 满了、都是一天内看到的（可能都还在运行）：不记新的，也不挤掉旧的。
+        assert!(!s.observe("new.exe", "New", MAX_APPS as u64));
+        assert_eq!(s.apps.len(), MAX_APPS);
+        assert!(s.apps.contains_key("0.exe"));
+        // 两天后：最久没运行的让位。
+        assert!(s.observe("new.exe", "New", 2 * DAY));
         assert_eq!(s.apps.len(), MAX_APPS);
         assert!(!s.apps.contains_key("0.exe"));
+        assert!(s.apps.contains_key("new.exe"));
     }
 }

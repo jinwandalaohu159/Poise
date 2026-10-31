@@ -14,14 +14,14 @@ impl Engine {
     pub(super) fn on_session_changed(&mut self, session_id: u32) {
         if self.cfg.mode == RunMode::Service {
             let user = UserContext::for_session(session_id);
-            if user == self.changes.store.user() {
+            if user == self.changes.user() {
                 return;
             }
             log::info!(
                 "交互会话 {session_id}，用户：{:?}",
                 user.as_ref().and_then(|u| u.sid.clone())
             );
-            self.changes.store.set_user(user);
+            self.changes.set_user(user);
             // 服务开机就启动，那时还没人登录，按用户保存的设置（游戏的显卡偏好等）读写不了：现在补上。
             self.resync_game_settings();
             let now = self.now();
@@ -32,8 +32,7 @@ impl Engine {
     /// 界面或托盘连上来时还不知道当前用户（服务启动时没找到、托盘代理还没上报）：按它所在的会话找。
     /// 不只靠托盘代理的上报——它没连上时，按用户保存的优化项会一直读不到，显示成没优化。
     pub(super) fn adopt_client_session(&mut self, pid: Pid) {
-        if self.cfg.mode != RunMode::Service || self.stopped || self.changes.store.user().is_some()
-        {
+        if self.cfg.mode != RunMode::Service || self.stopped || self.changes.user().is_some() {
             return;
         }
         // 只认当前在用的那个会话里的（后台断开的会话里的界面不算）。

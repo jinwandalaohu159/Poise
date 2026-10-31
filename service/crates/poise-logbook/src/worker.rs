@@ -67,12 +67,22 @@ fn handle(message: Message, log: &mut EventLog, book: &mut RecordBook, shared: &
     }
 }
 
-/// 加上一条记录并保存。写盘在锁外进行，界面读记录不用等磁盘。
-fn keep(book: &RecordBook, shared: &Mutex<Shared>, record: SessionRecord) {
+/// 加上一条记录并保存。写盘在锁外进行，界面读记录不用等磁盘。启动时没读到之前的记录的，先再读一次，
+/// 读到了接在前面；还读不到就只留在内存里，不保存（免得覆盖）。
+fn keep(book: &mut RecordBook, shared: &Mutex<Shared>, record: SessionRecord) {
+    let earlier = book.recover();
     let list = {
         let mut s = shared.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(mut earlier) = earlier {
+            earlier.append(&mut s.records);
+            s.records = earlier;
+        }
         RecordBook::add(&mut s.records, record);
         s.records.clone()
     };
-    book.save(&list);
+    if book.writable() {
+        book.save(&list);
+    } else {
+        log::warn!("使用记录读不到，这条先不保存");
+    }
 }

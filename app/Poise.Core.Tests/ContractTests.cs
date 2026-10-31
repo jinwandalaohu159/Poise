@@ -25,6 +25,7 @@ public sealed class ContractTests
         Assert.Equal(("dell_g_mode", true), (s.Hardware.VendorMode, s.Hardware.FanBoostSupported));
         Assert.False(s.AutoClean);
         Assert.True(s.DryRun);
+        Assert.True(s.Paused);
         Assert.Equal(7, s.AdjustedProcesses);
         Assert.Equal(1, s.DeferredCleanup);
 
@@ -67,6 +68,7 @@ public sealed class ContractTests
         Assert.Null(s.Hardware.SystemDrive);
         Assert.Null(s.Hardware.Memory);
         Assert.Null(s.LastCleanup);
+        Assert.False(s.Paused);
         var disk = Assert.Single(s.Hardware.Disks);
         Assert.Equal((null, DiskHealth.Unknown, null), ((uint?)disk.TempC, disk.Health, (uint?)disk.WearPct));
         Assert.Null(disk.SizeBytes);

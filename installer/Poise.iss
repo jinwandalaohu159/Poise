@@ -244,13 +244,15 @@ var
   Failure: String;
 begin
   Result := '';
-  CloseApps;
+  { 先停服务、再关托盘代理和界面：服务停止时记下哪些用户会话里连着托盘代理，新版本启动后在那些会话里
+    把它重新启动（更新助手只能重新启动自己会话里的那个）。 }
   ServiceWasRunning := StopService;
   if ServiceWasRunning and not WaitStopped then begin
     { 停不下来：不安装（文件被占着，装到一半会回滚），原来的版本保持不变。 }
     Result := CustomMessage('ServiceStuck');
     Exit;
   end;
+  CloseApps;
   Failure := ProtectDir(ExpandConstant('{app}'));
   if Failure <> '' then
     Result := FmtMessage(CustomMessage('ProtectFailed'), [Failure]);

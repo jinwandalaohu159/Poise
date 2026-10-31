@@ -74,6 +74,15 @@ public sealed class UiPresence : IDisposable
         }
         var wasVisible = AnyVisible;
         _flyout = visible;
+        // 托盘面板显示的就是主页的数字：每秒更新。
+        if (visible)
+        {
+            _status.NeedFast(this);
+        }
+        else
+        {
+            _status.ReleaseFast(this);
+        }
         Update(wasVisible);
     }
 

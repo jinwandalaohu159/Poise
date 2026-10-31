@@ -15,7 +15,7 @@ use super::sampler::Sampled;
 use super::schedule::ScheduleOutcome;
 use super::{Engine, View};
 
-/// 两轮采样之间隔了这么久：电脑睡眠过（平时最长 6 秒一轮）。
+/// 两轮采样之间隔了这么久：电脑睡眠过（平时最长 10 秒一轮；待机期间采得更慢，那时不算，见 `standby`）。
 const SLEPT_AFTER_MS: Millis = 15_000;
 
 /// 用户多久不操作算离开（传感器读得很少，见 `read_sensors`）。
@@ -43,6 +43,7 @@ impl Engine {
         }
         let now = self.now();
         if let Some(last) = self.last_tick_at.replace(now)
+            && !self.standby.active()
             && now.saturating_sub(last) >= SLEPT_AFTER_MS
         {
             self.session.resumed(last, now);
@@ -199,8 +200,10 @@ impl Engine {
             outcome.game.is_some(),
             outcome.focused,
         ));
-        // 没人在用（暂停着、用户离开了，也没在玩游戏、界面没显示）：传感器读得很少。
-        let away = self.paused || self.session.current(now).idle_ms >= USER_AWAY_MS;
+        // 没人在用（暂停着、熄屏待机、用户离开了，也没在玩游戏、界面没显示）：传感器读得很少。
+        let away = self.paused
+            || self.standby.active()
+            || self.session.current(now).idle_ms >= USER_AWAY_MS;
         self.sensors.set_idle(away && !ui && outcome.game.is_none());
         self.sensors.latest()
     }

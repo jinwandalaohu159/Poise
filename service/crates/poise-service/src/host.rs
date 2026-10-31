@@ -1,4 +1,4 @@
-//! Windows 服务宿主：响应服务管理器的启动 / 停止。
+//! Windows 服务宿主：响应服务管理器的启动 / 停止，转达熄屏、待机、醒来（见 `engine::standby`）。
 
 use std::ffi::OsString;
 use std::sync::mpsc;
@@ -13,8 +13,8 @@ use windows_service::{define_windows_service, service_dispatcher};
 use poise_platform::persist::paths;
 
 use crate::config::RunConfig;
-use crate::runtime::StopReason;
-use crate::{logging, runtime};
+use crate::runtime::{Signal, StopReason};
+use crate::{logging, power_events, runtime};
 
 pub use poise_protocol::SERVICE_NAME;
 
@@ -52,7 +52,9 @@ fn status(state: ServiceState) -> ServiceStatus {
         current_state: state,
         // 关机时先收到"即将关机"（系统服务都还在）：趁散热接口（WMI）还能用时还原。
         controls_accepted: if state == ServiceState::Running {
-            ServiceControlAccept::STOP | ServiceControlAccept::PRESHUTDOWN
+            ServiceControlAccept::STOP
+                | ServiceControlAccept::PRESHUTDOWN
+                | ServiceControlAccept::POWER_EVENT
         } else {
             ServiceControlAccept::empty()
         },
@@ -73,11 +75,17 @@ fn run(cfg: RunConfig) -> anyhow::Result<()> {
     let (tx, rx) = mpsc::channel();
     let handler = move |event| match event {
         ServiceControl::Stop => {
-            let _ = tx.send(StopReason::Requested);
+            let _ = tx.send(Signal::Stop(StopReason::Requested));
             ServiceControlHandlerResult::NoError
         }
         ServiceControl::Preshutdown | ServiceControl::Shutdown => {
-            let _ = tx.send(StopReason::SystemShutdown);
+            let _ = tx.send(Signal::Stop(StopReason::SystemShutdown));
+            ServiceControlHandlerResult::NoError
+        }
+        ServiceControl::PowerEvent(param) => {
+            if let Some(change) = power_events::power_change(param) {
+                let _ = tx.send(Signal::Power(change));
+            }
             ServiceControlHandlerResult::NoError
         }
         ServiceControl::Interrogate => ServiceControlHandlerResult::NoError,
@@ -85,6 +93,7 @@ fn run(cfg: RunConfig) -> anyhow::Result<()> {
     };
     let handle = service_control_handler::register(SERVICE_NAME, handler)?;
     handle.set_service_status(status(ServiceState::Running))?;
+    let _display = power_events::subscribe_display(&handle);
     let result = runtime::run(cfg, rx, || {
         let _ = handle.set_service_status(status(ServiceState::StopPending));
     });

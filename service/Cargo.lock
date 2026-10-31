@@ -108,7 +108,7 @@ checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
 
 [[package]]
 name = "poise-agent"
-version = "0.8.1"
+version = "0.8.2"
 dependencies = [
  "embed-resource",
  "log",
@@ -124,7 +124,7 @@ dependencies = [
 
 [[package]]
 name = "poise-core"
-version = "0.8.1"
+version = "0.8.2"
 dependencies = [
  "serde",
  "thiserror",
@@ -132,7 +132,7 @@ dependencies = [
 
 [[package]]
 name = "poise-hardware"
-version = "0.8.1"
+version = "0.8.2"
 dependencies = [
  "libloading",
  "log",
@@ -143,7 +143,7 @@ dependencies = [
 
 [[package]]
 name = "poise-logbook"
-version = "0.8.1"
+version = "0.8.2"
 dependencies = [
  "log",
  "poise-core",
@@ -154,7 +154,7 @@ dependencies = [
 
 [[package]]
 name = "poise-platform"
-version = "0.8.1"
+version = "0.8.2"
 dependencies = [
  "log",
  "poise-core",
@@ -165,7 +165,7 @@ dependencies = [
 
 [[package]]
 name = "poise-protocol"
-version = "0.8.1"
+version = "0.8.2"
 dependencies = [
  "poise-core",
  "serde",
@@ -174,7 +174,7 @@ dependencies = [
 
 [[package]]
 name = "poise-service"
-version = "0.8.1"
+version = "0.8.2"
 dependencies = [
  "anyhow",
  "embed-resource",
@@ -192,7 +192,7 @@ dependencies = [
 
 [[package]]
 name = "poise-update"
-version = "0.8.1"
+version = "0.8.2"
 dependencies = [
  "embed-resource",
  "log",

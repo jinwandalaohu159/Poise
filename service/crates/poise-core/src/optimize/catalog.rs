@@ -63,11 +63,11 @@ fn other_items(wsl_installed: bool) -> Vec<OptimizationItem> {
             group: Group::StartupBackground,
             title: key("opt.fast_startup.title"),
             description: key("opt.fast_startup.desc"),
-            targets: vec![Target::Registry {
-                hive: Hive::LocalMachine,
-                key: r"SYSTEM\CurrentControlSet\Control\Session Manager\Power".into(),
-                name: "HiberbootEnabled".into(),
-            }],
+            targets: vec![Target::registry(
+                Hive::LocalMachine,
+                r"SYSTEM\CurrentControlSet\Control\Session Manager\Power",
+                "HiberbootEnabled",
+            )],
             optimized: Value::Dword(0),
             matcher: Matcher::Exact,
             in_one_click: true,
@@ -80,11 +80,11 @@ fn other_items(wsl_installed: bool) -> Vec<OptimizationItem> {
             group: Group::Explorer,
             title: key("opt.open_this_pc.title"),
             description: key("opt.open_this_pc.desc"),
-            targets: vec![Target::Registry {
-                hive: Hive::CurrentUser,
-                key: EXPLORER_ADVANCED.into(),
-                name: "LaunchTo".into(),
-            }],
+            targets: vec![Target::registry(
+                Hive::CurrentUser,
+                EXPLORER_ADVANCED,
+                "LaunchTo",
+            )],
             optimized: Value::Dword(1),
             matcher: Matcher::Exact,
             in_one_click: true,
@@ -97,11 +97,11 @@ fn other_items(wsl_installed: bool) -> Vec<OptimizationItem> {
             group: Group::Explorer,
             title: key("opt.separate_process.title"),
             description: key("opt.separate_process.desc"),
-            targets: vec![Target::Registry {
-                hive: Hive::CurrentUser,
-                key: EXPLORER_ADVANCED.into(),
-                name: "SeparateProcess".into(),
-            }],
+            targets: vec![Target::registry(
+                Hive::CurrentUser,
+                EXPLORER_ADVANCED,
+                "SeparateProcess",
+            )],
             optimized: Value::Dword(1),
             matcher: Matcher::Exact,
             in_one_click: true,
@@ -116,11 +116,11 @@ fn other_items(wsl_installed: bool) -> Vec<OptimizationItem> {
             group: Group::Memory,
             title: key("opt.wsl_reclaim.title"),
             description: key("opt.wsl_reclaim.desc"),
-            targets: vec![Target::Ini {
-                file: UserFile::WslConfig,
-                section: "experimental".into(),
-                key: "autoMemoryReclaim".into(),
-            }],
+            targets: vec![Target::ini(
+                UserFile::WslConfig,
+                "experimental",
+                "autoMemoryReclaim",
+            )],
             // 温和回收：用户平时会在后台运行 WSL/Docker，不用激进的缓存清除。
             optimized: Value::String("gradual".into()),
             matcher: Matcher::Exact,

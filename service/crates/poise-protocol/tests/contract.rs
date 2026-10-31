@@ -98,6 +98,7 @@ fn full_status() -> Status {
         adjusted_processes: 7,
         deferred_cleanup: 1,
         dry_run: true,
+        paused: true,
         last_cleanup: Some(LastCleanup {
             at_unix_ms: 1_800_000_000_000,
             trigger: CleanupTrigger::Deferred,
@@ -139,6 +140,7 @@ fn minimal_status() -> Status {
         cpu: None,
     };
     s.smart_schedule = false;
+    s.paused = false;
     s.last_cleanup = None;
     s
 }

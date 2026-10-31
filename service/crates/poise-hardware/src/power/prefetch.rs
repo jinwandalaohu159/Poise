@@ -151,7 +151,12 @@ impl Prefetched {
     pub fn forget(&self, target: &Target) {
         match &mut self.lock().state {
             State::Ready { values, .. } => values.retain(|(t, _)| !t.same_place(target)),
-            State::Asked { dirty, .. } => dirty.push(target.clone()),
+            // 电源服务卡住、一直读不完时也不越记越多：同一位置只记一次。
+            State::Asked { dirty, .. } => {
+                if !dirty.iter().any(|d| d.same_place(target)) {
+                    dirty.push(target.clone());
+                }
+            }
             State::Empty => {}
         }
     }

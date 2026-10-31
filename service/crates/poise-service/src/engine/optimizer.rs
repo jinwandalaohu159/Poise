@@ -62,8 +62,8 @@ impl Engine {
                 "这项修改不属于系统优化",
             ));
         }
-        if self.changes.journal().owns(id) {
-            self.changes.revert(id)?;
+        if self.changes.owns_here(id) {
+            self.changes.revert_here(id)?;
         } else {
             let item = self.optimization_item(id)?;
             self.changes.restore_default(&item)?;

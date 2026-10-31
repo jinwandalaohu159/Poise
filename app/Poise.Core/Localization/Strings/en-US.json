@@ -8,6 +8,8 @@
   "status.disconnected": "Not connected",
   "status.observe": "Observe only",
   "status.observe.desc": "Analysis only. No changes are made.",
+  "status.paused": "Paused",
+  "status.paused.desc": "The tray app isn't running or can't reach the service. Adjustments are undone and scheduling is paused. Poise will try to restart the tray app.",
   "metric.cpu_temp": "CPU temp",
   "metric.cpu_load": "CPU load",
   "metric.gpu_temp": "GPU temp",

@@ -4,11 +4,14 @@ use crate::classify::Classification;
 use crate::fast_hash::HashMap;
 use crate::model::{Millis, Pid, ProcessKey, Snapshot};
 
+use super::created_of;
+
 /// 最近一次发声的时间：按程序（进程树）记，也按真正输出声音的进程记。停声后保持一会儿仍算
 /// "在发声"：切歌、暂停、语音里的短暂安静不会让它来回切换状态。
 #[derive(Debug, Default)]
 pub struct AudioTracker {
-    trees: HashMap<Pid, Millis>,
+    /// 根进程号 → 根进程的创建时间（核对进程号没被别的程序用上）、最近一次发声。
+    trees: HashMap<Pid, (Option<u64>, Millis)>,
     emitters: HashMap<ProcessKey, Millis>,
 }
 
@@ -25,15 +28,24 @@ impl AudioTracker {
                 continue;
             };
             if c.plays_audio {
-                self.trees.insert(c.root_pid, now);
+                match self.trees.get_mut(&c.root_pid) {
+                    Some((_, at)) => *at = now,
+                    None => {
+                        let created = created_of(snap, c.root_pid);
+                        self.trees.insert(c.root_pid, (created, now));
+                    }
+                }
             }
             if c.emits_audio {
                 self.emitters.insert(p.facts.key, now);
             }
         }
         // 退出了的程序不再保持（进程号之后被别的程序复用时，不继承"在发声"）。
-        self.trees
-            .retain(|root, t| now.saturating_sub(*t) < hold_ms && classes.contains_key(root));
+        self.trees.retain(|root, (created, t)| {
+            now.saturating_sub(*t) < hold_ms
+                && classes.contains_key(root)
+                && created_of(snap, *root) == *created
+        });
         self.emitters
             .retain(|_, t| now.saturating_sub(*t) < hold_ms);
     }
@@ -85,5 +97,27 @@ mod tests {
         assert!(!t.audible(20));
         t.update(&snap, &silent, 31_000, 30_000);
         assert!(!t.audible(10) && !t.emitting(&key));
+    }
+
+    #[test]
+    fn a_new_program_reusing_the_process_id_is_not_audible() {
+        let snap = |created| Snapshot {
+            processes: vec![ProcessSample {
+                facts: ProcessFacts {
+                    key: ProcessKey { pid: 10, created },
+                    ..Default::default()
+                },
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let mut t = AudioTracker::default();
+        let mut playing = test_classes(None);
+        playing.get_mut(&10).unwrap().plays_audio = true;
+        t.update(&snap(1), &playing, 0, 30_000);
+        assert!(t.audible(10));
+        // 程序退出，进程号 10 被新启动的程序用上。
+        t.update(&snap(2), &test_classes(None), 2_000, 30_000);
+        assert!(!t.audible(10));
     }
 }

@@ -18,3 +18,4 @@ pub mod safety;
 pub mod schedule;
 pub mod seen_apps;
 pub mod setting;
+pub mod write_ahead;

@@ -13,12 +13,19 @@ namespace Poise.Core.Monitoring;
 /// </summary>
 public sealed class StatusMonitor : IDisposable
 {
+    /// <summary>显示着每秒变化的数字（主页、托盘面板）时多久查一次。</summary>
     private static readonly TimeSpan Interval = TimeSpan.FromSeconds(1);
+
+    /// <summary>别的页面只用到模式、开关、机型信息，维持"已连接"的判断就够了。</summary>
+    private static readonly TimeSpan SlowInterval = TimeSpan.FromSeconds(5);
 
     private readonly PoiseApi _api;
     private readonly SynchronizationContext _ui;
     private readonly Timer _timer;
     private readonly RefreshGate _gate = new();
+    /// <summary>需要每秒更新的界面（见 <see cref="NeedFast"/>）。</summary>
+    private readonly HashSet<object> _fast = [];
+    private bool _watched;
 
     /// <summary>必须在界面线程上创建（需要它的 <see cref="SynchronizationContext"/>）。</summary>
     public StatusMonitor(PoiseApi api)
@@ -43,20 +50,42 @@ public sealed class StatusMonitor : IDisposable
     /// <summary>在界面线程上触发。</summary>
     public event Action? Changed;
 
-    /// <summary>有界面显示着：立即查一次，之后每秒一次；都不显示时停止。</summary>
+    /// <summary>有界面显示着：立即查一次，之后定期查（见 <see cref="NeedFast"/>）；都不显示时停止。</summary>
     public bool Watched
     {
         set
         {
-            if (value)
-            {
-                _timer.Change(TimeSpan.Zero, Interval);
-            }
-            else
-            {
-                _timer.Change(Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
-            }
+            _watched = value;
+            Reschedule(immediately: value);
         }
+    }
+
+    /// <summary>显示着每秒变化的数字的界面（主页、托盘面板）登记：有它们时每秒查一次，否则每 5 秒。在界面线程上调用。</summary>
+    public void NeedFast(object who)
+    {
+        if (_fast.Add(who))
+        {
+            Reschedule(immediately: true);
+        }
+    }
+
+    public void ReleaseFast(object who)
+    {
+        if (_fast.Remove(who))
+        {
+            Reschedule(immediately: false);
+        }
+    }
+
+    private void Reschedule(bool immediately)
+    {
+        if (!_watched)
+        {
+            _timer.Change(Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
+            return;
+        }
+        var every = _fast.Count > 0 ? Interval : SlowInterval;
+        _timer.Change(immediately ? TimeSpan.Zero : every, every);
     }
 
     /// <summary>

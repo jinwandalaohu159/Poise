@@ -21,6 +21,11 @@ pub use foreground::{ForegroundHold, ForegroundTracker};
 pub use games::GameTracker;
 pub use load::{LoadSmoothing, TreeLoad};
 
+/// 进程的创建时间（快照里找不到时为 None）。按进程号记的保持状态用它核对：进程号被别的程序用上时不继承。
+pub(crate) fn created_of(snap: &crate::model::Snapshot, pid: crate::model::Pid) -> Option<u64> {
+    snap.find(pid).map(|p| p.facts.key.created)
+}
+
 /// 测试用：进程 10 和 20 各是一个程序，`fg_root` 在前台。
 #[cfg(test)]
 pub(crate) fn test_classes(
