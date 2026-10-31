@@ -162,13 +162,15 @@ impl RegKey {
         out
     }
 
+    /// 键里的全部值。名字或数据超出缓冲区的值跳过；其他错误（键被删了、没有权限）就此停下，
+    /// 不往下一个编号一直试。
     pub fn values(&self) -> Vec<(String, Value)> {
         let mut out = Vec::new();
+        let mut name = [0u16; 512];
+        let mut data = vec![0u8; 8192];
         for index in 0.. {
-            let mut name = [0u16; 512];
             let mut name_len = name.len() as u32;
             let mut ty = 0u32;
-            let mut data = vec![0u8; 8192];
             let mut data_len = data.len() as u32;
             // SAFETY: 缓冲区长度与传入长度一致。
             let r = unsafe {
@@ -183,16 +185,18 @@ impl RegKey {
                     Some(&mut data_len),
                 )
             };
-            if r == ERROR_NO_MORE_ITEMS {
-                break;
-            }
-            if r != windows::Win32::Foundation::ERROR_SUCCESS {
+            if r == windows::Win32::Foundation::ERROR_MORE_DATA {
                 continue;
             }
-            data.truncate(data_len as usize);
+            if r != windows::Win32::Foundation::ERROR_SUCCESS {
+                if r != ERROR_NO_MORE_ITEMS {
+                    log::debug!("列举注册表值在第 {index} 个停下：{r:?}");
+                }
+                break;
+            }
             out.push((
                 from_wide(&name[..name_len as usize]),
-                decode(REG_VALUE_TYPE(ty), data),
+                decode(REG_VALUE_TYPE(ty), data[..data_len as usize].to_vec()),
             ));
         }
         out

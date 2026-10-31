@@ -14,6 +14,7 @@ mod host;
 mod install;
 mod ipc_server;
 mod logging;
+mod power_reader;
 mod runtime;
 mod sensor_feed;
 
@@ -42,7 +43,11 @@ fn console(live: bool) -> anyhow::Result<()> {
     std::fs::create_dir_all(&cfg.data_dir)?;
     logging::init(&cfg.data_dir, true);
     let (tx, rx) = mpsc::channel();
-    poise_platform::win::console::on_stop(tx)?;
+    poise_platform::win::console::on_stop(move || {
+        let _ = tx.send(runtime::StopReason::Requested);
+    })?;
     log::info!("数据目录：{}（按 Ctrl+C 退出）", cfg.data_dir.display());
-    runtime::run(cfg, rx)
+    let result = runtime::run(cfg, rx, || {});
+    logging::flush();
+    result
 }

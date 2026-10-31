@@ -5,12 +5,12 @@ use std::time::{Duration, Instant};
 
 use poise_platform::win::handle::OwnedHandle;
 use poise_platform::win::wide::WideString;
-use windows::Win32::Foundation::{ERROR_CANCELLED, HWND};
+use windows::Win32::Foundation::{ERROR_CANCELLED, HWND, WAIT_OBJECT_0};
 use windows::Win32::System::Services::{
     CloseServiceHandle, OpenSCManagerW, OpenServiceW, QueryServiceStatus, SC_HANDLE,
     SC_MANAGER_CONNECT, SERVICE_QUERY_STATUS, SERVICE_RUNNING, SERVICE_STATUS,
 };
-use windows::Win32::System::Threading::{GetExitCodeProcess, INFINITE, WaitForSingleObject};
+use windows::Win32::System::Threading::{GetExitCodeProcess, WaitForSingleObject};
 use windows::Win32::UI::Shell::{
     SEE_MASK_NOASYNC, SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW, ShellExecuteExW,
 };
@@ -26,6 +26,9 @@ const INSTALLER_ARGS: &str = "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /NOCANCEL
 const SERVICE_NAME: &str = "Poise";
 /// 等服务启动的最长时间。
 const SERVICE_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// 等安装程序最多这么久（正常不到一分钟；要关闭正在运行的 Poise、复制文件、注册服务）。
+const INSTALL_TIMEOUT_MS: u32 = 10 * 60_000;
 
 /// 以管理员身份运行安装程序（系统会弹出权限提示）并等它结束。
 pub fn run_installer(installer: &Path, owner: isize) -> Result<(), Failure> {
@@ -52,12 +55,15 @@ pub fn run_installer(installer: &Path, owner: isize) -> Result<(), Failure> {
         });
     }
     let process = OwnedHandle::from_raw(info.hProcess);
-    // SAFETY: 等待自己启动的进程。
-    unsafe { WaitForSingleObject(process.raw(), INFINITE) };
+    // SAFETY: 等待自己启动的进程。安装程序卡住时不一直等下去（进度窗口会一直停在"安装中"）。
+    if unsafe { WaitForSingleObject(process.raw(), INSTALL_TIMEOUT_MS) } != WAIT_OBJECT_0 {
+        log::warn!("安装程序 {} 分钟内没有结束", INSTALL_TIMEOUT_MS / 60_000);
+        return Err(Failure::Unfinished("安装程序没有及时结束".into()));
+    }
     let mut code = 0u32;
     // SAFETY: 进程句柄有效，输出到本地变量。
     unsafe { GetExitCodeProcess(process.raw(), &mut code) }
-        .map_err(|e| Failure::Launch(e.message()))?;
+        .map_err(|e| Failure::Unfinished(e.message()))?;
     log::info!("安装程序结束，退出码 {code}");
     if code == 0 {
         Ok(())

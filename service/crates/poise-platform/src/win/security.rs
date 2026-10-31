@@ -8,8 +8,8 @@ use windows::Win32::Security::{PSECURITY_DESCRIPTOR, SECURITY_ATTRIBUTES};
 
 use crate::win::wide::WideString;
 
-/// SYSTEM、管理员完全控制；普通用户只读。受保护的 DACL，不继承上级权限。
-pub const DATA_DIR_SDDL: &str = "D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;0x1200a9;;;BU)";
+/// 所有者是管理员组；SYSTEM、管理员完全控制，普通用户只读。受保护的 DACL，不继承上级权限。
+pub const DATA_DIR_SDDL: &str = "O:BAD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;0x1200a9;;;BU)";
 
 /// SYSTEM、管理员完全控制；本机交互登录用户可读写。远程连接另由管道标志拒绝。
 pub const SERVICE_PIPE_SDDL: &str = "D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGW;;;IU)";

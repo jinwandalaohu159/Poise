@@ -72,12 +72,14 @@ fn games_switch_the_mode_and_stay_active_when_alt_tabbed() {
     let mut sim = Sim::new(vec![
         Proc {
             cpu_pct: 300.0,
-            renders_fullscreen: true,
             ..app(1)
         },
         app(2),
     ]);
+    // 游戏启动：先在加载，过一会儿全屏开始渲染（显卡占用要测一次才知道，那时已经量到了它的处理器占用）。
     sim.foreground = Some(1);
+    sim.run_for(TICK_MS);
+    sim.proc_mut(1).renders_fullscreen = true;
     sim.run_for(TICK_MS);
     // 自动识别的游戏要持续几秒才确认，但不等确认就先放到大核；别的程序不等确认不让路。
     assert_eq!(sim.mode(), Mode::Balanced);
@@ -100,6 +102,36 @@ fn games_switch_the_mode_and_stay_active_when_alt_tabbed() {
         set: CoreSet::Domains(0b1)
     }));
     assert_eq!(sim.adjustments_per_process().get(&1), Some(&2));
+}
+
+/// 游戏挂在后台不玩（最小化、暂停，几乎不用处理器）：过一阵放到一边，回到日常模式，别的程序不再为它让路；
+/// 切回游戏立即恢复，不用重新等确认。
+#[test]
+fn a_game_left_idle_in_the_background_is_set_aside_until_it_comes_back() {
+    const GAME: Pid = 1;
+    const BROWSER: Pid = 2;
+    let game = Proc {
+        cpu_pct: 200.0,
+        preference: AppPreference::Game,
+        ..app(GAME)
+    };
+    let mut sim = Sim::new(vec![game, app(BROWSER)]);
+    sim.foreground = Some(GAME);
+    sim.run_for(60_000);
+    assert_eq!(sim.mode(), Mode::Full);
+    // 最小化，去浏览网页。
+    sim.foreground = Some(BROWSER);
+    sim.proc_mut(GAME).cpu_pct = 2.0;
+    sim.run_for(2 * 60_000);
+    assert_eq!(sim.mode(), Mode::Full);
+    sim.run_for(5 * 60_000);
+    assert_eq!(sim.mode(), Mode::Balanced);
+    assert!(sim.last_plan.as_ref().unwrap().game.is_none());
+    // 切回游戏：立即恢复。
+    sim.foreground = Some(GAME);
+    sim.proc_mut(GAME).cpu_pct = 200.0;
+    sim.run_for(TICK_MS);
+    assert_eq!(sim.mode(), Mode::Full);
 }
 
 /// 复盘"一局结束回到客户端，选完英雄再进下一局"：中间不切回日常模式（每次切换散热模式都卡一下）。
@@ -185,11 +217,42 @@ fn background_work_yields_sooner_while_gaming() {
     assert!(!sim.is_yielded(CLIENT));
     sim.run_for(16_000);
     assert!(sim.is_yielded(CLIENT));
+    // 负载轻（5%，达不到平时的门槛）：挪开、降优先级，但不节能（不让它的输入、画面变迟）。
+    assert_eq!(sim.state_of(CLIENT), Some(Desired::NUDGED));
     assert_eq!(sim.state_of(GAME), Some(Desired::GAME));
     // 回到客户端：立即恢复。
     sim.foreground = Some(CLIENT);
     sim.run_for(TICK_MS);
     assert!(!sim.is_yielded(CLIENT));
+}
+
+/// 游戏停在菜单里、人走开了：后台的下载不再按"需求高"的低门槛让路（只是轻负载的恢复，
+/// 游戏自己照样在大核上）；人回来一动鼠标，立即回到需求高。
+#[test]
+fn walking_away_from_a_game_menu_lets_light_background_work_continue() {
+    const GAME: Pid = 1;
+    const DOWNLOAD: Pid = 2;
+    let mut sim = Sim::new(vec![
+        Proc {
+            cpu_pct: 30.0,
+            preference: AppPreference::Game,
+            ..app(GAME)
+        },
+        Proc {
+            cpu_pct: 5.0,
+            ..app(DOWNLOAD)
+        },
+    ]);
+    sim.foreground = Some(GAME);
+    sim.run_for(60_000);
+    assert!(sim.is_yielded(DOWNLOAD));
+    sim.idle_ms = 6 * 60_000;
+    sim.run_for(60_000);
+    assert!(!sim.is_yielded(DOWNLOAD));
+    assert_eq!(sim.state_of(GAME), Some(Desired::GAME));
+    sim.idle_ms = 0;
+    sim.run_for(60_000);
+    assert!(sim.is_yielded(DOWNLOAD));
 }
 
 /// 复盘"玩游戏时，聊天软件的通知弹窗一下下抢走前台"：每次被抢走都会立即恢复它（可能是用户切过去了），
@@ -338,4 +401,25 @@ fn replay_two_matches_with_a_lobby_in_between() {
     // 不玩了：模式回到日常，更新程序最多只降优先级（用户在客户端里忙）。
     assert_eq!(sim.mode(), Mode::Balanced);
     assert!(sim.state_of(UPDATER).is_none_or(|d| d == Desired::LOWERED));
+}
+
+/// 日志复盘：像游戏（前台全屏、显卡在渲染）的进程却一点处理器都不用（例如游戏的崩溃处理进程被当成了
+/// 前台）：不当成游戏放到大核，也不为它让路。
+#[test]
+fn a_lookalike_game_doing_no_work_gets_nothing() {
+    const HELPER: Pid = 1;
+    let mut sim = Sim::new(vec![
+        Proc {
+            cpu_pct: 0.0,
+            ..app(HELPER)
+        },
+        app(2),
+    ]);
+    sim.foreground = Some(HELPER);
+    sim.run_for(TICK_MS);
+    sim.proc_mut(HELPER).renders_fullscreen = true;
+    sim.run_for(4_000);
+    assert_eq!(sim.cores_of(HELPER), CoreSet::All);
+    assert!(!sim.verdicts_of(HELPER).contains(&Verdict::Focused));
+    assert!(sim.actions_on(2).is_empty());
 }

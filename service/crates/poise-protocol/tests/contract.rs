@@ -12,7 +12,7 @@ use poise_core::cleanup::{
 use poise_core::diagnose::{Health, HealthCode, HistoryPoint, Level, StutterCause, StutterReport};
 use poise_core::power_settings::PowerSettingKind;
 use poise_core::prefs::{AppPreference, GameMode, Mode};
-use poise_core::schedule::{Cause, Pressure, Verdict};
+use poise_core::schedule::{Cause, DemandReason, Pressure, Verdict};
 use poise_protocol::{
     Adjustment, AdvisoryDto, AppEntry, AppKind, AppProcess, AppSchedule, CleanupOverview,
     CleanupResult, CleanupTrigger, CoreDomainDto, CoreMap, CoreSpan, CoreUse, CpuDto, Diagnosis,
@@ -465,7 +465,8 @@ fn events() -> EventPage {
     };
     let list = vec![
         Event::Demand {
-            level: Pressure::Normal,
+            level: Pressure::High,
+            reason: Some(DemandReason::Focus),
         },
         Event::Program {
             program: program.clone(),
@@ -544,6 +545,23 @@ fn events() -> EventPage {
             preference: AppPreference::Background,
         },
         Event::SmartSchedule { enabled: false },
+        Event::Program {
+            program: ProgramRef {
+                pid: 9,
+                name: "Game".into(),
+                path: String::new(),
+            },
+            from: Verdict::Normal,
+            to: Verdict::Focused,
+            cores: CoreSpan {
+                all: false,
+                main: true,
+                others: 0,
+            },
+            load_pct: 35,
+            disk_mb_s: 0,
+            cause: Some(Cause::LooksLikeGame),
+        },
     ];
     EventPage {
         entries: list

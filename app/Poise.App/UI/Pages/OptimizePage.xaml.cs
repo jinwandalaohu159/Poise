@@ -1,5 +1,6 @@
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Navigation;
 using Poise.App.UI.Controls;
 using Poise.Core.Localization;
 using Poise.Core.Presentation;
@@ -21,10 +22,11 @@ public sealed partial class OptimizePage : Page
         OptimizeButton.Action = async () => Result.Show(await Vm.OptimizeAllAsync());
         Vm.SummaryChanged += ShowSummary;
         Vm.Error += ErrorBar.ShowError;
-        Loaded += async (_, _) => await Vm.LoadAsync();
     }
 
     public OptimizeViewModel Vm { get; } = new(AppHost.Current);
+
+    protected override async void OnNavigatedTo(NavigationEventArgs e) => await Vm.LoadAsync();
 
     private void ShowSummary(OptimizeSummary s)
     {

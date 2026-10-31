@@ -7,21 +7,24 @@ namespace Poise.App.UI.ViewModels;
 
 /// <summary>
 /// 主页和托盘面板的操作：切换模式和开关、一键清理、一键优化、"建议重启"稍后提醒。
-/// 显示内容由 <see cref="HomeViewBuilder"/> 换算，状态或语言变化时重新生成。
+/// 显示内容由 <see cref="HomeViewBuilder"/> 换算，状态或语言变化时重新生成。两边共用一个（见 <see cref="AppHost.Home"/>），
+/// 各自在显示期间订阅 <see cref="Updated"/>。
 /// </summary>
 public sealed class HomeViewModel : IDisposable
 {
     private readonly AppHost _host;
 
+    private HomeView? _current;
+
     public HomeViewModel(AppHost host)
     {
         _host = host;
-        Current = Rebuild();
         host.Status.Changed += OnChanged;
         Loc.Changed += OnChanged;
     }
 
-    public HomeView Current { get; private set; }
+    /// <summary>当前的显示内容（状态或语言变了之后，第一次用到时才重新换算）。</summary>
+    public HomeView Current => _current ??= Rebuild();
 
     /// <summary>已经拿到第一次状态。之前不要显示 <see cref="Current"/>（那只是"未连接"占位）。</summary>
     public bool Ready => _host.Status.HasResult;
@@ -40,10 +43,11 @@ public sealed class HomeViewModel : IDisposable
 
     private void OnChanged()
     {
-        Current = Rebuild();
-        if (Ready)
+        _current = null;
+        // 没有人在看（托盘面板收起着）：先不换算。
+        if (Ready && Updated is not null)
         {
-            Updated?.Invoke(Current);
+            Updated(Current);
         }
     }
 
@@ -72,7 +76,7 @@ public sealed class HomeViewModel : IDisposable
         catch (Exception e) when (e is ServiceUnavailableException or ServiceErrorException)
         {
             // 状态轮询会把"未连接"显示出来，这里不另外打扰用户。
-            ErrorText.For(e);
+            ErrorText.Log(e);
         }
     }
 
@@ -81,22 +85,22 @@ public sealed class HomeViewModel : IDisposable
     {
         try
         {
-            OptimizeUpdated?.Invoke(OptimizeSummary.From(await _host.Api.ListOptimizationsAsync()));
+            OptimizeUpdated?.Invoke(OptimizeSummary.From(await _host.Optimizations.GetAsync()));
         }
         catch (Exception e) when (e is ServiceUnavailableException or ServiceErrorException)
         {
-            ErrorText.For(e);
+            ErrorText.Log(e);
         }
     }
 
-    public Task<Feedback> CleanAsync() => CleanupCommand.RunAsync(_host, change => _host.Status.ChangeAsync(change));
+    public Task<Feedback> CleanAsync() => CleanupCommand.RunAsync(_host, _host.Status.RefreshAsync);
 
     public async Task<Feedback> OptimizeAsync()
     {
         try
         {
             var report = await _host.Api.ApplyRecommendedAsync();
-            var items = await _host.Api.ListOptimizationsAsync();
+            var items = await _host.Optimizations.ReloadAsync();
             OptimizeUpdated?.Invoke(OptimizeSummary.From(items));
             var slowPlugins = items.Count(i => i.Item.Group == "context_menu" && i.Item.SlowHint && !i.IsOptimized);
             var message = report.Applied.Count > 0 ? Loc.Format("optimize.done", report.Applied.Count) : Loc.Get("optimize.nothing");

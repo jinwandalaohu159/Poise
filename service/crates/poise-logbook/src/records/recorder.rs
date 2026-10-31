@@ -1,7 +1,8 @@
 //! 把每轮的摘要（见 [`Round`]）汇总成一段一段的记录。纯计算，不读系统、不写盘。
 //!
 //! 一段从出现重点程序开始，到调度不再保持重点程序为止（两局游戏之间的短暂间隙算同一段）；
-//! 结束时间是最后一次有重点程序的时刻。太短的不记。
+//! 结束时间是最后一次有重点程序的时刻。太短的不记。两轮之间隔了很久（电脑睡眠过）时，之前的一段到此为止，
+//! 醒来后的算新的一段。
 
 use std::collections::HashSet;
 
@@ -14,8 +15,10 @@ use crate::round::Round;
 const MAX_PROGRAMS: usize = 5;
 /// 短于这个时长的不记（一次短暂的编译、打开一个大文件）。
 const MIN_SESSION_MS: Millis = 30_000;
-/// 两轮之间的间隔最多按这么久算（电脑睡眠、服务卡住时不把空白算进时长）。
+/// 两轮之间的间隔最多按这么久算（服务卡住时不把空白算进时长）。
 const MAX_STEP_MS: Millis = 10_000;
+/// 两轮之间隔了这么久：电脑睡眠过，之前的一段结束。
+const GAP_SPLITS_MS: u64 = 60_000;
 
 #[derive(Debug, Default)]
 pub(crate) struct SessionRecorder {
@@ -28,14 +31,21 @@ impl SessionRecorder {
         if !round.focused {
             return self.finish();
         }
+        let slept = self
+            .open
+            .as_ref()
+            .is_some_and(|o| round.unix_ms.saturating_sub(o.last_at) > GAP_SPLITS_MS);
+        let ended = if slept { self.finish() } else { None };
         if self.open.is_none() {
             if round.focus.is_empty() {
-                return None;
+                return ended;
             }
             self.open = Some(Open::start(round.unix_ms));
         }
-        self.open.as_mut()?.add(round);
-        None
+        if let Some(open) = self.open.as_mut() {
+            open.add(round);
+        }
+        ended
     }
 
     /// 结束正在记录的一段（Poise 暂停、服务停止时）。够长时返回它的记录。
@@ -50,8 +60,9 @@ impl SessionRecorder {
 #[derive(Debug)]
 struct Open {
     record: SessionRecord,
-    /// 与 `record.programs` 一一对应。
-    keys: Vec<ProcessKey>,
+    /// 与 `record.programs` 一一对应：程序，以及它作为重点程序的累计毫秒数（按毫秒累计，
+    /// 每轮的零头不会被舍掉）。
+    keys: Vec<(ProcessKey, Millis)>,
     yielded: HashSet<ProcessKey>,
     last_at: u64,
     cpu_sum: f64,
@@ -97,10 +108,10 @@ impl Open {
             r.ended_unix_ms = round.unix_ms;
         }
         for f in &round.focus {
-            let i = match self.keys.iter().position(|k| *k == f.key) {
+            let i = match self.keys.iter().position(|(k, _)| *k == f.key) {
                 Some(i) => i,
                 None => {
-                    self.keys.push(f.key);
+                    self.keys.push((f.key, 0));
                     r.programs.push(RecordProgram {
                         name: f.name.clone(),
                         path: f.path.clone(),
@@ -112,9 +123,10 @@ impl Open {
                     r.programs.len() - 1
                 }
             };
+            self.keys[i].1 += step;
             let p = &mut r.programs[i];
             p.game |= f.game;
-            p.focused_secs += (step / 1000) as u32;
+            p.focused_secs = (self.keys[i].1 / 1000) as u32;
             p.peak_load_pct = p.peak_load_pct.max(f.load_pct);
             if f.domains.count_ones() > p.widest_domains.count_ones() {
                 p.widest_domains = f.domains;
@@ -216,6 +228,42 @@ mod tests {
         assert_eq!(record.cpu_temp_peak, Some(96.0));
         // 40～60 秒那 11 轮各 2 秒。
         assert_eq!(record.throttled_secs, 22);
+    }
+
+    #[test]
+    fn sleeping_ends_the_session_and_waking_starts_a_new_one() {
+        let mut r = SessionRecorder::default();
+        for secs in (0..=40).step_by(2) {
+            assert!(
+                r.observe(&round(secs, true, vec![focus(true, 200, 1)], 70.0))
+                    .is_none()
+            );
+        }
+        // 合上盖子睡了一小时，醒来游戏还开着：之前的一段到此为止。
+        let before = r
+            .observe(&round(3640, true, vec![focus(true, 200, 1)], 70.0))
+            .expect("睡眠前的一段");
+        assert_eq!(before.programs[0].focused_secs, 40);
+        for secs in (3642..=3680).step_by(2) {
+            r.observe(&round(secs, true, vec![focus(true, 200, 1)], 70.0));
+        }
+        let after = r.finish().expect("醒来后的一段");
+        assert_eq!(after.started_unix_ms, 1_000_000 + 3640 * 1000);
+        assert_eq!(after.programs[0].focused_secs, 40);
+    }
+
+    #[test]
+    fn uneven_rounds_add_up_to_whole_seconds() {
+        let mut r = SessionRecorder::default();
+        let at = |ms: u64| Round {
+            unix_ms: 1_000_000 + ms,
+            ..round(0, true, vec![focus(true, 200, 1)], 70.0)
+        };
+        // 每 1.5 秒一轮（立即重新调度插进来的轮次），共 45 秒：不因每轮舍掉零头只剩 30 秒。
+        for i in 0..=30 {
+            r.observe(&at(i * 1500));
+        }
+        assert_eq!(r.finish().unwrap().programs[0].focused_secs, 45);
     }
 
     #[test]

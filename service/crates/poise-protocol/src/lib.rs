@@ -110,12 +110,14 @@ pub enum ErrorCode {
     Internal,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+/// 回复。`result` 是已经写好的 JSON：服务在引擎锁内把结果直接写成文本，发送时原样嵌入，
+/// 不先建一棵 JSON 树、再写第二遍（程序列表、走势一次几十 KB，界面每一两秒取一次）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResponseEnvelope {
     pub id: u64,
     pub ok: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub result: Option<serde_json::Value>,
+    pub result: Option<Box<serde_json::value::RawValue>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub code: Option<ErrorCode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -124,7 +126,7 @@ pub struct ResponseEnvelope {
 
 impl ResponseEnvelope {
     pub fn ok<T: Serialize>(id: u64, value: &T) -> Self {
-        match serde_json::to_value(value) {
+        match serde_json::value::to_raw_value(value) {
             Ok(v) => Self {
                 id,
                 ok: true,

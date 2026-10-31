@@ -2,6 +2,7 @@
     x:Class="Poise.App.UI.Controls.AppRow"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:c="using:Poise.App.UI.Controls"
     xmlns:l="using:Poise.App.UI.Localization"
     xmlns:vm="using:Poise.App.UI.ViewModels">
 
@@ -23,7 +24,8 @@
                         ToolTipService.ToolTip="{x:Bind Item.ExpandLabel, Mode=OneWay}">
                     <FontIcon x:Name="Chevron" FontFamily="{StaticResource IconFont}" Glyph="&#xE76C;" FontSize="10" CenterPoint="5,5,0" />
                 </Button>
-                <Image Grid.Column="1" Source="{x:Bind Item.Icon, Mode=OneWay}" Width="20" Height="20" VerticalAlignment="Center" />
+                <!-- 图标只为显示出来的行读取（列表虚拟化），见 ProgramIcon -->
+                <c:ProgramIcon Grid.Column="1" Path="{x:Bind Item.Path, Mode=OneWay}" VerticalAlignment="Center" />
                 <StackPanel Grid.Column="2" VerticalAlignment="Center">
                     <TextBlock Text="{x:Bind Item.Name, Mode=OneWay}" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" />
                     <!-- 正在运行：调度状态（多个进程时带进程数）；没有运行：路径 -->
@@ -34,9 +36,10 @@
                            HorizontalAlignment="Right" VerticalAlignment="Center" />
                 <TextBlock Grid.Column="4" Text="{x:Bind Item.Memory, Mode=OneWay}" Style="{StaticResource TableNumberTextStyle}"
                            HorizontalAlignment="Right" VerticalAlignment="Center" />
-                <!-- 选项顺序与 AppPreference 一致；写在 XAML 里，保证先有选项再绑定选中项。系统一栏只供查看，没有这一项。 -->
-                <ComboBox Grid.Column="5" HorizontalAlignment="Stretch" VerticalAlignment="Center" Margin="{StaticResource AppsPreferenceGap}"
-                          Visibility="{x:Bind Item.PreferenceVisibility, Mode=OneWay}"
+                <!-- 选项顺序与 AppPreference 一致；写在 XAML 里，保证先有选项再绑定选中项。系统一栏只供查看，
+                     不创建这一项（x:Load）：几百行的列表里每行一个下拉框也是不小的开销。 -->
+                <ComboBox x:Name="Preference" Grid.Column="5" HorizontalAlignment="Stretch" VerticalAlignment="Center" Margin="{StaticResource AppsPreferenceGap}"
+                          x:Load="{x:Bind Item.CanSetPreference, Mode=OneWay}"
                           SelectedIndex="{x:Bind Item.PreferenceIndex, Mode=TwoWay}"
                           DropDownOpened="OnDropDownOpened" DropDownClosed="OnDropDownClosed">
                     <ComboBoxItem Content="{l:L Key=pref.auto}" />
@@ -76,8 +79,8 @@
                                                HorizontalAlignment="Right" VerticalAlignment="Center" />
                                     <TextBlock Grid.Column="4" Text="{x:Bind Memory, Mode=OneWay}" Style="{StaticResource TableNumberTextStyle}"
                                                HorizontalAlignment="Right" VerticalAlignment="Center" />
-                                    <ComboBox Grid.Column="5" HorizontalAlignment="Stretch" VerticalAlignment="Center" Margin="{StaticResource AppsPreferenceGap}"
-                                              Visibility="{x:Bind PreferenceVisibility, Mode=OneWay}"
+                                    <ComboBox x:Name="ProcessPreference" Grid.Column="5" HorizontalAlignment="Stretch" VerticalAlignment="Center" Margin="{StaticResource AppsPreferenceGap}"
+                                              x:Load="{x:Bind CanSetPreference, Mode=OneWay}"
                                               SelectedIndex="{x:Bind PreferenceIndex, Mode=TwoWay}"
                                               DropDownOpened="OnDropDownOpened" DropDownClosed="OnDropDownClosed">
                                         <ComboBoxItem Content="{l:L Key=pref.auto}" />

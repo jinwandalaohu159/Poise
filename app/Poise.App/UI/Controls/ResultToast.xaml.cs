@@ -36,7 +36,15 @@ public sealed partial class ResultToast : UserControl
             e.Cancel = true;
             Hide();
         };
+        // 页面留在导航缓存里时（主页），离开再回来要接着计时，否则提示一直挂着。
         Unloaded += (_, _) => _timer.Stop();
+        Loaded += (_, _) =>
+        {
+            if (_shown)
+            {
+                _timer.Start();
+            }
+        };
     }
 
     public async void Show(Feedback f)

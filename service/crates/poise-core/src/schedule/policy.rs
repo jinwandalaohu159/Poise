@@ -29,7 +29,9 @@
 //! | 自己把优先级调到"高"的程序（录屏、串流、音频工作站开工时会这样做）在后台忙 | 不调整；有重点程序时只让到小核，同发声的程序 |
 //! | 低优先级（用户指定） | 小核 · 低于正常 · 在后台节能 |
 //! | 自动，在后台持续占用处理器，有重点程序、发热或用电池时 | 小核 · 低于正常 · 节能（保持到它回到前台、发声或退出） |
+//! | 同上，但负载轻（达不到需求一般时的门槛：手柄映射、录像、副屏视频） | 小核 · 低于正常（不节能：节能会让输入变迟、画面掉帧） |
 //! | 自动，在后台持续占用处理器，只是正在用的程序在忙 | 低于正常（核心不限、不节能：空闲的核心照样给它用） |
+//! | 自动，让路之后没人需要处理器了、它还在忙 | 低于正常（同上；闲下来才恢复，不来回调整） |
 //! | 自动，在后台闲着，有重点程序时 | 小核（不降优先级、不节能；大核留给重点程序） |
 //! | 自动，在后台闲着 | 不调整（闲着的程序不和谁抢资源，不值得动它） |
 //!
@@ -65,6 +67,8 @@ pub struct ProcessView<'a> {
     pub self_elevated: bool,
     /// 在后台持续占用处理器（由调度器跨周期判断）。
     pub busy: bool,
+    /// 在忙，但负载轻（见 `BusyTracker::heavy`）：完整让路时不节能。
+    pub light: bool,
     /// 正在发声，有重点程序时又在后台忙（由调度器跨周期判断）：只让到小核。
     pub busy_with_audio: bool,
     /// 刚停止使用不久：先不让到小核，来回切换窗口、通知弹窗抢一下前台不会让它来回挪动。
@@ -73,19 +77,14 @@ pub struct ProcessView<'a> {
     pub yield_fully: bool,
 }
 
-/// 正在被用户使用、绝不让路的程序。安全守卫（`safety::SafetyGuard::check_demote`）
-/// 按同样的规则再把关一次：改这里时那边一起改。
+/// 正在被用户使用、绝不让路的程序：用户直接在用的（见 `Classification::in_use_by_user`，安全守卫
+/// 按它再把关一次），加上跨周期才看得出来的——刚用过、正在玩、临时全速、在发声。
 pub fn in_use(v: &ProcessView) -> bool {
-    let c = v.class;
-    c.in_foreground_tree
+    v.class.in_use_by_user()
         || (v.recently_foreground && !v.gaming)
         || v.active_game
         || v.boosted
         || v.audible
-        || matches!(
-            c.preference,
-            AppPreference::AlwaysFast | AppPreference::Game
-        )
 }
 
 /// 用户要求保持快的程序：不让系统自动节能限速。
@@ -116,6 +115,13 @@ pub fn decide(v: &ProcessView) -> (Desired, Verdict) {
 fn decide_cores_freely(v: &ProcessView) -> (Desired, Verdict) {
     use Verdict::*;
     let c = v.class;
+    if c.is_maintenance() {
+        return if v.focusing && !in_use(v) {
+            (Desired::MAINTENANCE_ASIDE, Aside)
+        } else {
+            (Desired::NEUTRAL, Normal)
+        };
+    }
     if !c.is_schedulable() {
         return (Desired::NEUTRAL, Normal);
     }
@@ -156,7 +162,9 @@ fn decide_cores_freely(v: &ProcessView) -> (Desired, Verdict) {
         };
     }
     if v.busy && !in_use(v) {
-        if v.yield_fully {
+        if v.yield_fully && v.light {
+            (Desired::NUDGED, Yielded)
+        } else if v.yield_fully {
             (Desired::YIELDED, Yielded)
         } else {
             (Desired::LOWERED, Lowered)
@@ -209,10 +217,28 @@ mod tests {
             emitting: c.emits_audio,
             self_elevated: false,
             busy,
+            light: false,
             busy_with_audio: false,
             settling: false,
             yield_fully: true,
         }
+    }
+
+    #[test]
+    fn light_busy_programs_move_aside_without_being_throttled() {
+        let c = class(AppPreference::Auto, false);
+        let light = ProcessView {
+            light: true,
+            ..view(&c, true)
+        };
+        assert_eq!(decide(&light), (Desired::NUDGED, Verdict::Yielded));
+        assert_eq!(Desired::NUDGED.eco, crate::action::EcoQos::Default);
+        // 只降优先级的时候不区分轻重。
+        let lowered = ProcessView {
+            yield_fully: false,
+            ..light
+        };
+        assert_eq!(decide_state(&lowered), Desired::LOWERED);
     }
 
     #[test]
@@ -328,6 +354,16 @@ mod tests {
             ..class(AppPreference::Auto, false)
         };
         assert_eq!(decide_state(&view(&c, true)), Desired::PROTECTED);
+    }
+
+    #[test]
+    fn windows_maintenance_only_steps_aside_while_something_is_in_focus() {
+        let mut c = class(AppPreference::Auto, false);
+        c.schedule = ScheduleScope::Maintenance;
+        let mut v = view(&c, true);
+        assert_eq!(decide(&v), (Desired::NEUTRAL, Verdict::Normal));
+        v.focusing = true;
+        assert_eq!(decide(&v), (Desired::MAINTENANCE_ASIDE, Verdict::Aside));
     }
 
     #[test]

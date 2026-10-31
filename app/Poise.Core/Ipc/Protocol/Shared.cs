@@ -2,6 +2,7 @@
 // 这里是序列化选项、各页共用的枚举和失败分类。
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Text.Json.Serialization.Metadata;
 
 namespace Poise.Core.Ipc;
 
@@ -9,11 +10,17 @@ public static class ProtocolJson
 {
     public const int Version = 1;
 
+    /// <summary>
+    /// 回复按编译时生成的代码读（见 <see cref="ProtocolContext"/>），其余（请求参数）按反射。
+    /// 事件的种类字段不一定排在最前（见 <see cref="PoiseEvent"/>），允许它出现在任何位置。
+    /// </summary>
     public static readonly JsonSerializerOptions Options = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
         DefaultIgnoreCondition = JsonIgnoreCondition.Never,
         Converters = { new JsonStringEnumConverter(JsonNamingPolicy.SnakeCaseLower) },
+        TypeInfoResolver = JsonTypeInfoResolver.Combine(ProtocolContext.Default, new DefaultJsonTypeInfoResolver()),
+        AllowOutOfOrderMetadataProperties = true,
     };
 }
 

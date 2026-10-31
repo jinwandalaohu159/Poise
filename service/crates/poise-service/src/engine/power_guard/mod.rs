@@ -6,7 +6,11 @@
 //! - 用户应用过的电源优化项不再是优化状态（例如新版本覆盖了更多处理器等级）：重新应用，补上新的位置；
 //! - Windows 电源模式滑块盖住了计划里的设置：记一条日志说明（滑块是用户的选择，不替用户改）。
 //!
-//! 只读几个电源设置，每次不到一毫秒。
+//! 读都在电源设置读取线程里（[`check`]，见 [`crate::power_reader`]）：每 10 秒看一眼当前电源计划，到时间时
+//! 做一次完整检查；引擎下一轮取结果，只在真有变化时写入（这里）。电源服务忙的时候读一次要几百毫秒，
+//! 调度从不等它。还排在电源执行线程里的写入，检查时当作已经写下：刚切换完模式也不会误认成被改掉。
+
+mod check;
 
 use poise_core::journal::JournalEntry;
 use poise_core::model::Millis;
@@ -15,9 +19,11 @@ use poise_core::power_settings;
 use poise_core::setting::{Target, Value};
 use poise_platform::settings::power_plan;
 use poise_protocol::Event;
+use windows::core::GUID;
 
 use super::Engine;
-use super::changes::GAME_PREFIX;
+use crate::power_reader::PowerReader;
+use check::{PowerCheck, PowerRead, guarded};
 
 /// 平时多久检查一次有没有被改掉。
 const CHECK_EVERY_MS: Millis = 60_000;
@@ -25,21 +31,45 @@ const CHECK_EVERY_MS: Millis = 60_000;
 /// （实测开机后两秒就被改掉了）。
 const WATCHFUL_EVERY_MS: Millis = 10_000;
 const WATCHFUL_FOR_MS: Millis = 3 * 60_000;
+/// 两次完整检查之间，多久看一眼当前电源计划（每次都要问电源服务；换了计划晚几秒发现没关系）。
+const SCHEME_EVERY_MS: Millis = 10_000;
 
-#[derive(Default)]
 pub(super) struct PowerGuard {
-    checked_at: Option<Millis>,
-    /// 勤查到什么时候；None 表示从服务启动算起（引擎的时间从 0 开始）。
-    watchful_until: Option<Millis>,
+    reader: PowerReader<PowerRead>,
+    cadence: Cadence,
     /// 上次看到的当前电源计划。
     scheme: Option<String>,
-    /// 上次看到的电源模式滑块（None 表示没有覆盖）。
+    /// 上次看到的电源模式滑块（None 表示还没看过）。
     overlay: Option<Option<String>>,
 }
 
 impl PowerGuard {
+    pub fn start() -> Self {
+        Self {
+            reader: PowerReader::start(),
+            cadence: Cadence::default(),
+            scheme: None,
+            overlay: None,
+        }
+    }
+
     /// 下次采样时立即检查，之后勤查一段时间（例如刚登录，用户的程序正在启动）。
     pub fn check_soon(&mut self, now: Millis) {
+        self.cadence.check_soon(now);
+    }
+}
+
+/// 什么时候做完整检查、看一眼当前电源计划。
+#[derive(Default)]
+struct Cadence {
+    checked_at: Option<Millis>,
+    scheme_at: Option<Millis>,
+    /// 勤查到什么时候；None 表示从服务启动算起（引擎的时间从 0 开始）。
+    watchful_until: Option<Millis>,
+}
+
+impl Cadence {
+    fn check_soon(&mut self, now: Millis) {
         self.checked_at = None;
         self.watchful_until = Some(now + WATCHFUL_FOR_MS);
     }
@@ -53,42 +83,84 @@ impl PowerGuard {
         self.checked_at
             .is_none_or(|t| now.saturating_sub(t) >= every)
     }
+
+    fn scheme_due(&self, now: Millis) -> bool {
+        self.scheme_at
+            .is_none_or(|t| now.saturating_sub(t) >= SCHEME_EVERY_MS)
+    }
 }
 
 impl Engine {
-    /// 每轮采样调用。观察模式下不写入，什么都不做。
+    /// 每轮采样调用：处理读取线程交回的结果，到时间时再提交下一次读取（上一次还没读完时不提交）。
+    /// 观察模式下不写入，什么都不做。
     pub(super) fn guard_power(&mut self, now: Millis) {
         if self.cfg.dry_run {
             return;
         }
-        let scheme = active_scheme();
-        if scheme != self.power_guard.scheme {
-            let previous = std::mem::replace(&mut self.power_guard.scheme, scheme.clone());
-            if let Some(old) = previous {
-                self.logbook.event_with(
-                    Event::PlanSwitched,
-                    format!("{old} → {}", scheme.as_deref().unwrap_or("?")),
-                );
-                self.hardware.power_plan_changed();
-                self.power_guard.check_soon(now);
+        for read in self.power_guard.reader.results() {
+            match read {
+                PowerRead::Scheme(scheme) => self.on_scheme(scheme, now),
+                PowerRead::Checked(check) => self.on_check(check, now),
             }
         }
-        if !self.power_guard.due(now) {
+        let guard = &mut self.power_guard;
+        if !guard.reader.idle() {
             return;
         }
-        self.power_guard.checked_at = Some(now);
-        self.note_overlay();
-        if let Some(scheme) = &scheme {
-            self.restore_drifted(scheme, now);
-        }
-        self.complete_power_items(now);
+        let job = if guard.cadence.due(now) {
+            guard.cadence.checked_at = Some(now);
+            guard.cadence.scheme_at = Some(now);
+            check::check_job(
+                self.changes.journal().clone(),
+                self.changes.pending_writes(),
+            )
+        } else if guard.cadence.scheme_due(now) {
+            guard.cadence.scheme_at = Some(now);
+            check::scheme_job()
+        } else {
+            return;
+        };
+        guard.reader.submit(job);
     }
 
-    /// Poise 在当前计划里写入、又被别处改掉的电源设置：改回来。
-    fn restore_drifted(&mut self, scheme: &str, now: Millis) {
-        let drifted = self.changes.journal().drifted(&self.changes.store, |e| {
-            !e.owner.starts_with(GAME_PREFIX) && in_scheme(&e.target, scheme)
-        });
+    /// 电源计划换了：当前模式重新写入新计划，之后勤查一段时间。读不到时不算换了。
+    fn on_scheme(&mut self, scheme: Option<String>, now: Millis) {
+        let Some(scheme) = scheme else {
+            return;
+        };
+        if self.power_guard.scheme.as_ref() == Some(&scheme) {
+            return;
+        }
+        if let Some(old) = self.power_guard.scheme.replace(scheme.clone()) {
+            self.logbook
+                .event_with(Event::PlanSwitched, format!("{old} → {scheme}"));
+            self.hardware.power_plan_changed();
+            self.power_guard.check_soon(now);
+        }
+    }
+
+    fn on_check(&mut self, check: PowerCheck, now: Millis) {
+        self.on_scheme(check.scheme, now);
+        self.note_overlay(check.overlay);
+        if let Some(scheme) = self.power_guard.scheme.clone() {
+            self.restore_drifted(check.drifted, &scheme, now);
+        }
+        self.complete_power_items(&check.reverted, now);
+    }
+
+    /// Poise 在当前计划里写入、又被别处改掉的电源设置：改回来。检查期间日志变了的条目（换了模式、
+    /// 别的来源叠在上面）不算；还排在执行线程里的写入检查时当作已经写下（见 `check`）。
+    fn restore_drifted(
+        &mut self,
+        drifted: Vec<(JournalEntry, Option<Value>)>,
+        scheme: &str,
+        now: Millis,
+    ) {
+        let journal = self.changes.journal();
+        let drifted: Vec<_> = drifted
+            .into_iter()
+            .filter(|(e, _)| guarded(e, scheme) && journal.is_current(e))
+            .collect();
         if drifted.is_empty() {
             return;
         }
@@ -114,15 +186,16 @@ impl Engine {
         }
     }
 
-    /// 用户应用过、现在却不是优化状态的电源项：重新应用。
-    fn complete_power_items(&mut self, now: Millis) {
-        let items = optimize::power_items();
-        let reverted: Vec<OptimizationItem> =
-            optimize::reverted_power_items(&items, &self.changes.store, self.changes.journal())
-                .into_iter()
-                .cloned()
-                .collect();
-        for item in reverted {
+    /// 用户应用过、现在却不是优化状态的电源项：重新应用（检查期间用户已经还原了的不算）。
+    fn complete_power_items(&mut self, reverted: &[String], now: Millis) {
+        if reverted.is_empty() {
+            return;
+        }
+        let items: Vec<OptimizationItem> = optimize::power_items()
+            .into_iter()
+            .filter(|item| reverted.contains(&item.id) && self.changes.journal().owns(&item.id))
+            .collect();
+        for item in items {
             match self.changes.edit(|s, j| optimize::apply(&item, s, j, now)) {
                 Ok(()) => self.logbook.event(Event::OptimizationReapplied {
                     id: item.id.clone(),
@@ -133,8 +206,7 @@ impl Engine {
     }
 
     /// 电源模式滑块变化时记一条日志：处于"最佳能效"时，它会盖住计划里的能效偏好、最小处理器状态等。
-    fn note_overlay(&mut self) {
-        let overlay = power_plan::effective_overlay();
+    fn note_overlay(&mut self, overlay: Option<GUID>) {
         let text = overlay.map(|g| power_plan::guid_text(&g));
         if self.power_guard.overlay.as_ref() == Some(&text) {
             return;
@@ -151,16 +223,6 @@ impl Engine {
     }
 }
 
-fn active_scheme() -> Option<String> {
-    power_plan::active_scheme()
-        .ok()
-        .map(|g| power_plan::guid_text(&g))
-}
-
-fn in_scheme(target: &Target, active: &str) -> bool {
-    matches!(target, Target::PowerSetting { scheme: Some(s), .. } if s.eq_ignore_ascii_case(active))
-}
-
 /// 电源设置的数值；不存在或不是数值时为空。
 fn dword(v: Option<&Value>) -> Option<u32> {
     match v {
@@ -175,7 +237,7 @@ mod tests {
 
     #[test]
     fn checks_often_after_start_and_login_then_every_minute() {
-        let mut g = PowerGuard::default();
+        let mut g = Cadence::default();
         assert!(g.due(0));
         g.checked_at = Some(0);
         assert!(!g.due(5_000));
@@ -192,17 +254,9 @@ mod tests {
     }
 
     #[test]
-    fn only_settings_in_the_active_scheme_are_guarded() {
-        let t = |scheme: Option<&str>| Target::PowerSetting {
-            scheme: scheme.map(Into::into),
-            subgroup: power_settings::SUB_PROCESSOR.into(),
-            setting: power_settings::BOOST_MODE.into(),
-            ac: true,
-        };
-        assert!(in_scheme(&t(Some("ABC")), "abc"));
-        assert!(!in_scheme(&t(Some("def")), "abc"));
-        assert!(!in_scheme(&t(None), "abc"));
+    fn setting_values_read_as_numbers() {
         assert_eq!(dword(Some(&Value::Dword(2))), Some(2));
+        assert_eq!(dword(Some(&Value::String("x".into()))), None);
         assert_eq!(dword(None), None);
     }
 }

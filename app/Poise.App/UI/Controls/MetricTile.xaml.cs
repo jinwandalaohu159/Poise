@@ -1,20 +1,22 @@
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
-using Poise.App.UI.Theme;
 using Poise.Core.Presentation;
 
 namespace Poise.App.UI.Controls;
 
-/// <summary>一个指标：数值变化时滚动到新值，颜色与进度条随等级变化。</summary>
+/// <summary>
+/// 一个指标：数值、颜色与进度条随等级变化。数值每秒更新，直接换成新值：每秒都滚一遍的话，
+/// 界面开着时就一直在跑动画。和上次显示的一样时什么都不做；提示框只建一个，之后只换文字。
+/// </summary>
 public sealed partial class MetricTile : UserControl
 {
-    private readonly NumberRoller _roller;
+    private readonly ToolTip _tip = new();
+    private MetricView? _shown;
 
     public MetricTile()
     {
         InitializeComponent();
-        _roller = new NumberRoller(v => ValueText.Text = v.ToString("0"));
     }
 
     /// <summary>紧凑模式（托盘面板）：不显示进度条，数字与单位都小一号，单位仍与数字底边对齐。</summary>
@@ -42,21 +44,37 @@ public sealed partial class MetricTile : UserControl
 
     public void Show(MetricView m)
     {
+        if (m == _shown)
+        {
+            return;
+        }
+        var before = _shown;
+        _shown = m;
         LabelText.Text = m.Label;
         UnitText.Text = m.Unit;
-        VisualStateManager.GoToState(this, m.Level.ToString(), true);
-        ToolTipService.SetToolTip(this, string.IsNullOrEmpty(m.Tooltip) ? null : m.Tooltip);
-        AutomationProperties.SetName(this, $"{m.Label} {(m.Value is { } v ? $"{v:0}{m.Unit}" : "—")}");
-        Bar.SetLevel(m.Level == Poise.Core.Ipc.Level.Good ? null : m.Level);
+        if (before?.Level != m.Level)
+        {
+            VisualStateManager.GoToState(this, m.Level.ToString(), true);
+            Bar.SetLevel(m.Level == Poise.Core.Ipc.Level.Good ? null : m.Level);
+        }
+        if (before?.Tooltip != m.Tooltip)
+        {
+            _tip.Content = m.Tooltip;
+            ToolTipService.SetToolTip(this, string.IsNullOrEmpty(m.Tooltip) ? null : _tip);
+        }
+        var name = $"{m.Label} {(m.Value is { } v ? $"{v:0}{m.Unit}" : "—")}";
+        if (AutomationProperties.GetName(this) != name)
+        {
+            AutomationProperties.SetName(this, name);
+        }
         Bar.Fraction = m.Fraction ?? 0;
         if (m.Value is { } value)
         {
             UnitText.Visibility = Visibility.Visible;
-            _roller.RollTo(value);
+            ValueText.Text = value.ToString("0");
         }
         else
         {
-            _roller.Reset();
             ValueText.Text = "—";
             UnitText.Visibility = Visibility.Collapsed;
         }

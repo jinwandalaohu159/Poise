@@ -6,6 +6,7 @@ using Poise.Core.Settings;
 using Poise.Core.Updates;
 using Poise.App.UI.Services;
 using Poise.App.UI.Theme;
+using Poise.App.UI.ViewModels;
 
 namespace Poise.App;
 
@@ -22,7 +23,10 @@ public sealed class AppHost : IDisposable
         Api = new PoiseApi(Client);
         Status = new StatusMonitor(Api);
         Presence = new UiPresence(Status, Api, dispatcher);
+        Presence.AnyShown += Client.RetryNow;
         Trend = new TrendFeed(Api, Presence, dispatcher);
+        Optimizations = new OptimizationStates(Api);
+        Home = new HomeViewModel(this);
         Updates = new Updater(AppVersion.Installed, UpdateFiles.Default);
         UpdateSchedule = new UpdateSchedule(Updates, dispatcher);
     }
@@ -46,6 +50,12 @@ public sealed class AppHost : IDisposable
     /// <summary>走势图的数据（主页与卡顿诊断共用）。</summary>
     public TrendFeed Trend { get; }
 
+    /// <summary>系统优化项的现状（主页与优化页共用）。</summary>
+    public OptimizationStates Optimizations { get; }
+
+    /// <summary>主页与托盘面板的显示内容和操作（两边共用一份，状态变了只换算一次）。</summary>
+    public HomeViewModel Home { get; }
+
     /// <summary>检查新版本、启动更新助手（设置页显示状态）。</summary>
     public Updater Updates { get; }
 
@@ -63,6 +73,7 @@ public sealed class AppHost : IDisposable
 
     public void Dispose()
     {
+        Home.Dispose();
         UpdateSchedule.Dispose();
         Updates.Dispose();
         Trend.Dispose();

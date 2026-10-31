@@ -1,18 +1,53 @@
-//! 一键清理、延后清理、自动清理，以及最近一次清理的记录。
+//! 一键清理、延后清理、自动清理，以及最近一次清理的记录。这里生成计划、记录结果（在引擎锁内，很快）；
+//! 执行在锁外（见 [`job`]）。
+
+mod job;
 
 use std::collections::HashMap;
 
-use poise_core::action::{ExecError, ExecOutcome};
 use poise_core::classify::Classification;
 use poise_core::cleanup::{
-    self, CleanupConfig, CleanupPlan, CleanupStep, OverviewInput, PlanInput,
+    self, CleanupConfig, CleanupPlan, CleanupStep, Grown, LeakSuspect, OverviewInput, PlanInput,
 };
 use poise_core::model::{Millis, Pid, Snapshot};
 use poise_core::safety::Trigger;
-use poise_protocol::{CleanupOverview, CleanupResult, CleanupTrigger, Event, LastCleanup};
+use poise_protocol::{
+    CleanupOverview, CleanupResult, CleanupTrigger, ErrorCode, Event, LastCleanup,
+};
 
+use super::error::RequestError;
 use super::{Engine, convert, unix_now_ms};
+use job::{Background, ManualSlot, ReadyStep};
+pub use job::{CleanupDone, CleanupJob, ManualTurn};
 
+/// 清理的状态。
+#[derive(Default)]
+pub(super) struct CleanupState {
+    deferred: Vec<CleanupStep>,
+    last_auto_at: Millis,
+    suspects: Vec<LeakSuspect>,
+    /// 与自身基线相比异常增长的进程，与泄漏嫌疑同时刷新。
+    grown: Vec<Grown>,
+    suspects_at: Option<Millis>,
+    /// 健康状态用的清理预演与时间（见 [`Engine::cleanup_preview`]）。
+    preview: Option<(Millis, CleanupPlan)>,
+    last: Option<LastCleanup>,
+    /// 正在单独的线程里执行的自动清理或延后的清理。
+    background: Background,
+    /// 一键清理的执行权（在连接线程里执行，见 [`ManualClean`]）。
+    manual: ManualSlot,
+}
+
+/// 准备好的一键清理：要执行的步骤（在引擎锁外执行），以及已经知道的结果（延后的、提醒）。
+/// 执行完之前占着执行权（`turn`）。
+pub struct ManualClean {
+    pub job: CleanupJob,
+    pub summary: CleanupResult,
+    pub turn: ManualTurn,
+}
+
+/// 服务停止时最多等正在执行的一键清理多久。
+const MANUAL_CLEAN_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
 /// 自动清理的最小间隔。
 const AUTO_CLEAN_EVERY_MS: Millis = 10 * 60_000;
 /// 整机 CPU 超过这个比例时不做自动清理，避免清理本身造成卡顿。
@@ -88,20 +123,54 @@ impl Engine {
         &self.cleanup.preview.as_ref().expect("刚刚算过").1
     }
 
-    /// 用户点了"一键清理"：立即执行全部可清理项；前台有游戏或全屏程序时，会打扰的项目留到之后。
-    pub fn clean_now(&mut self) -> CleanupResult {
+    /// 用户点了"一键清理"：全部可清理项立即执行（交给 [`CleanupJob`] 在引擎锁外执行，执行完再交给
+    /// [`Engine::finish_clean_now`]）；前台有游戏或全屏程序时，会打扰的项目留到之后。
+    /// 服务正在停止、还没有采样结果时为空；上一次一键清理还在执行时报错。
+    pub fn begin_clean_now(&mut self) -> Result<Option<ManualClean>, RequestError> {
+        if self.stopped {
+            return Ok(None);
+        }
+        let Some(turn) = self.cleanup.manual.take() else {
+            return Err(RequestError::new(
+                ErrorCode::Failed,
+                "正在清理，请等这一次做完",
+            ));
+        };
+        self.answers.invalidate();
         let immersive = self.foreground_immersive();
-        let Some(view) = &self.view else {
-            return CleanupResult::default();
+        let Some(view) = self.view.as_ref() else {
+            return Ok(None);
         };
         let plan = self.plan_cleanup(&view.snapshot, &view.classes, Trigger::Manual, immersive);
-        let mut result = CleanupResult {
+        let summary = CleanupResult {
             deferred: plan.deferred.len(),
             advisories: plan.advisories.iter().map(convert::advisory).collect(),
             ..Default::default()
         };
-        for step in &plan.run_now {
-            match self.execute_step(step, Trigger::Manual) {
+        let job = self.cleanup_job(plan.run_now, Trigger::Manual);
+        self.cleanup.deferred = plan.deferred;
+        Ok(Some(ManualClean { job, summary, turn }))
+    }
+
+    /// 服务停止前等正在执行的一键清理做完（最多几秒），不在它重启程序的半途撤销调整。
+    pub(super) fn wait_manual_clean(&self) {
+        if !self.cleanup.manual.wait_idle(MANUAL_CLEAN_WAIT) {
+            log::warn!(
+                "一键清理没在 {} 秒内做完，照常停止",
+                MANUAL_CLEAN_WAIT.as_secs()
+            );
+        }
+    }
+
+    /// 一键清理执行完：记下结果。
+    pub fn finish_clean_now(
+        &mut self,
+        mut result: CleanupResult,
+        done: CleanupDone,
+    ) -> CleanupResult {
+        self.answers.invalidate();
+        for (step, outcome) in &done.outcomes {
+            match outcome {
                 Ok(_) => {
                     if !self.cfg.dry_run {
                         result.freed_bytes += step.memory_bytes;
@@ -121,7 +190,6 @@ impl Engine {
             result.handled.len(),
             result.failed.len(),
         );
-        self.cleanup.deferred = plan.deferred;
         // 清理过的进程不再沿用旧的泄漏判断，等下一轮重新计算。
         self.cleanup.suspects.clear();
         self.cleanup.grown.clear();
@@ -167,46 +235,46 @@ impl Engine {
         })
     }
 
-    /// 执行一个清理步骤。执行前重新核对：进程必须还是同一个（PID 未被复用）。
-    fn execute_step(&self, step: &CleanupStep, trigger: Trigger) -> Result<ExecOutcome, ExecError> {
-        let view = self.view.as_ref().ok_or(ExecError::Gone)?;
-        let current = view
-            .snapshot
-            .find(step.key.pid)
-            .filter(|p| p.facts.key == step.key)
-            .ok_or(ExecError::Gone)?;
-        let class = view.classes.get(&step.key.pid).ok_or(ExecError::Gone)?;
-        self.executor.execute(
-            &step.action,
-            class,
-            current.facts.priority.unwrap_or_default(),
+    /// 把清理步骤和当前的采样核对（进程必须还是同一个，PID 未被复用），准备在锁外执行。
+    fn cleanup_job(&self, steps: Vec<CleanupStep>, trigger: Trigger) -> CleanupJob {
+        let steps = steps
+            .into_iter()
+            .map(|step| {
+                let target = self.view.as_ref().and_then(|view| {
+                    let current = view
+                        .snapshot
+                        .find(step.key.pid)
+                        .filter(|p| p.facts.key == step.key)?;
+                    let class = view.classes.get(&step.key.pid)?;
+                    Some((class.clone(), current.facts.priority.unwrap_or_default()))
+                });
+                ReadyStep { step, target }
+            })
+            .collect();
+        CleanupJob {
+            executor: self.executor.clone(),
             trigger,
-        )
+            steps,
+        }
     }
 
-    /// 用户点过清理、但当时前台有游戏或全屏程序而延后的项目：退出后执行。
+    /// 用户点过清理、但当时前台有游戏或全屏程序而延后的项目：退出后在单独的线程里执行。
     pub(super) fn run_deferred_cleanup(&mut self) {
-        if self.cleanup.deferred.is_empty() || self.foreground_immersive() {
+        if self.cleanup.deferred.is_empty()
+            || self.cleanup.background.busy()
+            || self.foreground_immersive()
+        {
             return;
         }
         let steps = std::mem::take(&mut self.cleanup.deferred);
-        let (mut freed, mut handled) = (0, 0);
-        for step in &steps {
-            match self.execute_step(step, Trigger::Manual) {
-                Ok(_) => {
-                    log::info!("已处理延后的清理项：{}", step.name);
-                    freed += step.memory_bytes;
-                    handled += 1;
-                }
-                Err(e) => log::info!("延后的清理项 {} 未执行：{e}", step.name),
-            }
-        }
-        self.record_cleanup(CleanupTrigger::Deferred, freed, handled, 0);
+        let job = self.cleanup_job(steps, Trigger::Manual);
+        self.cleanup.background.start(job);
     }
 
-    /// 自动清理：只做无感项目，一次只处理一个，游戏/全屏/高负载时不做。
+    /// 自动清理：只做无感项目，一次只处理一个，游戏/全屏/高负载时不做。在单独的线程里执行。
     pub(super) fn auto_clean(&mut self, now: Millis) {
         if !self.settings.auto_clean
+            || self.cleanup.background.busy()
             || now.saturating_sub(self.cleanup.last_auto_at) < AUTO_CLEAN_EVERY_MS
             || self.foreground_immersive()
             || self.activity.system_cpu_pct() > AUTO_CLEAN_MAX_CPU
@@ -216,16 +284,34 @@ impl Engine {
         self.cleanup.last_auto_at = now;
         let Some(view) = &self.view else { return };
         let plan = self.plan_cleanup(&view.snapshot, &view.classes, Trigger::Auto, false);
-        let Some(step) = plan.run_now.first() else {
+        let Some(step) = plan.run_now.into_iter().next() else {
             return;
         };
-        match self.execute_step(step, Trigger::Auto) {
-            Ok(_) => {
-                log::info!("自动清理：{}", step.name);
-                self.record_cleanup(CleanupTrigger::Auto, step.memory_bytes, 1, 0);
+        let job = self.cleanup_job(vec![step], Trigger::Auto);
+        self.cleanup.background.start(job);
+    }
+
+    /// 取回在单独线程里执行完的清理，记下结果。
+    pub(super) fn collect_cleanup(&mut self) {
+        let Some(done) = self.cleanup.background.finished() else {
+            return;
+        };
+        let (trigger, verb) = match done.trigger {
+            Trigger::Auto => (CleanupTrigger::Auto, "自动清理"),
+            _ => (CleanupTrigger::Deferred, "延后的清理项"),
+        };
+        let (mut freed, mut handled) = (0, 0);
+        for (step, outcome) in &done.outcomes {
+            match outcome {
+                Ok(_) => {
+                    log::info!("{verb}：{}", step.name);
+                    freed += step.memory_bytes;
+                    handled += 1;
+                }
+                Err(e) => log::info!("{verb} {} 未执行：{e}", step.name),
             }
-            Err(e) => log::info!("自动清理 {} 未执行：{e}", step.name),
         }
+        self.record_cleanup(trigger, freed, handled, 0);
     }
 
     /// 记录真正做了事的清理（观察模式下什么都没做，不记录），并记一条日志事件。
@@ -251,6 +337,11 @@ impl Engine {
             freed_bytes,
             handled,
         });
+    }
+
+    /// 泄漏嫌疑（卡顿诊断用）。
+    pub(super) fn leak_suspects(&self) -> &[LeakSuspect] {
+        &self.cleanup.suspects
     }
 
     pub(super) fn deferred_count(&self) -> usize {

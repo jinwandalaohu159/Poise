@@ -10,8 +10,8 @@ use windows::Win32::System::Services::{
     SERVICE_STATUS_PROCESS, SERVICE_STOP, SERVICE_STOPPED, StartServiceW,
 };
 
-use crate::observe::services::{ScHandle, open_manager, open_service};
 use crate::win::handle::map_error;
+use crate::win::scm::{ScHandle, open_manager, open_service, running_dependents};
 
 fn query_status(svc: &ScHandle) -> windows::core::Result<SERVICE_STATUS_PROCESS> {
     let mut s = SERVICE_STATUS_PROCESS::default();
@@ -49,9 +49,13 @@ fn wait_for(
     }
 }
 
-/// 停止再启动一个服务，返回新的进程 PID。
+/// 停止再启动一个服务，返回新的进程 PID。有正在运行的依赖服务时不重启（会连带停掉它们）：
+/// 计划里的依赖数可能是一会儿之前数的，这里再核对一次。
 pub fn restart(name: &str) -> Result<Option<Pid>, ExecError> {
     let scm = open_manager(SC_MANAGER_CONNECT).map_err(|e| map_error(&e))?;
+    if running_dependents(&scm, name).map_err(|e| map_error(&e))? > 0 {
+        return Err(ExecError::Failed("有正在运行的服务依赖它".into()));
+    }
     let svc = open_service(
         &scm,
         name,

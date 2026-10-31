@@ -7,6 +7,7 @@ use std::path::Path;
 use poise_core::model::Millis;
 use poise_core::seen_apps::SeenApps;
 use poise_platform::persist::storage::JsonFile;
+use poise_platform::persist::writer::FileWriter;
 
 use super::unix_now_ms;
 
@@ -17,16 +18,18 @@ const REMEMBER_EVERY_MS: Millis = 30_000;
 pub(super) struct RememberedApps {
     apps: SeenApps,
     file: JsonFile<SeenApps>,
+    writer: FileWriter,
     checked_at: Option<Millis>,
 }
 
 impl RememberedApps {
     /// 读回保存的记录，去掉太久没运行、文件已不存在的程序。
-    pub fn open(data_dir: &Path) -> Self {
+    pub fn open(data_dir: &Path, writer: FileWriter) -> Self {
         let file = JsonFile::new(data_dir.join(FILE));
         let mut r = Self {
             apps: file.load().unwrap_or_default(),
             file,
+            writer,
             checked_at: None,
         };
         if r.apps
@@ -75,9 +78,7 @@ impl RememberedApps {
     }
 
     fn save(&self) {
-        if let Err(e) = self.file.save(&self.apps) {
-            log::warn!("保存运行过的程序失败：{e}");
-        }
+        self.file.save_later(&self.apps, &self.writer);
     }
 }
 

@@ -4,7 +4,7 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:c="using:Poise.App.UI.Controls"
     xmlns:l="using:Poise.App.UI.Localization"
-    xmlns:p="using:Poise.Core.Presentation"
+    xmlns:vm="using:Poise.App.UI.ViewModels"
     Background="Transparent">
 
     <ScrollViewer>
@@ -72,7 +72,7 @@
             <Border Style="{StaticResource CardStyle}">
                 <ItemsControl ItemsSource="{x:Bind Vm.Hardware}">
                     <ItemsControl.ItemTemplate>
-                        <DataTemplate x:DataType="p:HardwareRow">
+                        <DataTemplate x:DataType="vm:HardwareRowItem">
                             <!-- 名称在左，数值右对齐 -->
                             <Grid ColumnSpacing="24" Padding="0,6">
                                 <Grid.ColumnDefinitions>
@@ -81,7 +81,7 @@
                                 </Grid.ColumnDefinitions>
                                 <TextBlock Text="{x:Bind Label}" Style="{StaticResource CaptionSecondaryTextStyle}"
                                            VerticalAlignment="Center" TextWrapping="NoWrap" />
-                                <TextBlock Grid.Column="1" Text="{x:Bind Value}" Style="{StaticResource BodyTextStyle}"
+                                <TextBlock Grid.Column="1" Text="{x:Bind Value, Mode=OneWay}" Style="{StaticResource BodyTextStyle}"
                                            HorizontalAlignment="Right" TextAlignment="Right" />
                             </Grid>
                         </DataTemplate>

@@ -1,31 +1,36 @@
 //! 引擎：持有所有组件。各方面的行为分布在同目录的子模块中：
 //!
 //! - [`cycle`]：每个采样周期（采集 → 分类 → 调度 → 健康评估与处理器余量），并串起下面各部分；
-//!   [`phases`] 给每轮分段计时
+//!   [`sampler`] 在引擎锁外采集进程快照，[`cadence`] 决定多久采一轮，[`phases`] 给每轮分段计时
 //! - [`schedule`]：按调度计划调整进程、临时全速、停止时撤销，[`decision_events`] 把调度决定写成日志事件；
 //!   [`adjusted_record`]：记下调整过的进程，异常退出后下次启动时恢复
 //! - [`cores`]：核心与缓存面板（核心域、缓存、负载、程序放在哪里）
 //! - 日志与使用记录交给独立的日志系统（`poise_logbook::Logbook`）：[`decision_events`] 把调度决定写成事件，
 //!   [`round_summary`] 把每轮调度的结果整理成记录系统的输入。引擎只管交过去，不等、不写盘
-//! - [`presence`]：托盘代理在线时才起作用，退出时撤销全部影响
+//! - [`presence`]：托盘代理在线时才起作用，退出时撤销全部影响；[`clients`]：连着的界面和托盘
 //! - [`auto`]：把用户模式（含"自动"）换算成具体模式
-//! - [`mode`]：把实际模式落到电源计划与散热上（慢的硬件操作在硬件执行线程里），风扇加速
+//! - [`mode`]：把实际模式落到电源计划与散热上（慢的硬件操作在硬件执行线程里），风扇加速；
+//!   [`mode_attempts`]：等预读、失败后隔一阵再试
 //! - [`cleanup`]：一键清理、延后清理、自动清理
 //! - [`growth`]：与开机时、与进程稳定运行时相比的增长
 //! - [`optimizer`]：系统优化项，[`catalog`] 是它们的目录（在请求线程里枚举）；
-//!   [`power_guard`]：守住 Poise 写入的电源设置（被别处改掉、换了计划）；
+//!   [`power_guard`]：守住 Poise 写入的电源设置（被别处改掉、换了计划；读取在单独的线程里）；
 //!   [`game_prefs`]：程序类别与游戏对应的系统设置
 //! - [`changes`]：持久修改的唯一出口（设置存储 + 变更日志）
-//! - [`session`]：用户会话、界面是否显示
+//! - [`session`]：用户会话、界面是否显示；[`user_settings`]：用户在界面上改的设置（模式、风扇、开关）
 //! - [`status`]：给界面的状态、诊断；[`apps`]：程序列表；[`remembered`]：运行过的程序（保存在本机）
-//! - [`requests`]：把 IPC 请求分派到上面各部分，[`error`] 是请求失败的原因
+//! - [`requests`]：把 IPC 请求分派到上面各部分，[`answers`] 留着只读请求的回复（两轮采样之间不变），
+//!   [`error`] 是请求失败的原因
 
 mod adjusted_record;
+mod answers;
 mod apps;
 mod auto;
+mod cadence;
 pub(crate) mod catalog;
 pub(crate) mod changes;
 mod cleanup;
+mod clients;
 mod convert;
 mod cores;
 mod cycle;
@@ -34,6 +39,7 @@ mod error;
 mod game_prefs;
 mod growth;
 mod mode;
+mod mode_attempts;
 mod optimizer;
 mod phases;
 mod power_guard;
@@ -41,40 +47,46 @@ mod presence;
 mod remembered;
 mod requests;
 mod round_summary;
+mod sampler;
 mod schedule;
 mod session;
 mod status;
+#[cfg(test)]
+mod tick_cost;
+mod user_settings;
 
-pub use cycle::TICK;
+pub use cadence::TICK;
+pub use sampler::Sampler;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use poise_core::activity::{ActivityConfig, ActivityTracker};
 use poise_core::auto_mode::AutoMode;
 use poise_core::classify::{Classification, Classifier, ClassifyConfig};
 use poise_core::cleanup::{
-    BootBaseline, CleanupPlan, CleanupStep, Grown, GrowthConfig, GrowthWatch, KernelPoolConfig,
-    KernelPoolWatch, LeakConfig, LeakDetector, LeakSuspect,
+    BootBaseline, GrowthConfig, GrowthWatch, KernelPoolConfig, KernelPoolWatch, LeakConfig,
+    LeakDetector,
 };
 use poise_core::diagnose::{HeadroomWatch, Health, MetricHistory};
 use poise_core::model::{Millis, Pid, Snapshot};
 use poise_core::prefs::{Mode, Settings};
 use poise_core::safety::GuardedExecutor;
 use poise_core::schedule::{CoreLayout, GameInfo, ScheduleConfig, Scheduler};
+use poise_hardware::power::CpuShape;
 use poise_hardware::{Hardware, HardwareReading};
 use poise_logbook::Logbook;
 use poise_platform::act::executor::WinExecutor;
 use poise_platform::act::launcher::{DirectLauncher, Launcher, UserSessionLauncher};
 use poise_platform::act::self_tune;
-use poise_platform::observe::process::snapshot::Snapshotter;
 use poise_platform::observe::system;
 use poise_platform::observe::topology::CpuTopology;
 use poise_platform::persist::paths;
 use poise_platform::persist::storage::JsonFile;
+use poise_platform::persist::writer::FileWriter;
 use poise_platform::settings::user::UserContext;
-use poise_protocol::{Event, LastCleanup};
+use poise_protocol::Event;
 
 use crate::config::{RunConfig, RunMode};
 use crate::gpu_feed::GpuFeed;
@@ -96,25 +108,15 @@ pub struct View {
     pub health: Health,
 }
 
-#[derive(Default)]
-struct CleanupState {
-    deferred: Vec<CleanupStep>,
-    last_auto_at: Millis,
-    suspects: Vec<LeakSuspect>,
-    /// 与自身基线相比异常增长的进程，与泄漏嫌疑同时刷新。
-    grown: Vec<Grown>,
-    suspects_at: Option<Millis>,
-    /// 健康状态用的清理预演与时间（见 `cleanup::preview`）。
-    preview: Option<(Millis, CleanupPlan)>,
-    last: Option<LastCleanup>,
-}
-
 pub struct Engine {
     cfg: RunConfig,
     started: Instant,
-    snapshotter: Snapshotter,
+    /// 采集进程快照（采样线程在引擎锁外用它，见 [`Sampler`]）。
+    sampler: Sampler,
     /// 托盘代理不在（Poise 已退出）：不调度、不切换模式，影响已全部撤销。
     paused: bool,
+    /// 服务正在停止：影响已撤销，不再调度、不再接受请求。
+    stopped: bool,
     /// 前台全屏程序的显卡占用（识别游戏用），在独立线程里测量。
     gpu: GpuFeed,
     /// 最近一次测到的前台全屏程序及其 3D 占用。
@@ -133,7 +135,8 @@ pub struct Engine {
     history: MetricHistory,
     /// 处理器的大小核组成与核心域（设置页、核心与缓存面板显示，调度按它分配核心）。
     topology: CpuTopology,
-    executor: GuardedExecutor,
+    /// 执行进程调整与清理（清理在引擎锁外执行，共用同一个）。
+    executor: Arc<GuardedExecutor>,
     hardware: Hardware,
     /// 硬件读数在采集线程里进行，这里只取最近一次的结果。
     sensors: SensorFeed,
@@ -144,20 +147,33 @@ pub struct Engine {
     power_guard: power_guard::PowerGuard,
     settings: Settings,
     settings_file: JsonFile<Settings>,
+    /// 在后台线程里保存设置、调整记录、运行过的程序（变更日志除外：它必须先落盘再改设置）。
+    files: FileWriter,
     session: SessionTracker,
     /// 运行过的程序（程序偏好页"未运行"一栏）。
     seen: remembered::RememberedApps,
-    /// Poise 自己的进程（服务和已连接的界面），永不触碰。
-    own_pids: HashSet<Pid>,
-    cleanup: CleanupState,
+    /// 连着的界面和托盘（Poise 自己的进程，永不触碰）与各自的连接数：同一个进程可以有几条连接，
+    /// 最后一条断开才算它走了。
+    clients: clients::Clients,
+    cleanup: cleanup::CleanupState,
     /// 观察模式下最近一次记录的硬件状态（只用于日志去重）。
     observed: mode::Observed,
     view: Option<View>,
     adjusted: adjusted_record::AdjustedRecord,
     /// 最近一次调整了程序、决定变了或前台切换的时间（决定采样快慢，见 `cycle`）。
     last_change_at: Millis,
+    /// 上一轮采样的时刻（发现睡眠唤醒用，见 `cycle`）。
+    last_tick_at: Option<Millis>,
+    /// 切换模式的尝试：等预读、失败后隔一阵再试（见 `mode`）。
+    mode_attempts: mode_attempts::ModeAttempts,
+    /// 上一轮交给记录系统的摘要里有重点程序（见 `round_summary`）。
+    round_focused: bool,
     /// 日志系统与记录系统（独立线程，见 `poise_logbook`）。
     logbook: Logbook,
+    /// 定期在日志里写一次 Poise 自己的开销（见 `phases`）。
+    cost_log: phases::CostLog,
+    /// 只读请求留着的回复（见 `answers`）。
+    answers: answers::Answers,
 }
 
 impl Engine {
@@ -178,7 +194,13 @@ impl Engine {
         let settings_file = JsonFile::new(cfg.data_dir.join("settings.json"));
         let settings = settings_file.load().unwrap_or_default();
         let baseline_file = JsonFile::new(cfg.data_dir.join(growth::BASELINE_FILE));
-        let mut hardware = Hardware::detect(topology.top_class);
+        let cpu = CpuShape {
+            top_class: topology.top_class,
+            uneven_cache: topology.uneven_cache(),
+        };
+        let mut hardware = Hardware::detect(cpu, &cfg.data_dir);
+        let changes =
+            Changes::new(&cfg.data_dir, user, cfg.dry_run).with_power(hardware.power_writer());
         let growth = GrowthWatch::new(
             GrowthConfig::default(),
             baseline_file.load(),
@@ -190,23 +212,26 @@ impl Engine {
                 observe_only: cfg.dry_run,
             },
             format!(
-                "{:?} 方式运行，大核 {:?}，小核 {:?}，核心域 {:?}",
+                "{:?} 方式运行，大核 {:?}，小核 {:?}，核心域（线程，物理核心） {:?}",
                 cfg.mode,
                 topology.performance_count,
                 topology.efficiency_count,
-                topology.domain_threads()
+                topology.domain_sizes()
             ),
         );
+        let started = Instant::now();
+        let files = FileWriter::start();
         let mut engine = Self {
-            started: Instant::now(),
-            snapshotter: Snapshotter::default(),
+            started,
+            sampler: Sampler::new(started),
             paused: true,
+            stopped: false,
             gpu: GpuFeed::start(TICK),
             foreground_gpu: None,
             activity: ActivityTracker::new(ActivityConfig::default()),
             classifier: Classifier::new(ClassifyConfig::default()),
             scheduler: Scheduler::new(ScheduleConfig {
-                cores: CoreLayout::new(&topology.domain_threads()),
+                cores: CoreLayout::with_cores(&topology.domain_sizes()),
                 ..Default::default()
             }),
             leaks: LeakDetector::new(LeakConfig::default()),
@@ -216,26 +241,32 @@ impl Engine {
             headroom: HeadroomWatch::default(),
             auto_mode: AutoMode::default(),
             history: MetricHistory::default(),
-            executor: GuardedExecutor::new(
+            executor: Arc::new(GuardedExecutor::new(
                 Box::new(WinExecutor::new(topology.clone(), launcher)),
                 cfg.dry_run,
-            ),
+            )),
             sensors: SensorFeed::start(hardware.take_sensors(), TICK),
             hardware,
-            changes: Changes::new(&cfg.data_dir, user, cfg.dry_run),
+            changes,
             catalog: Arc::default(),
-            power_guard: power_guard::PowerGuard::default(),
+            power_guard: power_guard::PowerGuard::start(),
             settings,
             settings_file,
-            seen: remembered::RememberedApps::open(&cfg.data_dir),
+            seen: remembered::RememberedApps::open(&cfg.data_dir, files.clone()),
             session: SessionTracker::new(system::active_console_session()),
-            own_pids: HashSet::from([std::process::id()]),
-            cleanup: CleanupState::default(),
+            clients: clients::Clients::default(),
+            cleanup: cleanup::CleanupState::default(),
             observed: mode::Observed::default(),
             view: None,
-            adjusted: adjusted_record::AdjustedRecord::open(&cfg.data_dir),
+            adjusted: adjusted_record::AdjustedRecord::open(&cfg.data_dir, files.clone()),
+            files,
             last_change_at: 0,
+            last_tick_at: None,
+            mode_attempts: mode_attempts::ModeAttempts::default(),
+            round_focused: false,
             logbook,
+            cost_log: phases::CostLog::default(),
+            answers: answers::Answers::default(),
             topology,
             cfg,
         };
@@ -247,25 +278,39 @@ impl Engine {
         self.started.elapsed().as_millis() as Millis
     }
 
-    fn save_settings(&self) {
-        if let Err(e) = self.settings_file.save(&self.settings) {
-            log::error!("保存设置失败：{e}");
-        }
+    /// 在引擎锁外采集进程快照用（见 [`Sampler`]）。
+    pub fn sampler(&self) -> Sampler {
+        self.sampler.clone()
     }
 
-    /// 界面断开后不再视为 Poise 自己的进程。
+    /// 界面或托盘连上了：视为 Poise 自己的进程（只接受安装目录里的程序连接，见 `ipc_server`）。
+    pub fn client_connected(&mut self, pid: Pid) {
+        self.clients.connected(pid);
+    }
+
+    /// 一条连接断开。这个进程的连接都断开后不再视为 Poise 自己的进程；是托盘代理时暂停。
     pub fn client_disconnected(&mut self, pid: Pid) {
-        if pid != std::process::id() {
-            self.own_pids.remove(&pid);
+        self.answers.invalidate();
+        if self.clients.disconnected(pid) {
+            self.on_client_gone(pid);
         }
-        self.on_client_gone(pid);
     }
 
-    /// 服务停止：撤销所有进程调整，还原硬件模式。系统优化项保留（它们是用户选择的）。
-    pub fn shutdown(&mut self) {
-        self.logbook.end_session();
-        self.release_processes();
-        self.restore_hardware();
+    /// 服务停止：撤销所有进程调整，还原硬件模式（见 [`Engine::withdraw`]）；之后不再调度、不再接受请求。
+    /// 系统优化项保留（它们是用户选择的）。
+    pub fn shutdown(&mut self, system_shutdown: bool) {
+        self.stopped = true;
+        if !system_shutdown {
+            self.wait_manual_clean();
+        }
+        self.withdraw(if system_shutdown {
+            presence::Withdraw::SystemShutdown
+        } else {
+            presence::Withdraw::Stop
+        });
+        if !self.files.flush(Duration::from_secs(5)) {
+            log::warn!("停止前还有文件没保存完");
+        }
         log::info!("Poise 已停止，进程调整与硬件模式已还原");
     }
 }

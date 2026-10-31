@@ -6,9 +6,11 @@
 //! - [`settings`]：持久设置
 //! - [`ipc`]：命名管道
 //! - [`persist`]：数据目录与文件
+//! - [`logging`]：文本日志（服务、托盘代理、更新助手共用）
 
 pub mod act;
 pub mod ipc;
+pub mod logging;
 pub mod observe;
 pub mod persist;
 pub mod settings;

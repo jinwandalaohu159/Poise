@@ -25,6 +25,20 @@ pub enum Pressure {
     High,
 }
 
+/// 需求从哪来（日志用）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DemandReason {
+    /// 有重点程序（正在玩的游戏，或正在用、持续干重活的程序）。
+    Focus,
+    /// 处理器没有余量（被限速，或读不到限速时温度贴着上限）。
+    Heat,
+    /// 正在用的程序在忙。
+    InUse,
+    /// 用电池：让路的同时省电。
+    Battery,
+}
+
 /// 判断需求的依据（每轮一份）。
 #[derive(Debug, Clone, Copy, Default)]
 pub struct DemandSignals {
@@ -57,6 +71,9 @@ pub struct DemandRule {
 pub struct DemandTracker {
     last_high_at: Option<Millis>,
     last_normal_at: Option<Millis>,
+    /// 最近一次需求高、一般的原因。
+    high_reason: Option<DemandReason>,
+    normal_reason: Option<DemandReason>,
     /// 从什么时候开始没有需求。
     none_since: Option<Millis>,
 }
@@ -66,12 +83,21 @@ impl DemandTracker {
     pub fn update(&mut self, s: DemandSignals, now: Millis, rule: DemandRule) -> Pressure {
         if s.focused || s.hot {
             self.last_high_at = Some(now);
+            self.high_reason = Some(if s.focused {
+                DemandReason::Focus
+            } else {
+                DemandReason::Heat
+            });
         }
-        if s.on_battery
-            || s.in_use_core_pct >= rule.in_use_core_pct
-            || (s.system_pct >= rule.system_pct && s.in_use_core_pct >= rule.in_use_active_pct)
-        {
+        let in_use = s.in_use_core_pct >= rule.in_use_core_pct
+            || (s.system_pct >= rule.system_pct && s.in_use_core_pct >= rule.in_use_active_pct);
+        if s.on_battery || in_use {
             self.last_normal_at = Some(now);
+            self.normal_reason = Some(if in_use {
+                DemandReason::InUse
+            } else {
+                DemandReason::Battery
+            });
         }
         let recent = |t: Option<Millis>| t.is_some_and(|t| now.saturating_sub(t) < rule.hold_ms);
         let pressure = if recent(self.last_high_at) {
@@ -87,6 +113,15 @@ impl DemandTracker {
             self.none_since = None;
         }
         pressure
+    }
+
+    /// 这一级需求从哪来（最近一次的原因；没有需求时为空）。
+    pub fn reason(&self, pressure: Pressure) -> Option<DemandReason> {
+        match pressure {
+            Pressure::None => None,
+            Pressure::Normal => self.normal_reason,
+            Pressure::High => self.high_reason,
+        }
     }
 
     /// 已经连续多久没有需求（有需求时为 0）。
@@ -158,10 +193,13 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(d.update(battery, 0, RULE), Pressure::Normal);
+        assert_eq!(d.reason(Pressure::Normal), Some(DemandReason::Battery));
         let hot = DemandSignals {
             hot: true,
             ..Default::default()
         };
         assert_eq!(d.update(hot, 2_000, RULE), Pressure::High);
+        assert_eq!(d.reason(Pressure::High), Some(DemandReason::Heat));
+        assert_eq!(d.reason(Pressure::None), None);
     }
 }

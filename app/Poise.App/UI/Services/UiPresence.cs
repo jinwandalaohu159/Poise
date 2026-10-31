@@ -6,7 +6,7 @@ namespace Poise.App.UI.Services;
 
 /// <summary>
 /// 界面可见性的唯一入口：
-/// 主窗口或托盘面板显示时加快状态刷新；主窗口显示期间定期告诉服务"界面在显示"（服务据此读取显卡）；
+/// 主窗口或托盘面板显示时才刷新状态；主窗口显示期间定期告诉服务"界面在显示"（服务据此读取显卡）；
 /// 两者都不显示时触发 <see cref="AllHidden"/>，界面据此在闲置一段时间后退出、释放内存。
 /// 走势图只在主窗口显示时读取（<see cref="MainVisibilityChanged"/>）。
 /// </summary>
@@ -74,15 +74,15 @@ public sealed class UiPresence : IDisposable
         var wasVisible = AnyVisible;
         _flyout = visible;
         Update(wasVisible);
-        if (visible)
-        {
-            _ = _status.RefreshAsync();
-        }
     }
 
     private void Update(bool wasVisible)
     {
-        _status.Fast = AnyVisible;
+        if (wasVisible != AnyVisible)
+        {
+            // 变成显示时立即查一次：面板一弹出就是最新的。
+            _status.Watched = AnyVisible;
+        }
         if (wasVisible && !AnyVisible)
         {
             AllHidden?.Invoke();

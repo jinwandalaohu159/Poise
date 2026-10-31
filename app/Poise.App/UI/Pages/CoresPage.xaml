@@ -35,10 +35,19 @@
                   Background="{ThemeResource ControlFillColorSecondaryBrush}"
                   BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1"
                   ToolTipService.ToolTip="{x:Bind Label, Mode=OneWay}">
-                <Rectangle VerticalAlignment="Bottom" Height="{x:Bind FillHeight, Mode=OneWay}" Opacity="0.45"
-                           Fill="{ThemeResource ChartPerformanceBrush}" Visibility="{x:Bind PerformanceVisibility}" />
-                <Rectangle VerticalAlignment="Bottom" Height="{x:Bind FillHeight, Mode=OneWay}" Opacity="0.45"
-                           Fill="{ThemeResource ChartEfficiencyBrush}" Visibility="{x:Bind EfficiencyVisibility}" />
+                <!-- 填色区高 40；按占用比例缩放（不改 Height），每两秒更新时不用重新排版 -->
+                <Rectangle VerticalAlignment="Bottom" Height="40" Opacity="0.45" RenderTransformOrigin="0.5,1"
+                           Fill="{ThemeResource ChartPerformanceBrush}" Visibility="{x:Bind PerformanceVisibility}">
+                    <Rectangle.RenderTransform>
+                        <ScaleTransform ScaleY="{x:Bind Fill, Mode=OneWay}" />
+                    </Rectangle.RenderTransform>
+                </Rectangle>
+                <Rectangle VerticalAlignment="Bottom" Height="40" Opacity="0.45" RenderTransformOrigin="0.5,1"
+                           Fill="{ThemeResource ChartEfficiencyBrush}" Visibility="{x:Bind EfficiencyVisibility}">
+                    <Rectangle.RenderTransform>
+                        <ScaleTransform ScaleY="{x:Bind Fill, Mode=OneWay}" />
+                    </Rectangle.RenderTransform>
+                </Rectangle>
                 <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
                     <TextBlock Text="{x:Bind Label, Mode=OneWay}" FontSize="10" HorizontalAlignment="Center"
                                Foreground="{ThemeResource TextFillColorSecondaryBrush}" />

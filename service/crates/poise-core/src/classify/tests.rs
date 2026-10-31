@@ -219,6 +219,41 @@ fn independent_programs_are_not_grouped_under_their_launcher() {
     assert_eq!(c[&302].root_pid, 302);
 }
 
+/// 从启动器打开、窗口化运行的游戏（装在启动器的游戏库里）：不归到启动器名下。全屏时独立出来的程序
+/// 退出全屏后也保持独立，归属不来回变（归属一变，负载历史和各种状态都要从头算）。
+#[test]
+fn games_from_a_launcher_library_and_programs_that_stood_alone_stay_independent() {
+    let at = |mut p: ProcessSample, path: &str| {
+        p.facts.image_path = Some(path.into());
+        p
+    };
+    let shell = proc_(100, None, "explorer.exe", 1);
+    let launcher = at(
+        proc_(300, Some(100), "launcher.exe", 1),
+        r"d:\launch\launcher.exe",
+    );
+    let windowed = at(
+        proc_(302, Some(300), "game.exe", 1),
+        r"d:\launch\steamapps\common\g\game.exe",
+    );
+    let player = at(
+        proc_(303, Some(300), "player.exe", 1),
+        r"d:\launch\player.exe",
+    );
+    let mut w = World::new(vec![shell, launcher, windowed, player]);
+    w.session.visible_window_pids = vec![300, 302, 303];
+    let mut classifier = Classifier::new(ClassifyConfig::default());
+    let c = w.classify_with(&mut classifier);
+    assert_eq!(c[&302].root_pid, 302);
+    assert_eq!(c[&303].root_pid, 300);
+    // 启动器里的播放器全屏：独立出来；退出全屏后照样独立。
+    w.session.foreground_pid = Some(303);
+    w.session.fullscreen = true;
+    assert_eq!(w.classify_with(&mut classifier)[&303].root_pid, 303);
+    w.session.fullscreen = false;
+    assert_eq!(w.classify_with(&mut classifier)[&303].root_pid, 303);
+}
+
 #[test]
 fn reused_pid_does_not_link_to_new_parent() {
     // 父 PID 500 被一个更晚创建的进程复用了。
@@ -257,11 +292,28 @@ fn schedule_scope_excludes_system_components_and_admits_chores() {
     let update = service(906, &["wuauserv"]);
     let shared = service(907, &["wuauserv", "Audiosrv"]);
     let prefetch = service(908, &["SysMain"]);
+    let updater = system(proc_(909, None, "tiworker.exe", 0));
+    let mut impostor = proc_(910, None, "tiworker.exe", 1);
+    impostor.facts.image_path = Some(r"c:\users\me\tiworker.exe".into());
     let c = World::new(vec![
-        app, shell, ime, indexer, svchost, popup, update, shared, prefetch,
+        app, shell, ime, indexer, svchost, popup, update, shared, prefetch, updater, impostor,
     ])
     .classify();
-    // 系统服务（包括更新、索引这类后台杂活）一律交给系统。
+    // 系统服务一律交给系统；只有 Windows 目录下的几个维护程序（更新安装、搜索索引）可以挪开。
+    assert_eq!(c[&903].schedule, ScheduleScope::Maintenance);
+    assert_eq!(c[&909].schedule, ScheduleScope::Maintenance);
+    let mut office = proc_(911, None, "officeclicktorun.exe", 0);
+    office.facts.image_path = Some(
+        r"c:\program files\common files\microsoft shared\clicktorun\officeclicktorun.exe".into(),
+    );
+    office.facts.services = vec![ServiceFacts {
+        name: "ClickToRunSvc".into(),
+        ..Default::default()
+    }];
+    let c2 = World::new(vec![office]).classify();
+    assert_eq!(c2[&911].schedule, ScheduleScope::Maintenance);
+    // 不在 Windows 目录下的同名程序不是维护程序。
+    assert_eq!(c[&910].schedule, ScheduleScope::App);
     assert_eq!(c[&906].schedule, ScheduleScope::Excluded);
     assert_eq!(c[&907].schedule, ScheduleScope::Excluded);
     assert_eq!(c[&908].schedule, ScheduleScope::Excluded);
@@ -269,7 +321,6 @@ fn schedule_scope_excludes_system_components_and_admits_chores() {
     assert!(c[&900].is_schedulable());
     assert_eq!(c[&901].schedule, ScheduleScope::Excluded);
     assert_eq!(c[&902].schedule, ScheduleScope::Excluded);
-    assert_eq!(c[&903].schedule, ScheduleScope::Excluded);
     assert_eq!(c[&904].schedule, ScheduleScope::Excluded);
 }
 
@@ -369,6 +420,25 @@ fn a_child_with_its_own_preference_is_its_own_program() {
     assert!(c[&821].is_game);
     assert!(!c[&820].is_game);
     assert_eq!(c[&820].preference, AppPreference::Auto);
+}
+
+#[test]
+fn a_fullscreen_game_launched_by_a_marked_stub_keeps_the_marking() {
+    let mut stub = proc_(830, None, "game.exe", 1);
+    stub.facts.image_path = Some(r"d:\games\x\game.exe".into());
+    let mut real = proc_(831, Some(830), "game-win64-shipping.exe", 1);
+    real.facts.image_path = Some(r"d:\games\x\bin\game-win64-shipping.exe".into());
+    let mut w = World::new(vec![stub, real]);
+    w.prefs.set(r"d:\games\x\game.exe", AppPreference::Game);
+    // 在启动器的树里：跟随主程序。
+    assert_eq!(w.classify()[&831].preference, AppPreference::Game);
+    // 全屏后独立出来：跟随启动它的、标为游戏的程序，仍是游戏。
+    w.session.foreground_pid = Some(831);
+    w.session.fullscreen = true;
+    let c = w.classify();
+    assert_eq!(c[&831].root_pid, 831);
+    assert_eq!(c[&831].preference, AppPreference::Game);
+    assert!(c[&831].is_game);
 }
 
 #[test]

@@ -1,5 +1,6 @@
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Navigation;
 using Poise.Core.Diagnostics;
 using Poise.Core.Ipc;
 using Poise.Core.Localization;
@@ -25,8 +26,9 @@ public sealed partial class DiagnosePage : Page
         InitializeComponent();
         _spin = new Spin(AnalyzeIcon);
         Header.Title = Loc.Get("diagnose.title");
-        Loaded += async (_, _) => await AnalyzeAsync();
     }
+
+    protected override async void OnNavigatedTo(NavigationEventArgs e) => await AnalyzeAsync();
 
     private async void OnAnalyze(object sender, RoutedEventArgs e) => await AnalyzeAsync();
 

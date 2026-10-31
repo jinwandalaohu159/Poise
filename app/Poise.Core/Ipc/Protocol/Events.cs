@@ -1,5 +1,4 @@
 // 日志：Poise 做过的每一件值得知道的事，结构化记录；界面按语言写成文字（见 Presentation/EventText）。
-using System.Text.Json;
 using System.Text.Json.Serialization;
 
 namespace Poise.Core.Ipc;
@@ -19,62 +18,47 @@ public sealed record ProgramRef(uint Pid, string Name, string Path);
 public sealed record CoreSpan(bool All, bool Main, uint Others);
 
 /// <summary>程序不（再）让路、或者恢复的原因。</summary>
-public enum Cause { Foreground, RecentlyUsed, SelfElevated, MarkedLow, Audio, Boosted, Marked, NoDemand, LessDemand, Exited }
+public enum Cause { Foreground, RecentlyUsed, SelfElevated, MarkedLow, Audio, Boosted, Marked, NoDemand, LessDemand, Exited, LooksLikeGame, LoadDropped, LeftForeground }
+
+/// <summary>对处理器的需求从哪来：有重点程序、处理器没有余量、正在用的程序在忙、用电池。</summary>
+public enum DemandReason { Focus, Heat, InUse, Battery }
 
 /// <summary>处理器电源设置的种类。</summary>
 public enum PowerSettingKind { MinState, MaxState, Epp, CoreParkingMin, BoostMode }
 
 /// <summary>
-/// 一件事。按 type 区分具体种类（见 <see cref="PoiseEventConverter"/>）；不认识的种类（更新的服务）读成这个基类，
-/// 界面显示为一条普通记录，不会让整页读不出来。
+/// 一件事。按 type 区分具体种类，一次读出（不先读成文档树再读第二遍）；不认识的种类（更新的服务）
+/// 读成这个基类，界面显示为一条普通记录，不会让整页读不出来。
 /// </summary>
-[JsonConverter(typeof(PoiseEventConverter))]
+[JsonPolymorphic(
+    TypeDiscriminatorPropertyName = "type",
+    UnknownDerivedTypeHandling = JsonUnknownDerivedTypeHandling.FallBackToBaseType,
+    IgnoreUnrecognizedTypeDiscriminators = true)]
+[JsonDerivedType(typeof(DemandEvent), "demand")]
+[JsonDerivedType(typeof(ProgramEvent), "program")]
+[JsonDerivedType(typeof(MovedAsideEvent), "moved_aside")]
+[JsonDerivedType(typeof(AccessDeniedEvent), "access_denied")]
+[JsonDerivedType(typeof(RecoveredEvent), "recovered")]
+[JsonDerivedType(typeof(ModeChangedEvent), "mode_changed")]
+[JsonDerivedType(typeof(ModeFailedEvent), "mode_failed")]
+[JsonDerivedType(typeof(ThrottledEvent), "throttled")]
+[JsonDerivedType(typeof(UnthrottledEvent), "unthrottled")]
+[JsonDerivedType(typeof(PlanSwitchedEvent), "plan_switched")]
+[JsonDerivedType(typeof(SettingRestoredEvent), "setting_restored")]
+[JsonDerivedType(typeof(OptimizationReappliedEvent), "optimization_reapplied")]
+[JsonDerivedType(typeof(EfficiencySliderEvent), "efficiency_slider")]
+[JsonDerivedType(typeof(OptimizationsAppliedEvent), "optimizations_applied")]
+[JsonDerivedType(typeof(OptimizationsRevertedEvent), "optimizations_reverted")]
+[JsonDerivedType(typeof(CleanedEvent), "cleaned")]
+[JsonDerivedType(typeof(StartedEvent), "started")]
+[JsonDerivedType(typeof(ResumedEvent), "resumed")]
+[JsonDerivedType(typeof(PausedEvent), "paused")]
+[JsonDerivedType(typeof(PreferenceSetEvent), "preference_set")]
+[JsonDerivedType(typeof(SmartScheduleEvent), "smart_schedule")]
 public record PoiseEvent;
 
-/// <summary>按 type 读出具体的事件类型。</summary>
-public sealed class PoiseEventConverter : JsonConverter<PoiseEvent>
-{
-    private static readonly Dictionary<string, Type> Kinds = new()
-    {
-        ["demand"] = typeof(DemandEvent),
-        ["program"] = typeof(ProgramEvent),
-        ["moved_aside"] = typeof(MovedAsideEvent),
-        ["access_denied"] = typeof(AccessDeniedEvent),
-        ["recovered"] = typeof(RecoveredEvent),
-        ["mode_changed"] = typeof(ModeChangedEvent),
-        ["mode_failed"] = typeof(ModeFailedEvent),
-        ["throttled"] = typeof(ThrottledEvent),
-        ["unthrottled"] = typeof(UnthrottledEvent),
-        ["plan_switched"] = typeof(PlanSwitchedEvent),
-        ["setting_restored"] = typeof(SettingRestoredEvent),
-        ["optimization_reapplied"] = typeof(OptimizationReappliedEvent),
-        ["efficiency_slider"] = typeof(EfficiencySliderEvent),
-        ["optimizations_applied"] = typeof(OptimizationsAppliedEvent),
-        ["optimizations_reverted"] = typeof(OptimizationsRevertedEvent),
-        ["cleaned"] = typeof(CleanedEvent),
-        ["started"] = typeof(StartedEvent),
-        ["resumed"] = typeof(ResumedEvent),
-        ["paused"] = typeof(PausedEvent),
-        ["preference_set"] = typeof(PreferenceSetEvent),
-        ["smart_schedule"] = typeof(SmartScheduleEvent),
-    };
-
-    public override PoiseEvent Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
-    {
-        using var doc = JsonDocument.ParseValue(ref reader);
-        var root = doc.RootElement;
-        var kind = root.TryGetProperty("type", out var t) && t.ValueKind == JsonValueKind.String ? t.GetString() : null;
-        return kind is not null && Kinds.TryGetValue(kind, out var type)
-            ? (PoiseEvent)(root.Deserialize(type, options) ?? new PoiseEvent())
-            : new PoiseEvent();
-    }
-
-    public override void Write(Utf8JsonWriter writer, PoiseEvent value, JsonSerializerOptions options) =>
-        throw new NotSupportedException("界面只读取日志事件");
-}
-
 /// <summary>对处理器的需求变了。</summary>
-public sealed record DemandEvent(Pressure Level) : PoiseEvent;
+public sealed record DemandEvent(Pressure Level, DemandReason? Reason = null) : PoiseEvent;
 
 /// <summary>对一个程序的决定变了，或重点程序用的核心变了。LoadPct 是单核百分比。</summary>
 public sealed record ProgramEvent(

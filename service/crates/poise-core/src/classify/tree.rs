@@ -11,7 +11,10 @@ use crate::prefs::AppPreference;
 /// - 输入法、驱动助手等不参与调度的程序：它们常被正在输入的程序拉起，但不属于那个程序；
 /// - 前台全屏窗口所属的进程，以及已确认正在玩的游戏（从启动器里打开的游戏）；
 /// - 用户单独为它设置过类别的程序（例如把客户端里的游戏本体标为"游戏"）；
-/// - 自己有窗口、并且装在父程序目录之外的程序（例如从聊天软件里点链接打开的浏览器）。
+/// - 自己有窗口、并且装在父程序目录之外（或启动器的游戏库里，见 [`known::is_in_game_library`]）的程序
+///   （例如从聊天软件里点链接打开的浏览器、从 Steam 打开的游戏）；
+/// - 之前已经独立过的进程（见 [`Marks::stood_alone`]）：全屏切换、确认游戏前后，归属不来回变——
+///   归属一变，它的负载历史和各种状态都要从头算。
 ///
 /// 同一个程序的界面进程（例如 Steam 的 steamwebhelper）装在同一目录下，仍归到主程序。
 fn is_independent(
@@ -24,6 +27,7 @@ fn is_independent(
     let path = p.facts.image_path.as_deref();
     let pid = p.facts.key.pid;
     if marks.never_scheduled.contains(&pid)
+        || marks.stood_alone.contains(&p.facts.key)
         || (session.fullscreen && session.foreground_pid == Some(pid))
         || input.active_games.contains(&pid)
         || input.preferences.lookup(&p.facts) != AppPreference::Auto
@@ -40,16 +44,58 @@ fn is_independent(
         .and_then(|p| p.rfind('\\').map(|i| &p[..=i]));
     let inside_parent = path
         .zip(parent_dir)
-        .is_some_and(|(p, dir)| p.starts_with(dir));
+        .is_some_and(|(p, dir)| p.starts_with(dir) && !known::is_in_game_library(p));
     !inside_parent
 }
 
 /// 分类前对每个进程算一次的标记。
-pub(super) struct Marks {
+pub(super) struct Marks<'a> {
     /// 有可见窗口的进程。
     pub visible: HashSet<Pid>,
     /// 名单里不参与调度的进程（见 [`known::is_never_scheduled`]）。
     pub never_scheduled: HashSet<Pid>,
+    /// 之前已经从父程序独立出来的进程（见 [`StoodAlone`]）。
+    pub stood_alone: &'a HashSet<ProcessKey>,
+}
+
+/// 从父程序独立出来过的进程：之后一直独立，直到退出（见 [`is_independent`]）。
+#[derive(Debug, Default)]
+pub(super) struct StoodAlone(HashSet<ProcessKey>);
+
+impl StoodAlone {
+    /// 记下这一轮因为自己是独立程序而成为根的进程（父进程还在、同一会话、不是桌面外壳），
+    /// 忘掉退出了的。
+    pub fn remember(
+        &mut self,
+        roots: &HashMap<Pid, Pid>,
+        by_pid: &HashMap<Pid, &ProcessSample>,
+        session: &SessionState,
+    ) {
+        self.0
+            .retain(|k| by_pid.get(&k.pid).is_some_and(|p| p.facts.key == *k));
+        for (pid, root) in roots {
+            let Some(p) = by_pid.get(pid).filter(|_| pid == root) else {
+                continue;
+            };
+            let cut_from_parent = p
+                .facts
+                .parent_pid
+                .and_then(|pp| by_pid.get(&pp))
+                .is_some_and(|parent| {
+                    parent.is_parent_of(p)
+                        && Some(parent.facts.key.pid) != session.shell_pid
+                        && parent.facts.session_id != 0
+                        && parent.facts.session_id == p.facts.session_id
+                });
+            if cut_from_parent {
+                self.0.insert(p.facts.key);
+            }
+        }
+    }
+
+    pub fn keys(&self) -> &HashSet<ProcessKey> {
+        &self.0
+    }
 }
 
 /// 按程序路径记住的"是否在不参与调度的目录里"：路径的结论不会变，同一个程序文件常有几十个进程
@@ -74,8 +120,13 @@ impl NeverScheduledPaths {
     }
 }
 
-impl Marks {
-    pub fn new(snap: &Snapshot, session: &SessionState, paths: &mut NeverScheduledPaths) -> Self {
+impl<'a> Marks<'a> {
+    pub fn new(
+        snap: &Snapshot,
+        session: &SessionState,
+        paths: &mut NeverScheduledPaths,
+        stood_alone: &'a StoodAlone,
+    ) -> Self {
         let never_scheduled = snap
             .processes
             .iter()
@@ -91,6 +142,7 @@ impl Marks {
         Self {
             visible: session.visible_window_pids.iter().copied().collect(),
             never_scheduled,
+            stood_alone: stood_alone.keys(),
         }
     }
 }

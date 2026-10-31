@@ -51,11 +51,7 @@ impl SensorFeed {
                     if let Ok(mut l) = shared.lock() {
                         *l = reading;
                     }
-                    let wait = if level == SensorLevel::Full {
-                        every
-                    } else {
-                        QUIET_EVERY
-                    };
+                    let wait = if level.shown() { every } else { QUIET_EVERY };
                     match rx.recv_timeout(wait) {
                         Ok(Signal::Level(l)) => level = l,
                         Err(RecvTimeoutError::Timeout) => {}

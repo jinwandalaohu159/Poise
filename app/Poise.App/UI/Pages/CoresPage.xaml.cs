@@ -1,4 +1,5 @@
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Navigation;
 using Poise.App.UI.Controls;
 using Poise.App.UI.ViewModels;
 using Poise.Core.Localization;
@@ -17,9 +18,12 @@ public sealed partial class CoresPage : Page
         InitializeComponent();
         Header.Title = Loc.Get("cores.title");
         Vm.Error += ErrorBar.ShowError;
-        Loaded += (_, _) => Vm.Start();
-        Unloaded += (_, _) => Vm.Stop();
+        Vm.Recovered += ErrorBar.HideError;
     }
 
     public CoresViewModel Vm { get; } = new(AppHost.Current);
+
+    protected override void OnNavigatedTo(NavigationEventArgs e) => Vm.Start();
+
+    protected override void OnNavigatedFrom(NavigationEventArgs e) => Vm.Stop();
 }

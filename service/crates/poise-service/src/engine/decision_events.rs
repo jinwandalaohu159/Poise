@@ -1,20 +1,29 @@
 //! 把调度决定的变化（见 `poise_core::schedule::Decision`）写成日志事件：补上程序的名称和路径，
-//! 把核心范围换成"用大核和几组小核"这样的说法。决定本身见 `poise_core::schedule`，事件的记录见 `crate::events`。
+//! 把核心范围换成"用大核和几组小核"这样的说法。决定本身见 `poise_core::schedule`，事件的记录见 `poise_logbook`。
 
 use poise_core::action::CoreSet;
 use poise_core::model::{ProcessKey, Snapshot};
 use poise_core::schedule::Decision;
 use poise_protocol::{CoreSpan, Event, ProgramRef};
 
-/// 这一轮决定的变化对应的事件。`domains` 是处理器的核心域个数。
-pub(super) fn events(decisions: &[Decision], snapshot: &Snapshot, domains: usize) -> Vec<Event> {
+/// 这一轮决定的变化对应的事件。`previous` 是上一轮的进程快照（刚退出的程序在那里找名称），
+/// `domains` 是处理器的核心域个数。
+pub(super) fn events(
+    decisions: &[Decision],
+    snapshot: &Snapshot,
+    previous: Option<&Snapshot>,
+    domains: usize,
+) -> Vec<Event> {
     decisions
         .iter()
         .map(|d| match d {
-            Decision::Pressure(level) => Event::Demand { level: *level },
+            Decision::Pressure(level, reason) => Event::Demand {
+                level: *level,
+                reason: *reason,
+            },
             Decision::Aside(n) => Event::MovedAside { count: *n as u32 },
             Decision::Program { root, from, state } => Event::Program {
-                program: program_ref(*root, snapshot),
+                program: program_ref(*root, std::iter::once(snapshot).chain(previous)),
                 from: *from,
                 to: state.verdict,
                 cores: core_span(state.cores, domains),
@@ -26,9 +35,15 @@ pub(super) fn events(decisions: &[Decision], snapshot: &Snapshot, domains: usize
         .collect()
 }
 
-/// 程序的名称和路径；已经退出的只剩进程号。
-pub(super) fn program_ref(key: ProcessKey, snapshot: &Snapshot) -> ProgramRef {
-    let sample = snapshot.find(key.pid).filter(|p| p.facts.key == key);
+/// 程序的名称和路径：依次在给出的快照里找（这一轮已经没有的——刚退出的——到上一轮的里找）；
+/// 都找不到时只剩进程号。
+pub(super) fn program_ref<'a>(
+    key: ProcessKey,
+    snapshots: impl IntoIterator<Item = &'a Snapshot>,
+) -> ProgramRef {
+    let sample = snapshots
+        .into_iter()
+        .find_map(|s| s.find(key.pid).filter(|p| p.facts.key == key));
     ProgramRef {
         pid: key.pid,
         name: sample.map_or_else(|| key.pid.to_string(), |p| p.facts.friendly_name()),
@@ -51,7 +66,36 @@ pub(super) fn core_span(cores: CoreSet, domains: usize) -> CoreSpan {
 
 #[cfg(test)]
 mod tests {
+    use poise_core::model::{ProcessFacts, ProcessSample};
+
     use super::*;
+
+    #[test]
+    fn programs_that_just_exited_are_named_from_the_previous_round() {
+        let key = ProcessKey {
+            pid: 19212,
+            created: 5,
+        };
+        let game = ProcessSample {
+            facts: ProcessFacts {
+                key,
+                name: "league of legends.exe".into(),
+                display_name: Some("League of Legends".into()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let previous = Snapshot {
+            processes: vec![game],
+            ..Default::default()
+        };
+        let now = Snapshot::default();
+        assert_eq!(
+            program_ref(key, std::iter::once(&now).chain(Some(&previous))).name,
+            "League of Legends"
+        );
+        assert_eq!(program_ref(key, [&now]).name, "19212");
+    }
 
     #[test]
     fn core_ranges_read_as_big_cores_plus_groups() {

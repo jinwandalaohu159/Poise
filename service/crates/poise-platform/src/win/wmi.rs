@@ -3,6 +3,9 @@
 //! 只在本机使用（不连接远程计算机）。COM 以多线程模式初始化：服务的多个线程都可能调用，
 //! WMI 代理对象在多线程套间里可以跨线程使用。
 
+use std::cell::RefCell;
+use std::collections::HashMap;
+
 use windows::Win32::System::Com::{
     CLSCTX_INPROC_SERVER, CoCreateInstance, CoSetProxyBlanket, EOAC_NONE, RPC_C_AUTHN_LEVEL_CALL,
     RPC_C_IMP_LEVEL_IMPERSONATE,
@@ -38,6 +41,8 @@ pub type WmiResult<T> = Result<T, WmiError>;
 /// 一个已连接的 WMI 命名空间。
 pub struct WmiNamespace {
     services: IWbemServices,
+    /// 调用过的方法的入参定义（按"类.方法"）：每次调用都先取类、再取方法定义，要多跑两趟 WMI 服务。
+    signatures: RefCell<HashMap<String, IWbemClassObject>>,
 }
 
 // WMI 代理对象在多线程套间中可以跨线程使用；所有调用前都会确保当前线程已加入多线程套间。
@@ -68,7 +73,10 @@ impl WmiNamespace {
                 None,
                 EOAC_NONE,
             )?;
-            Ok(Self { services })
+            Ok(Self {
+                services,
+                signatures: RefCell::default(),
+            })
         }
     }
 
@@ -109,20 +117,7 @@ impl WmiNamespace {
     ) -> WmiResult<u32> {
         com::ensure_initialized();
         unsafe {
-            let mut class_obj = None;
-            self.services.GetObject(
-                &BSTR::from(class),
-                Default::default(),
-                None,
-                Some(&mut class_obj),
-                None,
-            )?;
-            let class_obj = class_obj.ok_or_else(|| WmiError(format!("没有类 {class}")))?;
-            let method_w = WideString::new(method);
-            let mut in_sig = None;
-            class_obj.GetMethod(method_w.as_pcwstr(), 0, &mut in_sig, std::ptr::null_mut())?;
-            let in_sig = in_sig.ok_or_else(|| WmiError(format!("方法 {method} 没有入参")))?;
-            let params = in_sig.SpawnInstance(0)?;
+            let params = self.signature(class, method)?.SpawnInstance(0)?;
             // WMI 用 VT_I4 表示 uint32。
             let value = VARIANT::from(arg as i32);
             let arg_w = WideString::new(arg_name);
@@ -143,6 +138,34 @@ impl WmiNamespace {
                 .map(|v| v as u32)
                 .ok_or_else(|| WmiError(format!("{method} 返回值无法解析")))
         }
+    }
+}
+
+impl WmiNamespace {
+    /// 方法的入参定义（第一次用到时取，之后复用）。
+    fn signature(&self, class: &str, method: &str) -> WmiResult<IWbemClassObject> {
+        let key = format!("{class}.{method}");
+        if let Some(sig) = self.signatures.borrow().get(&key) {
+            return Ok(sig.clone());
+        }
+        // SAFETY: 标准的 WMI 调用，接口对象由 windows crate 管理引用计数。
+        let sig = unsafe {
+            let mut class_obj = None;
+            self.services.GetObject(
+                &BSTR::from(class),
+                Default::default(),
+                None,
+                Some(&mut class_obj),
+                None,
+            )?;
+            let class_obj = class_obj.ok_or_else(|| WmiError(format!("没有类 {class}")))?;
+            let method_w = WideString::new(method);
+            let mut in_sig = None;
+            class_obj.GetMethod(method_w.as_pcwstr(), 0, &mut in_sig, std::ptr::null_mut())?;
+            in_sig.ok_or_else(|| WmiError(format!("方法 {method} 没有入参")))?
+        };
+        self.signatures.borrow_mut().insert(key, sig.clone());
+        Ok(sig)
     }
 }
 

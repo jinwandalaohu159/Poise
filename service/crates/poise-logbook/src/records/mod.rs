@@ -20,13 +20,18 @@ pub(crate) struct RecordBook {
 }
 
 impl RecordBook {
-    /// 打开数据目录里的记录，返回它和之前保存的记录（从早到晚）。
+    /// 打开数据目录里的记录，返回它和之前保存的记录（从早到晚）。文件读得到却解析不了时，
+    /// 改名为 records.json.bad 留着，不让下一次保存把它覆盖掉。
     pub fn open(dir: &Path) -> (Self, Vec<SessionRecord>) {
         let path = dir.join(FILE);
-        let saved = std::fs::read(&path)
-            .ok()
-            .and_then(|b| serde_json::from_slice(&b).ok())
-            .unwrap_or_default();
+        let saved = match std::fs::read(&path) {
+            Ok(bytes) => serde_json::from_slice(&bytes).unwrap_or_else(|e| {
+                log::warn!("使用记录读不出来（{e}），另存为 records.json.bad");
+                let _ = std::fs::rename(&path, path.with_extension("json.bad"));
+                Vec::new()
+            }),
+            Err(_) => Vec::new(),
+        };
         let book = Self {
             recorder: SessionRecorder::default(),
             path,
@@ -51,12 +56,16 @@ impl RecordBook {
         list.drain(..excess);
     }
 
-    /// 保存：先写临时文件再替换，写到一半断电不会损坏。
+    /// 保存：先写临时文件、落到磁盘上，再替换，写到一半断电不会损坏（一段结束时才保存，不频繁）。
     pub fn save(&self, list: &[SessionRecord]) {
         let tmp = self.path.with_extension("tmp");
         let saved = serde_json::to_vec(list)
             .map_err(std::io::Error::other)
-            .and_then(|bytes| std::fs::write(&tmp, bytes))
+            .and_then(|bytes| {
+                let mut file = std::fs::File::create(&tmp)?;
+                std::io::Write::write_all(&mut file, &bytes)?;
+                file.sync_all()
+            })
             .and_then(|()| std::fs::rename(&tmp, &self.path));
         if let Err(e) = saved {
             log::warn!("保存使用记录失败：{e}");

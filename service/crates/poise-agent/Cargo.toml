@@ -18,7 +18,8 @@ poise-update.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 log.workspace = true
-simplelog = "0.12"
+# 实现 COM 接口（音频会话通知）用的宏要求直接依赖它，版本与 windows 一致。
+windows-core = "0.62"
 
 [dependencies.windows]
 version = "0.62"
@@ -27,9 +28,13 @@ features = [
     "Win32_Globalization",
     "Win32_Graphics_Gdi",
     "Win32_Media_Audio",
+    "Win32_Media_Audio_Endpoints",
     "Win32_Security",
+    "Win32_Storage_FileSystem",
     "Win32_System_Com",
+    "Win32_System_IO",
     "Win32_System_LibraryLoader",
+    "Win32_System_Pipes",
     "Win32_System_Registry",
     "Win32_System_RemoteDesktop",
     "Win32_System_SystemInformation",

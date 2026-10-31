@@ -3,21 +3,14 @@
 use log::Level;
 use poise_core::power_settings::PowerSettingKind;
 use poise_core::prefs::AppPreference;
-use poise_core::schedule::{Cause, Pressure, Verdict};
+use poise_core::schedule::{Cause, DemandReason, Pressure, Verdict};
 use poise_protocol::{CleanupTrigger, CoreSpan, Event, ProgramRef};
 
 /// 一条事件的级别和文字。
 pub(super) fn describe(event: &Event) -> (Level, String) {
     let info = |s: String| (Level::Info, s);
     match event {
-        Event::Demand { level } => info(format!(
-            "处理器需求：{}",
-            match level {
-                Pressure::None => "无（后台不必让路）",
-                Pressure::Normal => "普通（正在用的程序在忙，后台只降优先级）",
-                Pressure::High => "高（有重点程序或发热，后台完整让路）",
-            }
-        )),
+        Event::Demand { level, reason } => info(demand_text(*level, *reason)),
         Event::Program {
             program,
             from,
@@ -128,6 +121,20 @@ pub(super) fn describe(event: &Event) -> (Level, String) {
     }
 }
 
+fn demand_text(level: Pressure, reason: Option<DemandReason>) -> String {
+    let what = match level {
+        Pressure::None => "无（后台不必让路）",
+        Pressure::Normal if reason == Some(DemandReason::Battery) => "普通（用电池，后台让路省电）",
+        Pressure::Normal => "普通（正在用的程序在忙，后台只降优先级）",
+        Pressure::High if reason == Some(DemandReason::Focus) => "高（有重点程序，后台完整让路）",
+        Pressure::High if reason == Some(DemandReason::Heat) => {
+            "高（处理器没有余量，后台完整让路）"
+        }
+        Pressure::High => "高（后台完整让路）",
+    };
+    format!("处理器需求：{what}")
+}
+
 fn program_text(p: &ProgramRef) -> String {
     format!("{}（进程 {}）", p.name, p.pid)
 }
@@ -143,14 +150,14 @@ fn load_text(load_pct: u32, disk_mb_s: u32) -> String {
 fn what_text(from: Verdict, to: Verdict, cores: CoreSpan, cause: Option<Cause>) -> String {
     let what = match to {
         Verdict::Playing => format!("按游戏调度，{}", cores_text(cores)),
-        Verdict::Focused => format!("持续高负载，{}", cores_text(cores)),
+        Verdict::Focused => format!("成为重点程序，{}", cores_text(cores)),
         Verdict::Yielded if cause == Some(Cause::MarkedLow) => "让路".into(),
         Verdict::Yielded => "后台忙，让路（移到小核、节能、降优先级）".into(),
         Verdict::Lowered => "后台忙，降低优先级（空闲的核心照样用）".into(),
         Verdict::Backseat => "后台忙，移到小核（不降优先级）".into(),
         Verdict::Aside => "移到小核".into(),
         Verdict::Normal if from == Verdict::Playing => "不再按游戏调度".into(),
-        Verdict::Normal if from == Verdict::Focused => "不再优先用大核".into(),
+        Verdict::Normal if from == Verdict::Focused => "不再是重点程序".into(),
         Verdict::Normal => "恢复".into(),
     };
     match cause {
@@ -187,6 +194,9 @@ fn cause_text(cause: Cause) -> &'static str {
         Cause::NoDemand => "没人需要处理器",
         Cause::LessDemand => "需求降低",
         Cause::Exited => "已退出",
+        Cause::LooksLikeGame => "像游戏，等待确认",
+        Cause::LoadDropped => "负载降下来了",
+        Cause::LeftForeground => "离开前台",
     }
 }
 

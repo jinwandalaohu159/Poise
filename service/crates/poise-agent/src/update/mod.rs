@@ -2,12 +2,18 @@
 //! 只读取版本号；用户在界面里确认后，由更新助手（poise-updater）下载、安装并启动新版本。
 
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 /// 启动后多久第一次检查（避开登录时最忙的一段）。
 const FIRST_CHECK: Duration = Duration::from_secs(2 * 60);
 /// 之后每隔多久检查一次。
 const CHECK_EVERY: Duration = Duration::from_secs(4 * 60 * 60);
+/// 检查失败（没联网、刚醒来网络还没好）后，依次隔这么久再试，之后按 [`CHECK_EVERY`]。
+const RETRY_AFTER: [Duration; 3] = [
+    Duration::from_secs(5 * 60),
+    Duration::from_secs(15 * 60),
+    Duration::from_secs(60 * 60),
+];
 
 use poise_update::CURRENT;
 
@@ -36,12 +42,12 @@ impl UpdateChecker {
 }
 
 fn run(available: &Mutex<Option<String>>, notify: &dyn Fn()) {
-    let mut failing = false;
+    let mut failures = 0usize;
     std::thread::sleep(FIRST_CHECK);
     loop {
         match poise_update::latest_release() {
             Ok(latest) => {
-                failing = false;
+                failures = 0;
                 let newer = latest
                     .map(|r| r.version)
                     .filter(|v| poise_update::is_newer(v, CURRENT));
@@ -55,12 +61,30 @@ fn run(available: &Mutex<Option<String>>, notify: &dyn Fn()) {
                 }
             }
             // 连续失败只记一次，恢复后重新计。
-            Err(e) if !failing => {
-                failing = true;
-                log::info!("检查更新失败（稍后重试）：{e}");
+            Err(e) => {
+                if failures == 0 {
+                    log::info!("检查更新失败（稍后重试）：{e}");
+                }
+                failures += 1;
             }
-            Err(_) => {}
         }
-        std::thread::sleep(CHECK_EVERY);
+        let wait = match failures {
+            0 => CHECK_EVERY,
+            n => RETRY_AFTER.get(n - 1).copied().unwrap_or(CHECK_EVERY),
+        };
+        sleep_wall_clock(wait);
+    }
+}
+
+/// 按钟表时间等：电脑睡眠的时间也算进去（`thread::sleep` 不算睡眠的时间，"每 4 小时"会变成
+/// "醒着 4 小时"，经常合上盖子的笔记本可能好几天都不检查）。分段睡，每段最多 [`SLEEP_STEP`]。
+fn sleep_wall_clock(wait: Duration) {
+    const SLEEP_STEP: Duration = Duration::from_secs(10 * 60);
+    let until = SystemTime::now() + wait;
+    while let Ok(left) = until.duration_since(SystemTime::now()) {
+        if left.is_zero() {
+            return;
+        }
+        std::thread::sleep(left.min(SLEEP_STEP));
     }
 }

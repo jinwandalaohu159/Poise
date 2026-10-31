@@ -27,7 +27,8 @@ impl EventLog {
     pub fn open(dir: &Path) -> (Self, VecDeque<EventEntry>) {
         let file = EventFile::new(dir);
         let recent: VecDeque<EventEntry> = file.load_tail(KEEP).into();
-        let next_id = recent.back().map_or(1, |e| e.id + 1);
+        // 编号接着读回来的最大的往下编（不只看最后一条：写坏、乱序时编号也不会倒退，界面按编号翻页）。
+        let next_id = recent.iter().map(|e| e.id).max().map_or(1, |id| id + 1);
         (Self { file, next_id }, recent)
     }
 
@@ -48,10 +49,18 @@ impl EventLog {
         self.file.append(&entry);
         entry
     }
+
+    /// 把这一批写进文件（见 `store`）。
+    pub fn flush(&mut self) {
+        self.file.flush();
+    }
 }
 
-/// 编号大于 `after` 的条目，从早到晚，最多 [`PAGE`] 条（多了取最新的）。
+/// 编号大于 `after` 的条目，从早到晚，最多 [`PAGE`] 条（多了取最新的）。界面记的编号比最新的还大，
+/// 说明日志文件丢了、编号从头开始了：从头给（界面见到编号变小就整张换掉）。
 pub(crate) fn page(entries: &VecDeque<EventEntry>, after: u64) -> Vec<EventEntry> {
+    let newest = entries.back().map_or(0, |e| e.id);
+    let after = if after > newest { 0 } else { after };
     let newer = entries.iter().filter(|e| e.id > after);
     let skip = newer.clone().count().saturating_sub(PAGE);
     newer.skip(skip).cloned().collect()
@@ -72,6 +81,7 @@ mod tests {
         let mut kept = VecDeque::new();
         kept.push_back(log.write(1, Event::Resumed, None));
         kept.push_back(log.write(2, Event::MovedAside { count: 3 }, Some("细节")));
+        log.flush();
         assert_eq!(kept[1].category, EventCategory::Schedule);
         assert_eq!(page(&kept, 0).len(), 2);
         assert!(page(&kept, kept[1].id).is_empty());

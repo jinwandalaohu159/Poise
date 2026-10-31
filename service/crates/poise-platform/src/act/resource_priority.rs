@@ -6,16 +6,14 @@
 use std::ffi::c_void;
 
 use poise_core::action::{ExecError, ResourcePriority};
-use poise_core::model::Pid;
+use poise_core::model::ProcessKey;
 use windows::Wdk::System::Threading::{NtQueryInformationProcess, PROCESSINFOCLASS};
 use windows::Win32::Foundation::{HANDLE, NTSTATUS};
 use windows::Win32::System::Threading::{
-    GetProcessInformation, MEMORY_PRIORITY, MEMORY_PRIORITY_INFORMATION, MEMORY_PRIORITY_LOW,
-    MEMORY_PRIORITY_NORMAL, PROCESS_QUERY_INFORMATION, PROCESS_SET_INFORMATION,
-    ProcessMemoryPriority, SetProcessInformation,
+    MEMORY_PRIORITY_LOW, MEMORY_PRIORITY_NORMAL, PROCESS_QUERY_INFORMATION, PROCESS_SET_INFORMATION,
 };
 
-use crate::win::handle::{map_error, open_process};
+use crate::win::process::{Target, memory_priority, set_memory_priority};
 
 #[link(name = "ntdll", kind = "raw-dylib")]
 unsafe extern "system" {
@@ -32,8 +30,8 @@ const PROCESS_IO_PRIORITY: PROCESSINFOCLASS = PROCESSINFOCLASS(33);
 const IO_PRIORITY_LOW: u32 = 1;
 const IO_PRIORITY_NORMAL: u32 = 2;
 
-pub fn set(pid: Pid, priority: ResourcePriority) -> Result<(), ExecError> {
-    let h = open_process(pid, PROCESS_SET_INFORMATION | PROCESS_QUERY_INFORMATION)?;
+pub fn set(target: ProcessKey, priority: ResourcePriority) -> Result<(), ExecError> {
+    let h = Target::open(target, PROCESS_SET_INFORMATION | PROCESS_QUERY_INFORMATION)?;
     let ((memory_from, memory_to), (io_from, io_to)) = match priority {
         ResourcePriority::Low => (
             (MEMORY_PRIORITY_NORMAL, MEMORY_PRIORITY_LOW),
@@ -53,38 +51,7 @@ pub fn set(pid: Pid, priority: ResourcePriority) -> Result<(), ExecError> {
         Some(current) if current != io_from => Ok(()),
         _ => set_io_priority(h.raw(), io_to),
     };
-    memory.and(io)
-}
-
-fn memory_priority(h: HANDLE) -> Option<MEMORY_PRIORITY> {
-    let mut info = MEMORY_PRIORITY_INFORMATION::default();
-    // SAFETY: 结构体大小与传入长度一致。
-    unsafe {
-        GetProcessInformation(
-            h,
-            ProcessMemoryPriority,
-            &mut info as *mut _ as *mut c_void,
-            size_of::<MEMORY_PRIORITY_INFORMATION>() as u32,
-        )
-    }
-    .ok()
-    .map(|()| info.MemoryPriority)
-}
-
-fn set_memory_priority(h: HANDLE, priority: MEMORY_PRIORITY) -> Result<(), ExecError> {
-    let info = MEMORY_PRIORITY_INFORMATION {
-        MemoryPriority: priority,
-    };
-    // SAFETY: 结构体大小与传入长度一致。
-    unsafe {
-        SetProcessInformation(
-            h,
-            ProcessMemoryPriority,
-            &info as *const _ as *const c_void,
-            size_of::<MEMORY_PRIORITY_INFORMATION>() as u32,
-        )
-    }
-    .map_err(|e| map_error(&e))
+    memory.and(io).map_err(|e| h.failure(&e))
 }
 
 fn io_priority(h: HANDLE) -> Option<u32> {
@@ -103,7 +70,7 @@ fn io_priority(h: HANDLE) -> Option<u32> {
     .then_some(current)
 }
 
-fn set_io_priority(h: HANDLE, priority: u32) -> Result<(), ExecError> {
+fn set_io_priority(h: HANDLE, priority: u32) -> windows::core::Result<()> {
     // SAFETY: 缓冲区大小与传入长度一致。
     unsafe {
         NtSetInformationProcess(
@@ -114,14 +81,17 @@ fn set_io_priority(h: HANDLE, priority: u32) -> Result<(), ExecError> {
         )
     }
     .ok()
-    .map_err(|e| map_error(&e))
 }
 
 #[cfg(test)]
 mod tests {
     use std::process::{Child, Command};
 
+    use poise_core::model::Pid;
+
     use super::*;
+    use crate::win::handle::open_process;
+    use windows::Win32::System::Threading::MEMORY_PRIORITY;
 
     /// 只对测试自己启动的子进程操作。
     struct Sandbox(Child);
@@ -155,15 +125,16 @@ mod tests {
         set_memory_priority(h.raw(), MEMORY_PRIORITY_NORMAL).unwrap();
         set_io_priority(h.raw(), IO_PRIORITY_NORMAL).unwrap();
         assert_eq!(read(pid), (MEMORY_PRIORITY_NORMAL, IO_PRIORITY_NORMAL));
-        set(pid, ResourcePriority::Low).unwrap();
+        let key = ProcessKey { pid, created: 0 };
+        set(key, ResourcePriority::Low).unwrap();
         assert_eq!(read(pid), (MEMORY_PRIORITY_LOW, IO_PRIORITY_LOW));
-        set(pid, ResourcePriority::Default).unwrap();
+        set(key, ResourcePriority::Default).unwrap();
         assert_eq!(read(pid), (MEMORY_PRIORITY_NORMAL, IO_PRIORITY_NORMAL));
 
         // 程序自己调得更低的：还原时不动。
         set_memory_priority(h.raw(), MEMORY_PRIORITY(1)).unwrap();
         set_io_priority(h.raw(), 0).unwrap();
-        set(pid, ResourcePriority::Default).unwrap();
+        set(key, ResourcePriority::Default).unwrap();
         assert_eq!(read(pid), (MEMORY_PRIORITY(1), 0));
     }
 }

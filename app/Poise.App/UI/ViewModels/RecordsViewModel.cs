@@ -30,6 +30,13 @@ public sealed partial class RecordsViewModel(AppHost host) : ObservableObject
         remove => _poller.Error -= value;
     }
 
+    /// <summary>出错之后又读成功了。</summary>
+    public event Action? Recovered
+    {
+        add => _poller.Recovered += value;
+        remove => _poller.Recovered -= value;
+    }
+
     public void Start() => _poller.Start(LoadAsync);
 
     public void Stop() => _poller.Stop();

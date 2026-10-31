@@ -1,11 +1,14 @@
 //! JSON 文件持久化：先写临时文件再替换，避免写到一半断电导致文件损坏。
 
+use std::io::Write;
 use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
 
 use poise_core::journal::{JournalEntry, JournalStorage};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
+
+use super::writer::FileWriter;
 
 pub struct JsonFile<T> {
     path: PathBuf,
@@ -37,12 +40,30 @@ impl<T: Serialize + DeserializeOwned> JsonFile<T> {
         }
     }
 
+    /// 立即保存（见 [`write_atomic`]）：变更日志这样必须先落盘、再去修改设置的用它。
     pub fn save(&self, value: &T) -> std::io::Result<()> {
-        let tmp = self.path.with_extension("tmp");
         let bytes = serde_json::to_vec_pretty(value).map_err(std::io::Error::other)?;
-        std::fs::write(&tmp, bytes)?;
-        std::fs::rename(&tmp, &self.path)
+        write_atomic(&self.path, &bytes)
     }
+
+    /// 交给后台线程保存（见 [`FileWriter`]），不等磁盘。
+    pub fn save_later(&self, value: &T, writer: &FileWriter) {
+        match serde_json::to_vec_pretty(value) {
+            Ok(bytes) => writer.submit(self.path.clone(), bytes),
+            Err(e) => log::warn!("保存 {} 失败：{e}", self.path.display()),
+        }
+    }
+}
+
+/// 先写到临时文件并落到磁盘，再替换原文件：断电时要么是旧的、要么是新的，不会是空文件
+/// （变更日志里存着修改前的原值，丢了就再也还原不了）。
+pub(super) fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let tmp = path.with_extension("tmp");
+    let mut file = std::fs::File::create(&tmp)?;
+    file.write_all(bytes)?;
+    file.sync_all()?;
+    drop(file);
+    std::fs::rename(&tmp, path)
 }
 
 /// 变更日志存放在数据目录的 journal.json。
@@ -60,7 +81,10 @@ impl JournalStorage for FileJournal {
     }
 
     fn save(&self, entries: &[JournalEntry]) {
-        if let Err(e) = self.0.save(&entries.to_vec()) {
+        let saved = serde_json::to_vec_pretty(entries)
+            .map_err(std::io::Error::other)
+            .and_then(|bytes| write_atomic(self.0.path(), &bytes));
+        if let Err(e) = saved {
             log::error!("保存变更日志失败：{e}");
         }
     }

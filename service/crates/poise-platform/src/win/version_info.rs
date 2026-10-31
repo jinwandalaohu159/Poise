@@ -13,6 +13,8 @@ pub struct VersionStrings {
     pub file_description: Option<String>,
     pub product_name: Option<String>,
     pub company_name: Option<String>,
+    /// 原始文件名（保留大小写，例如 "Widgets.exe"）。
+    pub original_filename: Option<String>,
 }
 
 pub fn read(path: &str) -> VersionStrings {
@@ -52,6 +54,7 @@ pub fn read(path: &str) -> VersionStrings {
         file_description: query("FileDescription"),
         product_name: query("ProductName"),
         company_name: query("CompanyName"),
+        original_filename: query("OriginalFilename"),
     }
 }
 

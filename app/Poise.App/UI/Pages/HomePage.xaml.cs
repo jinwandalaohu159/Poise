@@ -10,13 +10,19 @@ using Poise.App.UI.ViewModels;
 
 namespace Poise.App.UI.Pages;
 
-/// <summary>主页：只负责把 <see cref="HomeViewModel"/> 的结果画出来，以及转发用户操作。</summary>
+/// <summary>
+/// 主页：只负责把 <see cref="HomeViewModel"/> 的结果画出来，以及转发用户操作。主窗口被挡住或最小化时
+/// （托盘面板开着时状态照样每秒更新）不画，重新显示时画一次最新的。
+/// 页面留在导航缓存里（从别的页返回不重建），显示期间（<see cref="OnNavigatedTo"/> 到 <see cref="OnNavigatedFrom"/>）才订阅更新。
+/// </summary>
 public sealed partial class HomePage : Page
 {
-    private readonly HomeViewModel _vm = new(AppHost.Current);
+    private readonly HomeViewModel _vm = AppHost.Current.Home;
     private readonly NumberRoller _freeable;
     private readonly NumberRoller _optimized;
     private bool _rendering;
+    /// <summary>主窗口看不见期间有过更新，重新显示时要补画。</summary>
+    private bool _stale;
     /// <summary>"游戏时使用"下拉框当前列出的选项对应的机型极限模式（变化时重建选项）。</summary>
     private string? _gameOptionsVendor = "";
 
@@ -39,26 +45,54 @@ public sealed partial class HomePage : Page
         Modes.ModeChosen += mode => _ = _vm.SetModeAsync(mode);
         Fan.BoostChosen += percent => _ = _vm.SetFanBoostAsync(percent);
         Trend.DetailsRequested += () => Open(typeof(DiagnosePage));
+    }
 
-        _vm.Updated += Render;
+    protected override async void OnNavigatedTo(NavigationEventArgs e)
+    {
+        _vm.Updated += OnUpdated;
+        AppHost.Current.Presence.MainVisibilityChanged += OnMainVisibilityChanged;
         _vm.OptimizeUpdated += RenderOptimize;
-        _vm.OpenOptimizations += () => Open(typeof(OptimizePage));
+        _vm.OpenOptimizations += OnOpenOptimizations;
         if (_vm.Ready)
         {
             Render(_vm.Current);
         }
-        Loaded += async (_, _) => await _vm.LoadOptimizeSummaryAsync();
+        await _vm.LoadOptimizeSummaryAsync();
     }
 
     protected override void OnNavigatedFrom(NavigationEventArgs e)
     {
-        _vm.Updated -= Render;
+        _vm.Updated -= OnUpdated;
+        AppHost.Current.Presence.MainVisibilityChanged -= OnMainVisibilityChanged;
         _vm.OptimizeUpdated -= RenderOptimize;
-        _vm.Dispose();
+        _vm.OpenOptimizations -= OnOpenOptimizations;
+    }
+
+    private void OnOpenOptimizations() => Open(typeof(OptimizePage));
+
+    private void OnUpdated(HomeView v)
+    {
+        if (AppHost.Current.Presence.MainVisible)
+        {
+            Render(v);
+        }
+        else
+        {
+            _stale = true;
+        }
+    }
+
+    private void OnMainVisibilityChanged()
+    {
+        if (_stale && AppHost.Current.Presence.MainVisible && _vm.Ready)
+        {
+            Render(_vm.Current);
+        }
     }
 
     private void Render(HomeView v)
     {
+        _stale = false;
         _rendering = true;
         Metrics.Show(v);
         ShowNotice(v);
@@ -72,31 +106,24 @@ public sealed partial class HomePage : Page
         }
 
         _freeable.RollTo(v.Cleanup.FreeableBytes);
-        MemoryBar.Fraction = v.Cleanup.MemoryFraction;
-        MemoryBar.SecondaryFraction = v.Cleanup.FreeableFraction;
+        MemoryBar.Set(v.Cleanup.MemoryFraction, v.Cleanup.FreeableFraction);
         CleanupDetail.Text = v.Cleanup.Detail;
 
         Modes.IsEnabled = GameModeBox.IsEnabled = Fan.IsEnabled = CleanButton.IsEnabled = OptimizeButton.IsEnabled = v.Connected;
         _rendering = false;
     }
 
-    /// <summary>少见的提醒：需要重启（可稍后提醒）优先，其次是观察模式。都没有时收起。</summary>
+    /// <summary>少见的提醒（见 <see cref="HomeNotice"/>）；没有时收起。</summary>
     private void ShowNotice(HomeView v)
     {
-        if (v.CanSnoozeRestart)
+        if (v.Notice is { } notice)
         {
-            NoticeBar.Severity = InfoBarSeverity.Warning;
-            NoticeBar.Title = Loc.Get("status.restart");
-            NoticeBar.Message = Loc.Get("status.restart.desc");
+            NoticeBar.Severity = notice.Level == Level.Notice ? InfoBarSeverity.Warning : InfoBarSeverity.Informational;
+            NoticeBar.Title = notice.Title;
+            NoticeBar.Message = notice.Message;
         }
-        else if (v.DryRun)
-        {
-            NoticeBar.Severity = InfoBarSeverity.Informational;
-            NoticeBar.Title = Loc.Get("status.observe");
-            NoticeBar.Message = Loc.Get("status.observe.desc");
-        }
-        SnoozeButton.Visibility = v.CanSnoozeRestart ? Visibility.Visible : Visibility.Collapsed;
-        NoticeBar.IsOpen = v.CanSnoozeRestart || v.DryRun;
+        SnoozeButton.Visibility = v.Notice?.CanSnooze == true ? Visibility.Visible : Visibility.Collapsed;
+        NoticeBar.IsOpen = v.Notice is not null;
     }
 
     private void ShowGameMode(GameMode mode, string? vendor)
@@ -106,9 +133,7 @@ public sealed partial class HomePage : Page
             _gameOptionsVendor = vendor;
             GameModeBox.ItemsSource = ModeText.GameOptions(vendor);
         }
-        var options = (IReadOnlyList<GameModeOption>)GameModeBox.ItemsSource;
-        // 机型不支持极限模式时，服务按全力处理；下拉框也显示全力。
-        var shown = options.FirstOrDefault(o => o.Mode == mode) ?? options.First(o => o.Mode == GameMode.Full);
+        var shown = ModeText.ShownGameOption((IReadOnlyList<GameModeOption>)GameModeBox.ItemsSource, mode);
         if (!ReferenceEquals(GameModeBox.SelectedItem, shown))
         {
             GameModeBox.SelectedItem = shown;
@@ -123,14 +148,9 @@ public sealed partial class HomePage : Page
         }
     }
 
-    /// <summary>"1.1 GB" 拆成数字和单位分别显示。</summary>
-    private void ShowFreeable(double bytes)
-    {
-        var text = Format.Bytes((ulong)Math.Max(0, bytes));
-        var space = text.LastIndexOf(' ');
-        FreeableValue.Text = text[..space];
-        FreeableUnit.Text = text[(space + 1)..];
-    }
+    /// <summary>数字和单位分别显示。</summary>
+    private void ShowFreeable(double bytes) =>
+        (FreeableValue.Text, FreeableUnit.Text) = Format.BytesParts((ulong)Math.Max(0, bytes));
 
     private void RenderOptimize(OptimizeSummary s)
     {

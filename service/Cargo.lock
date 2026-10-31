@@ -31,12 +31,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4e7648175b45a9a48536d676f68d918270699102aa8dab5496df06904c914600"
 
 [[package]]
-name = "deranged"
-version = "0.5.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9e9de72ce2ad1f90dc62fa25f0f430ef85eb4b0d8fa0be4f30373bc40a21d28e"
-
-[[package]]
 name = "embed-resource"
 version = "3.0.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -113,23 +107,8 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
 
 [[package]]
-name = "num-conv"
-version = "0.2.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "521739c6d2bac4aa25192232afe6841231376b2b26d4d9fae5ecf8ca5772e441"
-
-[[package]]
-name = "num_threads"
-version = "0.1.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cabcc654086861f9e1bc5115258de62ef92c79b20f4615a1b0cc57c4e82027d4"
-dependencies = [
- "libc",
-]
-
-[[package]]
 name = "poise-agent"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "embed-resource",
  "log",
@@ -139,13 +118,13 @@ dependencies = [
  "poise-update",
  "serde",
  "serde_json",
- "simplelog",
  "windows",
+ "windows-core",
 ]
 
 [[package]]
 name = "poise-core"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "serde",
  "thiserror",
@@ -153,7 +132,7 @@ dependencies = [
 
 [[package]]
 name = "poise-hardware"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "libloading",
  "log",
@@ -164,7 +143,7 @@ dependencies = [
 
 [[package]]
 name = "poise-logbook"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "log",
  "poise-core",
@@ -175,7 +154,7 @@ dependencies = [
 
 [[package]]
 name = "poise-platform"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "log",
  "poise-core",
@@ -186,7 +165,7 @@ dependencies = [
 
 [[package]]
 name = "poise-protocol"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "poise-core",
  "serde",
@@ -195,7 +174,7 @@ dependencies = [
 
 [[package]]
 name = "poise-service"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "anyhow",
  "embed-resource",
@@ -207,29 +186,21 @@ dependencies = [
  "poise-protocol",
  "serde",
  "serde_json",
- "simplelog",
  "windows",
  "windows-service",
 ]
 
 [[package]]
 name = "poise-update"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "embed-resource",
  "log",
  "poise-platform",
  "serde",
  "serde_json",
- "simplelog",
  "windows",
 ]
-
-[[package]]
-name = "powerfmt"
-version = "0.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4a6394b9e965e73d0a289ee54f589087e2c676aedf60885baf52c76b771e4958"
 
 [[package]]
 name = "proc-macro2"
@@ -323,17 +294,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
 
 [[package]]
-name = "simplelog"
-version = "0.12.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "16257adbfaef1ee58b1363bdc0664c9b8e1e30aed86049635fb5f147d065a9c0"
-dependencies = [
- "log",
- "termcolor",
- "time",
-]
-
-[[package]]
 name = "syn"
 version = "2.0.119"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -356,15 +316,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "termcolor"
-version = "1.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "06794f8f6c5c898b3275aebefa6b8a1cb24cd2c6c79397ab15774837a0bc5755"
-dependencies = [
- "winapi-util",
-]
-
-[[package]]
 name = "thiserror"
 version = "2.0.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -382,38 +333,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 3.0.9",
-]
-
-[[package]]
-name = "time"
-version = "0.3.55"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cdb87b95ec50ddfa440816d227a17b2ccbdda963a316a727fda0fc4334f7d134"
-dependencies = [
- "deranged",
- "libc",
- "num-conv",
- "num_threads",
- "powerfmt",
- "serde_core",
- "time-core",
- "time-macros",
-]
-
-[[package]]
-name = "time-core"
-version = "0.1.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9e1c906769ad99c88eaa54e728060edef082f8e358ff32030cb7c7d315e81109"
-
-[[package]]
-name = "time-macros"
-version = "0.2.32"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7e689342a48d2ea927c87ea50cabf8594854bf940e9310208848d680d668ed85"
-dependencies = [
- "num-conv",
- "time-core",
 ]
 
 [[package]]
@@ -486,15 +405,6 @@ name = "widestring"
 version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72069c3113ab32ab29e5584db3c6ec55d416895e60715417b5b883a357c3e471"
-
-[[package]]
-name = "winapi-util"
-version = "0.1.11"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
-dependencies = [
- "windows-sys",
-]
 
 [[package]]
 name = "windows"

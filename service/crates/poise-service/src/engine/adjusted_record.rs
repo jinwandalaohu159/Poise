@@ -7,6 +7,7 @@ use std::path::Path;
 use poise_core::model::Millis;
 use poise_core::schedule::Adjusted;
 use poise_platform::persist::storage::JsonFile;
+use poise_platform::persist::writer::FileWriter;
 
 /// 记录的文件名（在数据目录里）。
 const FILE: &str = "adjusted.json";
@@ -15,6 +16,7 @@ const SAVE_EVERY_MS: Millis = 30_000;
 
 pub(super) struct AdjustedRecord {
     file: JsonFile<Vec<Adjusted>>,
+    writer: FileWriter,
     saved: Vec<Adjusted>,
     saved_at: Option<Millis>,
     /// 上次运行留下的记录，还没处理。
@@ -22,11 +24,12 @@ pub(super) struct AdjustedRecord {
 }
 
 impl AdjustedRecord {
-    pub fn open(data_dir: &Path) -> Self {
+    pub fn open(data_dir: &Path, writer: FileWriter) -> Self {
         let file = JsonFile::new(data_dir.join(FILE));
         let leftovers = file.load().filter(|l: &Vec<Adjusted>| !l.is_empty());
         Self {
             file,
+            writer,
             saved: leftovers.clone().unwrap_or_default(),
             saved_at: None,
             leftovers,
@@ -52,7 +55,7 @@ impl AdjustedRecord {
         }
     }
 
-    /// 立即保存（服务停止时）。
+    /// 不等间隔，有变化就保存（撤销完时）。服务停止前由 [`FileWriter::flush`] 等它写完。
     pub fn flush(&mut self, current: Vec<Adjusted>, now: Millis) {
         if current != self.saved {
             self.save(current, now);
@@ -60,9 +63,7 @@ impl AdjustedRecord {
     }
 
     fn save(&mut self, current: Vec<Adjusted>, now: Millis) {
-        if let Err(e) = self.file.save(&current) {
-            log::warn!("保存调整记录失败：{e}");
-        }
+        self.file.save_later(&current, &self.writer);
         self.saved = current;
         self.saved_at = Some(now);
     }
@@ -85,7 +86,12 @@ mod tests {
     fn changes_are_saved_at_most_every_few_seconds_and_leftovers_come_back_once() {
         let dir = std::env::temp_dir().join(format!("poise-adjusted-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let mut r = AdjustedRecord::open(&dir);
+        let writer = FileWriter::start();
+        let open = || {
+            assert!(writer.flush(std::time::Duration::from_secs(5)));
+            AdjustedRecord::open(&dir, writer.clone())
+        };
+        let mut r = open();
         assert!(r.take_leftovers().is_none());
         r.update(vec![adjusted(1)], 0);
         // 几秒内又变了：先不写盘。
@@ -95,12 +101,12 @@ mod tests {
         assert_eq!(r.saved.len(), 2);
 
         // 模拟崩溃：没有撤销就重新打开。
-        let mut again = AdjustedRecord::open(&dir);
+        let mut again = open();
         assert_eq!(again.take_leftovers().map(|l| l.len()), Some(2));
         assert!(again.take_leftovers().is_none());
         // 全部撤销：立即保存为空。
         again.update(Vec::new(), 1);
-        assert!(AdjustedRecord::open(&dir).take_leftovers().is_none());
+        assert!(open().take_leftovers().is_none());
         let _ = std::fs::remove_dir_all(dir);
     }
 }

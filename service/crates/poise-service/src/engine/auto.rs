@@ -7,7 +7,6 @@ use poise_core::auto_mode::AutoInput;
 use poise_core::classify::Classification;
 use poise_core::model::{Millis, Pid, Snapshot};
 use poise_core::prefs::Mode;
-use poise_platform::observe::system;
 
 use super::Engine;
 
@@ -23,7 +22,7 @@ impl Engine {
             Mode::Auto => {
                 let input = AutoInput {
                     now,
-                    on_battery: system::on_battery(),
+                    on_battery: snapshot.system.on_battery,
                     user_idle_ms: self.session.current(now).idle_ms,
                     system_cpu_pct: self.activity.system_cpu_pct(),
                     foreground_cores: self.foreground_cores(snapshot, classes),

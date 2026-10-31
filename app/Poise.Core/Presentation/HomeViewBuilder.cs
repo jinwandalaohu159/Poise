@@ -25,6 +25,12 @@ public sealed record FanView(string Speed, int Boost)
     public static string BoostText(int boost) => boost > 0 ? $"{boost}%" : Loc.Get("home.fan.auto");
 }
 
+/// <summary>
+/// 主页上少见的提醒：需要重启（可以"稍后提醒"）优先，其次是观察模式。
+/// <see cref="Level"/> 为 Notice 时按警告显示，否则按一般信息显示。
+/// </summary>
+public sealed record HomeNotice(Level Level, string Title, string Message, bool CanSnooze);
+
 /// <summary>主页与托盘面板需要显示的一切。</summary>
 public sealed record HomeView(
     bool Connected,
@@ -44,6 +50,8 @@ public sealed record HomeView(
     GameMode GameMode,
     /// <summary>"建议重启"时可以选"稍后提醒"。</summary>
     bool CanSnoozeRestart,
+    /// <summary>主页顶部的提醒；没有时为 null。</summary>
+    HomeNotice? Notice,
     CleanupCard Cleanup,
     /// <summary>本机不支持风扇加速或未连接时为 null（不显示风扇一行）。</summary>
     FanView? Fan)
@@ -69,17 +77,23 @@ public static class HomeViewBuilder
             MetricView None(string key, string unit) => new(Loc.Get(key), null, unit, null, Level.Good, "");
             return new HomeView(false, false,
                 None("metric.cpu_load", "%"), None("metric.cpu_temp", HomeView.CelsiusUnit), None("metric.gpu_temp", HomeView.CelsiusUnit), None("metric.mem", "%"),
-                Mode.Auto, Mode.Balanced, null, null, GameMode.Full, false,
+                Mode.Auto, Mode.Balanced, null, null, GameMode.Full, false, null,
                 new CleanupCard(0, 0, Loc.Get("home.auto_clean.desc"), 0, 0), null);
         }
         var m = status.Metrics;
+        var restart = status.Health.Code == HealthCode.RestartRecommended;
         return new HomeView(true, status.DryRun,
             CpuLoad(m), Temperature("metric.cpu_temp", m.CpuTemp), Temperature("metric.gpu_temp", m.GpuTemp), MemoryMetric(m),
             status.Mode, status.EffectiveMode, ModeText.InUse(status), status.Hardware.VendorMode, status.GameMode,
-            status.Health.Code == HealthCode.RestartRecommended,
+            restart, Notice(restart, status.DryRun),
             CleanupSummary(status, now),
             Fan(status));
     }
+
+    private static HomeNotice? Notice(bool restart, bool dryRun) =>
+        restart ? new HomeNotice(Level.Notice, Loc.Get("status.restart"), Loc.Get("status.restart.desc"), true)
+        : dryRun ? new HomeNotice(Level.Good, Loc.Get("status.observe"), Loc.Get("status.observe.desc"), false)
+        : null;
 
     private static FanView? Fan(Status s)
     {

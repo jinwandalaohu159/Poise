@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use poise_core::model::Pid;
 use poise_core::power_settings::PowerSettingKind;
 use poise_core::prefs::{AppPreference, Mode};
-use poise_core::schedule::{Cause, Pressure, Verdict};
+use poise_core::schedule::{Cause, DemandReason, Pressure, Verdict};
 
 use super::CleanupTrigger;
 
@@ -64,9 +64,12 @@ pub struct CoreSpan {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Event {
-    /// 对处理器的需求变了（决定后台让路到什么程度）。
+    /// 对处理器的需求变了（决定后台让路到什么程度），以及从哪来。
     Demand {
         level: Pressure,
+        /// 旧版本记下的没有这一项。
+        #[serde(default)]
+        reason: Option<DemandReason>,
     },
     /// 对一个程序的决定变了，或重点程序用的核心变了。
     Program {

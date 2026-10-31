@@ -15,7 +15,6 @@ use crate::observe::services::ServiceMap;
 use crate::observe::system;
 use crate::persist::paths;
 
-#[derive(Default)]
 pub struct Snapshotter {
     table: ProcessTable,
     facts: FactsCache,
@@ -25,6 +24,17 @@ pub struct Snapshotter {
 }
 
 impl Snapshotter {
+    /// 准备采集（启动读取处理器性能的线程）。
+    pub fn start() -> Self {
+        Self {
+            table: ProcessTable::default(),
+            facts: FactsCache::default(),
+            names: NameResolver::default(),
+            services: ServiceMap::default(),
+            cpu: CpuPerformanceMeter::start(),
+        }
+    }
+
     pub fn take(&mut self, at: Millis) -> windows::core::Result<Snapshot> {
         let mut steps = Steps::start();
         let raw = self.table.read()?;
@@ -61,7 +71,13 @@ impl Snapshotter {
                     metrics: r.metrics,
                 }
             })
-            .collect();
+            .collect::<Vec<ProcessSample>>();
+        self.names.trim(|| {
+            processes
+                .iter()
+                .filter_map(|p| p.facts.image_path.clone())
+                .collect()
+        });
         steps.done("进程信息");
         let processors = processors::read_processor_times();
         let mut system = system::read_metrics(&processors);
@@ -103,7 +119,7 @@ mod tests {
 
     #[test]
     fn snapshot_contains_self_with_facts() {
-        let mut s = super::Snapshotter::default();
+        let mut s = super::Snapshotter::start();
         let snap = s.take(1).unwrap();
         let me = snap.find(std::process::id()).expect("self");
         assert!(me.facts.image_path.is_some());

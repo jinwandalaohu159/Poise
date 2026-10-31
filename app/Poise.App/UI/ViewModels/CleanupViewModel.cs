@@ -10,7 +10,7 @@ using Poise.Core.Presentation;
 namespace Poise.App.UI.ViewModels;
 
 /// <summary>
-/// 清理页：顶部摘要 + 按程序列出的明细。页面显示期间每 3 秒刷新。
+/// 清理页：顶部摘要 + 按程序列出的明细。页面显示期间每 3 秒刷新（主窗口被挡住或最小化时停下，见 <see cref="Poller"/>）。
 /// 刷新与修改经过 <see cref="RefreshGate"/>：修改期间的旧结果不显示，开关不会闪回。
 /// </summary>
 public sealed partial class CleanupViewModel : ObservableObject, IDisposable
@@ -20,25 +20,18 @@ public sealed partial class CleanupViewModel : ObservableObject, IDisposable
     private const double ReorderMargin = 1.1;
 
     private readonly AppHost _host;
-    private readonly DispatcherTimer _timer = new() { Interval = RefreshEvery };
+    private readonly Poller _poller;
     private readonly RefreshGate _gate = new();
 
     public CleanupViewModel(AppHost host)
     {
         _host = host;
-        // 主窗口最小化或被全屏程序挡住时不刷新（见 UiPresence）。
-        _timer.Tick += async (_, _) =>
-        {
-            if (_host.Presence.MainVisible)
-            {
-                await RefreshAsync();
-            }
-        };
+        _poller = new Poller(host, RefreshEvery);
     }
 
-    public ObservableCollection<ProcessRowItem> Attention { get; } = [];
+    public ResettableCollection<ProcessRowItem> Attention { get; } = [];
 
-    public ObservableCollection<ProcessRowItem> Others { get; } = [];
+    public ResettableCollection<ProcessRowItem> Others { get; } = [];
 
     /// <summary>最近一次读到的摘要。</summary>
     public CleanupPageView? Current { get; private set; }
@@ -48,15 +41,13 @@ public sealed partial class CleanupViewModel : ObservableObject, IDisposable
 
     public event Action<string>? Error;
 
-    public async Task StartAsync()
-    {
-        await RefreshAsync();
-        _timer.Start();
-    }
+    public void Start() => _poller.Start(() => _gate.TickAsync(QueryAsync));
 
-    public void Stop() => _timer.Stop();
+    public void Stop() => _poller.Stop();
 
-    public Task RefreshAsync() => _gate.RefreshAsync(async () =>
+    public Task RefreshAsync() => _gate.RefreshAsync(QueryAsync);
+
+    private async Task<Action> QueryAsync()
     {
         try
         {
@@ -67,10 +58,14 @@ public sealed partial class CleanupViewModel : ObservableObject, IDisposable
         {
             return () => Error?.Invoke(ErrorText.For(e));
         }
-    });
+    }
 
     /// <summary>一键清理，完成后同时刷新整体状态和本页。</summary>
-    public Task<Feedback> CleanAsync() => CleanupCommand.RunAsync(_host, Change);
+    public Task<Feedback> CleanAsync() => CleanupCommand.RunAsync(_host, async () =>
+    {
+        await _host.Status.RefreshAsync();
+        await RefreshAsync();
+    });
 
     public Task SetAutoCleanAsync(bool on) => TryChange(() => _host.Api.SetAutoCleanAsync(on));
 
@@ -101,7 +96,6 @@ public sealed partial class CleanupViewModel : ObservableObject, IDisposable
         Reconcile(Attention, view.Attention);
         Reconcile(Others, view.Others);
         Updated?.Invoke(view);
-        _ = LoadIconsAsync();
     }
 
     /// <summary>
@@ -129,14 +123,5 @@ public sealed partial class CleanupViewModel : ObservableObject, IDisposable
         CollectionSync.Sync(target, items, i => i.Pid);
     }
 
-    private async Task LoadIconsAsync()
-    {
-        // AppIcons 按路径缓存，刷新时不会重复读取。
-        foreach (var item in Attention.Concat(Others).Where(i => i.Icon is null && i.Path is not null).ToList())
-        {
-            item.Icon = await AppIcons.LoadAsync(item.Path!);
-        }
-    }
-
-    public void Dispose() => _timer.Stop();
+    public void Dispose() => _poller.Stop();
 }

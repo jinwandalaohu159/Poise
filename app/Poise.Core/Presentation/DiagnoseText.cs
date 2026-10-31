@@ -70,7 +70,7 @@ public static class DiagnoseText
         };
         var level = d.CauseKind == "unclear" ? Level.Good : Level.Notice;
         return new DiagnoseView(conclusion, evidence, level, suggestions,
-            Bars(d.CpuRanking, v => $"{v:0.0}%"),
+            Bars(d.CpuRanking, Format.Share),
             Bars(d.MemoryRanking.Select(m => (m.Name, (double)m.Bytes)), v => Format.Bytes((ulong)v)),
             Loc.Get(d.SmartSchedule ? "diag.smart_on" : "diag.smart_off"));
     }

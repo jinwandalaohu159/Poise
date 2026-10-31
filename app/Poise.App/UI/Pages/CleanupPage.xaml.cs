@@ -28,14 +28,19 @@ public sealed partial class CleanupPage : Page
         CleanButton.Glyph = "\uE74D";
         CleanButton.IsAccent = true;
         CleanButton.Action = async () => Result.Show(await Vm.CleanAsync());
-        Vm.Updated += Render;
         Vm.Error += ErrorBar.ShowError;
         Vm.Attention.CollectionChanged += (_, _) => UpdateSections();
         Vm.Others.CollectionChanged += (_, _) => UpdateSections();
-        Loaded += async (_, _) => await Vm.StartAsync();
     }
 
     public CleanupViewModel Vm { get; } = new(AppHost.Current);
+
+    /// <summary>订阅与取消成对：进页面时订阅、开始刷新，离开时取消、停止。</summary>
+    protected override void OnNavigatedTo(NavigationEventArgs e)
+    {
+        Vm.Updated += Render;
+        Vm.Start();
+    }
 
     protected override void OnNavigatedFrom(NavigationEventArgs e)
     {
@@ -50,8 +55,7 @@ public sealed partial class CleanupPage : Page
         _freeable.RollTo(v.FreeableBytes);
         _attention.RollTo(v.NeedsAttention);
         MemoryText.Text = $"{Loc.Get("cleanup.memory")}  {v.MemoryText}";
-        MemoryBar.Fraction = v.MemoryUsedFraction;
-        MemoryBar.SecondaryFraction = v.FreeableFraction;
+        MemoryBar.Set(v.MemoryUsedFraction, v.FreeableFraction);
         LastCleanText.Text = v.LastCleanup ?? "";
         LastCleanText.Visibility = v.LastCleanup is null ? Visibility.Collapsed : Visibility.Visible;
         AutoCleanToggle.IsOn = v.AutoClean;
@@ -63,13 +67,8 @@ public sealed partial class CleanupPage : Page
         _rendering = false;
     }
 
-    private void ShowFreeable(double bytes)
-    {
-        var text = Format.Bytes((ulong)Math.Max(0, bytes));
-        var space = text.LastIndexOf(' ');
-        FreeableValue.Text = text[..space];
-        FreeableUnit.Text = text[(space + 1)..];
-    }
+    private void ShowFreeable(double bytes) =>
+        (FreeableValue.Text, FreeableUnit.Text) = Format.BytesParts((ulong)Math.Max(0, bytes));
 
     private void UpdateSections()
     {

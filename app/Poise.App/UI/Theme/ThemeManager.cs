@@ -47,6 +47,18 @@ public sealed class ThemeManager(UiSettings settings)
         root.Opacity = 1;
     }
 
+    /// <summary>
+    /// 跟随系统时，系统换了深浅色：内容自己会跟着变，标题栏按钮的颜色不会，要在这里跟上
+    /// （否则深色窗口上是一组看不见的黑色按钮）。窗口创建时调用一次。
+    /// </summary>
+    public static void TrackCaptionButtons(Window window)
+    {
+        if (window.Content is FrameworkElement root)
+        {
+            root.ActualThemeChanged += (sender, _) => UpdateCaptionButtons(window.AppWindow, sender.ActualTheme);
+        }
+    }
+
     private static void UpdateCaptionButtons(AppWindow appWindow, ElementTheme actual)
     {
         if (!AppWindowTitleBar.IsCustomizationSupported())

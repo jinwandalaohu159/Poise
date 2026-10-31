@@ -1,11 +1,12 @@
 //! 调度需要跨时间记住的事，各在一个文件里：前台保持、正在玩的游戏、发声保持、程序负载、资源需求、
-//! 后台忙碌、临时全速。
+//! 后台忙碌、重点程序与它占用的核心、临时全速。
 
 mod audio;
 mod boosts;
 mod busy;
 mod demand;
 mod focus;
+mod footprint;
 mod foreground;
 mod games;
 mod load;
@@ -13,8 +14,9 @@ mod load;
 pub use audio::AudioTracker;
 pub use boosts::TempBoosts;
 pub use busy::{BusyRule, BusyTracker, Demand};
-pub use demand::{DemandRule, DemandSignals, DemandTracker, Pressure};
-pub use focus::{FocusRule, FocusTracker, Footprint};
+pub use demand::{DemandReason, DemandRule, DemandSignals, DemandTracker, Pressure};
+pub use focus::{FocusEnd, FocusRule, FocusState, FocusTracker};
+pub use footprint::{FocusLoad, Footprint};
 pub use foreground::{ForegroundHold, ForegroundTracker};
 pub use games::GameTracker;
 pub use load::{LoadSmoothing, TreeLoad};

@@ -13,7 +13,7 @@ use super::trend::{GrowthRule, sustained_growth};
 pub struct LeakConfig {
     /// 两个保存点之间的最小间隔（降采样）。
     pub sample_interval_ms: Millis,
-    /// 最多保存多少个点（默认 48 小时）。
+    /// 最多保存多少个点（默认约 42 小时；满了之后早先的点隔一个丢一个，历史更长、更稀）。
     pub max_points: usize,
     /// 进程启动后多久开始统计（跳过启动阶段的正常增长）。
     pub warmup_ms: Millis,
@@ -41,7 +41,7 @@ impl Default for LeakConfig {
     fn default() -> Self {
         Self {
             sample_interval_ms: 5 * 60 * 1000,
-            max_points: 576,
+            max_points: 512,
             warmup_ms: 30 * 60 * 1000,
             min_span_ms: 60 * 60 * 1000,
             min_points: 8,
@@ -91,6 +91,8 @@ pub struct LeakDetector {
     series: HashMap<ProcessKey, Series>,
     /// 进程第一次被看到的时间，用于判断预热期。
     first_seen: HashMap<ProcessKey, Millis>,
+    /// 上次看所有进程的时间（见 [`LeakDetector::OBSERVE_EVERY_MS`]）。
+    observed_at: Option<Millis>,
 }
 
 impl LeakDetector {
@@ -101,8 +103,19 @@ impl LeakDetector {
         }
     }
 
+    /// 多久看一次所有进程：泄漏按小时判断，每个进程每隔 `sample_interval_ms` 才取一个点，
+    /// 不必每轮采样都把几百个进程过一遍。
+    const OBSERVE_EVERY_MS: Millis = 60_000;
+
     pub fn observe(&mut self, snap: &Snapshot) {
         let now = snap.at;
+        if self
+            .observed_at
+            .is_some_and(|t| now.saturating_sub(t) < Self::OBSERVE_EVERY_MS)
+        {
+            return;
+        }
+        self.observed_at = Some(now);
         for p in &snap.processes {
             let key = p.facts.key;
             let first = *self.first_seen.entry(key).or_insert(now);
@@ -121,7 +134,12 @@ impl LeakDetector {
                     handles: p.metrics.handles as f64,
                 });
                 if series.points.len() > self.cfg.max_points {
-                    series.points.remove(0);
+                    // 满了就隔一个丢一个：保留更长的历史，只是早先的点稀一些（每满一次才挪一遍）。
+                    let mut keep = false;
+                    series.points.retain(|_| {
+                        keep = !keep;
+                        keep
+                    });
                 }
             }
         }

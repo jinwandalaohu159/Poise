@@ -81,6 +81,7 @@ fn children_that_inherited_low_priority_are_restored_to_normal() {
         game_mode: None,
         on_battery: false,
         hot: false,
+        user_idle_ms: 0,
     });
     for a in &plan.actions {
         sim.scheduler.report(a, &Ok(ExecOutcome::default()));

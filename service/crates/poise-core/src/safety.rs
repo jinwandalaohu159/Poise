@@ -7,7 +7,7 @@ use std::fmt;
 use crate::action::{Action, ActionExecutor, ActionKind, ExecError, ExecOutcome};
 use crate::classify::{Classification, Role};
 use crate::known::is_protected_service;
-use crate::model::PriorityClass;
+use crate::model::{PriorityClass, ProcessKey};
 use crate::prefs::AppPreference;
 
 /// 动作由谁触发。
@@ -70,7 +70,11 @@ impl SafetyGuard {
         if c.is_game && c.anti_cheat_present && !action.is_task_manager_equivalent() {
             return Err(DenyReason::AntiCheatGame);
         }
-        match action.kind(original_priority) {
+        let kind = action.kind(original_priority);
+        if c.is_maintenance() {
+            return Self::check_maintenance(action, kind);
+        }
+        match kind {
             ActionKind::Restore => Ok(()),
             ActionKind::Boost => {
                 if c.is_schedulable() {
@@ -84,6 +88,20 @@ impl SafetyGuard {
         }
     }
 
+    /// Windows 的维护程序只能挪开（让到副域、降低内存与磁盘优先级）和复原，别的一概不做
+    /// （见 `ScheduleScope::Maintenance`）。
+    fn check_maintenance(action: &Action, kind: ActionKind) -> Result<(), DenyReason> {
+        let moves_aside = matches!(
+            action,
+            Action::SetCoreSet { .. } | Action::SetResourcePriority { .. }
+        );
+        match kind {
+            ActionKind::Restore => Ok(()),
+            ActionKind::Demote if moves_aside => Ok(()),
+            _ => Err(DenyReason::NotUserApp),
+        }
+    }
+
     /// 与调度策略（`schedule::policy`）的规则对应、互为把关：改其中一边时两边一起改。
     fn check_demote(action: &Action, c: &Classification) -> Result<(), DenyReason> {
         if !c.is_schedulable() {
@@ -92,11 +110,7 @@ impl SafetyGuard {
         if c.is_game {
             return Err(DenyReason::InUse);
         }
-        let in_use = c.in_foreground_tree
-            || matches!(
-                c.preference,
-                AppPreference::AlwaysFast | AppPreference::Game
-            );
+        let in_use = c.in_use_by_user();
         // 正在发声的程序（整个进程树）：连"低优先级"也让步，只允许挪到小核——声音线程有自己的
         // 实时优先级，在小核上照样流畅；不降优先级、不节能、不降内存优先级。
         if c.plays_audio {
@@ -194,8 +208,10 @@ impl GuardedExecutor {
         Self { inner, dry_run }
     }
 
+    /// 对 `target`（必须是 `action` 的进程）执行动作，见 [`ActionExecutor::execute`]。
     pub fn execute(
         &self,
+        target: ProcessKey,
         action: &Action,
         c: &Classification,
         original_priority: PriorityClass,
@@ -206,7 +222,7 @@ impl GuardedExecutor {
         if self.dry_run {
             return Ok(ExecOutcome::default());
         }
-        self.inner.execute(action)
+        self.inner.execute(target, action)
     }
 }
 
@@ -238,6 +254,7 @@ mod tests {
         SafetyGuard::check(&action, c, PriorityClass::Normal, trigger)
     }
 
+    const KEY: ProcessKey = ProcessKey { pid: 1, created: 1 };
     const DEMOTE: Action = Action::SetEcoQos {
         pid: 1,
         state: EcoQos::On,
@@ -376,6 +393,40 @@ mod tests {
     }
 
     #[test]
+    fn windows_maintenance_can_only_be_moved_aside_and_back() {
+        let c = Classification {
+            role: Role::SystemOther,
+            schedule: ScheduleScope::Maintenance,
+            ..user_app()
+        };
+        let low_io = Action::SetResourcePriority {
+            pid: 1,
+            priority: crate::action::ResourcePriority::Low,
+        };
+        let back = Action::SetCoreSet {
+            pid: 1,
+            set: CoreSet::All,
+        };
+        for allowed in [TO_SMALL_CORES, low_io, back] {
+            assert_eq!(check(allowed, &c, Trigger::Auto), Ok(()));
+        }
+        for refused in [LOWER, DEMOTE, BOOST, Action::RestartApp { pid: 1 }] {
+            assert_eq!(
+                check(refused, &c, Trigger::Manual),
+                Err(DenyReason::NotUserApp)
+            );
+        }
+        let to_big_cores = Action::SetCoreSet {
+            pid: 1,
+            set: CoreSet::Performance,
+        };
+        assert_eq!(
+            check(to_big_cores, &c, Trigger::Auto),
+            Err(DenyReason::NotUserApp)
+        );
+    }
+
+    #[test]
     fn system_processes_are_not_scheduled() {
         let c = Classification {
             role: Role::SystemOther,
@@ -483,7 +534,7 @@ mod tests {
 
     struct Panicking;
     impl ActionExecutor for Panicking {
-        fn execute(&self, _: &Action) -> Result<ExecOutcome, ExecError> {
+        fn execute(&self, _: ProcessKey, _: &Action) -> Result<ExecOutcome, ExecError> {
             panic!("dry run must not execute");
         }
     }
@@ -492,15 +543,21 @@ mod tests {
     fn dry_run_checks_but_never_executes() {
         let ex = GuardedExecutor::new(Box::new(Panicking), true);
         assert!(
-            ex.execute(&DEMOTE, &user_app(), PriorityClass::Normal, Trigger::Auto)
-                .is_ok()
+            ex.execute(
+                KEY,
+                &DEMOTE,
+                &user_app(),
+                PriorityClass::Normal,
+                Trigger::Auto
+            )
+            .is_ok()
         );
         let denied = Classification {
             in_foreground_tree: true,
             ..user_app()
         };
         assert!(matches!(
-            ex.execute(&DEMOTE, &denied, PriorityClass::Normal, Trigger::Auto),
+            ex.execute(KEY, &DEMOTE, &denied, PriorityClass::Normal, Trigger::Auto),
             Err(ExecError::Denied(_))
         ));
     }

@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 
 use super::demand::Pressure;
+use super::load::TreeUsage;
 use crate::model::{Millis, ProcessKey};
 
 /// 后台忙碌的判断规则。负载是整棵进程树平滑后的负载（见 `TreeLoad`），短暂的活动本来就不会让它升高。
@@ -34,15 +35,6 @@ impl BusyRule {
     }
 }
 
-/// 一个程序此刻的负载。
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
-pub struct TreeUsage {
-    /// 处理器（单核百分比）。
-    pub core_pct: f32,
-    /// 磁盘读写（字节每秒）。
-    pub disk_bytes_per_s: f64,
-}
-
 /// 此刻的需求。
 #[derive(Debug, Clone, Copy)]
 pub struct Demand {
@@ -53,8 +45,9 @@ pub struct Demand {
 }
 
 /// 后台忙碌：有需求时，在后台持续占用处理器或磁盘的程序让路；让路后保持，直到它回到"正在用"
-/// （前台、发声、游戏等）、退出、长时间没有需求（没人需要资源了，后台的工作应该全速完成），
-/// 或者需求降低后它已远低于新的门槛（有重点程序时按更低的门槛让路的程序，重点程序结束后恢复）。
+/// （前台、发声、游戏等）、退出、长时间没有需求时它也闲下来了，或者需求降低后它已远低于新的门槛
+/// （有重点程序时按更低的门槛让路的程序，重点程序结束后恢复）。没有需求时还在忙的只留着"低于正常"
+/// （见 `policy`：不限核心、不节能，没人抢处理器时不影响它的速度）。
 /// 不因为它一时闲下来就恢复，避免反复调整。按进程树（程序）判断。
 #[derive(Debug, Default)]
 pub struct BusyTracker {
@@ -62,6 +55,8 @@ pub struct BusyTracker {
     yielded: HashMap<ProcessKey, Pressure>,
     /// 最近一次"正在用"的时刻（见 [`BusyRule::reyield_after_ms`]）。
     last_used: HashMap<ProcessKey, Millis>,
+    /// 负载重的让路程序（见 [`BusyTracker::heavy`]）。
+    heavy: HashSet<ProcessKey>,
 }
 
 impl BusyTracker {
@@ -110,11 +105,23 @@ impl BusyTracker {
         rule: BusyRule,
     ) -> bool {
         if demand.pressure == Pressure::None {
-            if demand.idle_for >= rule.release_after_ms {
-                self.yielded.remove(&root);
-                return false;
+            if demand.idle_for < rule.release_after_ms {
+                return true;
             }
-            return true;
+            // 没人需要处理器了：闲下来的恢复。还在忙的只留着"低于正常"（没有需求时不限核心、不节能，
+            // 没人抢处理器时不影响它的速度）——恢复了也换不来什么，下次一有需求又要再降一次
+            // （实测一个一直占 20%～30% 的后台程序几分钟就来回一次）。
+            if let Some((core_pct, disk)) = rule.thresholds(Pressure::Normal) {
+                let ratio = Self::RELEASE_RATIO;
+                if usage.core_pct >= core_pct * ratio
+                    || usage.disk_bytes_per_s >= disk * f64::from(ratio)
+                {
+                    self.yielded.insert(root, Pressure::Normal);
+                    return true;
+                }
+            }
+            self.yielded.remove(&root);
+            return false;
         }
         if demand.pressure < tier
             && let Some((core_pct, disk)) = rule.thresholds(demand.pressure)
@@ -131,6 +138,25 @@ impl BusyTracker {
         true
     }
 
+    /// 在忙的程序负载重不重：达到需求一般时的门槛（处理器或磁盘）算重，之后降到门槛的
+    /// [`Self::RELEASE_RATIO`] 以下才算轻（在门槛附近的不来回切换）。需求高时轻的只挪开、不节能
+    /// （见 `Desired::NUDGED`）。
+    pub fn heavy(&mut self, root: ProcessKey, usage: TreeUsage, rule: BusyRule) -> bool {
+        let ratio = if self.heavy.contains(&root) {
+            Self::RELEASE_RATIO
+        } else {
+            1.0
+        };
+        let heavy = usage.core_pct >= rule.core_pct * ratio
+            || usage.disk_bytes_per_s >= rule.disk_bytes_per_s * f64::from(ratio);
+        if heavy {
+            self.heavy.insert(root);
+        } else {
+            self.heavy.remove(&root);
+        }
+        heavy
+    }
+
     /// 程序不久前还在"正在用"（见 [`BusyRule::reyield_after_ms`]）：先不挪动它。
     pub fn settling(&self, root: &ProcessKey, now: Millis, rule: BusyRule) -> bool {
         self.last_used
@@ -141,6 +167,7 @@ impl BusyTracker {
     pub fn retain_alive(&mut self, alive: &HashSet<ProcessKey>) {
         self.yielded.retain(|k, _| alive.contains(k));
         self.last_used.retain(|k, _| alive.contains(k));
+        self.heavy.retain(|k| alive.contains(k));
     }
 }
 
@@ -200,7 +227,10 @@ mod tests {
             idle_for,
         };
         assert!(b.observe(ROOT, cpu(50.0), false, idle(30_000), RULE));
-        assert!(!b.observe(ROOT, cpu(50.0), false, idle(60_000), RULE));
+        // 没人需要处理器一段时间后：还在忙的继续留着（只是"低于正常"，不影响它的速度），闲下来的恢复。
+        assert!(b.observe(ROOT, cpu(50.0), false, idle(60_000), RULE));
+        assert!(b.observe(ROOT, cpu(50.0), false, idle(120_000), RULE));
+        assert!(!b.observe(ROOT, cpu(3.0), false, idle(130_000), RULE));
     }
 
     #[test]
@@ -228,6 +258,17 @@ mod tests {
         // 游戏结束，需求回到一般（门槛 10%）：远低于门槛的恢复，接近门槛的继续让路。
         assert!(!b.observe(ROOT, cpu(5.0), false, at(1, Pressure::Normal), RULE));
         assert!(b.observe(light, cpu(9.0), false, at(1, Pressure::Normal), RULE));
+    }
+
+    #[test]
+    fn light_and_heavy_have_a_margin_between_them() {
+        let mut b = BusyTracker::default();
+        assert!(!b.heavy(ROOT, cpu(5.0), RULE));
+        assert!(b.heavy(ROOT, cpu(12.0), RULE));
+        // 回落到门槛附近仍算重，明显低于门槛才算轻。
+        assert!(b.heavy(ROOT, cpu(8.0), RULE));
+        assert!(!b.heavy(ROOT, cpu(6.0), RULE));
+        assert!(!b.heavy(ROOT, cpu(9.0), RULE));
     }
 
     #[test]

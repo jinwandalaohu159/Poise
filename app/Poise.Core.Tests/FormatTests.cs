@@ -13,6 +13,13 @@ public sealed class FormatTests
     public void Bytes_show_mb_below_a_gigabyte_and_one_decimal_above(ulong bytes, string expected) =>
         Assert.Equal(expected, Format.Bytes(bytes));
 
+    [Fact]
+    public void Bytes_split_into_number_and_unit()
+    {
+        Assert.Equal(("2.1", "GB"), Format.BytesParts((2UL << 30) + (100UL << 20)));
+        Assert.Equal(("512", "MB"), Format.BytesParts(512UL << 20));
+    }
+
     [Theory]
     [InlineData(16UL << 30, "16 GB")]
     [InlineData((1UL << 30) + (512UL << 20), "1.5 GB")]

@@ -1,9 +1,12 @@
 //! 日志的文件：每条事件一行 JSON，追加到 events.jsonl；写满 [`MAX_BYTES`] 后改名为 events.1.jsonl
 //! （覆盖更早的那份）再从头写。读不懂的行（格式变了的旧版本、写到一半断电）跳过。
+//!
+//! 文件一直开着，一批事件只写一次（游戏开局时调度的决定集中变化，一次几十条）：每条都打开、写入、
+//! 关闭的话，关闭被写过的文件还常常引来杀毒软件扫描一遍。
 
 use std::collections::VecDeque;
-use std::fs::OpenOptions;
-use std::io::{BufRead, BufReader, Write};
+use std::fs::{File, OpenOptions};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use poise_protocol::EventEntry;
@@ -14,6 +17,10 @@ const MAX_BYTES: u64 = 1024 * 1024;
 pub(super) struct EventFile {
     path: PathBuf,
     old: PathBuf,
+    /// 打开着的文件，以及它有多大。
+    file: Option<(File, u64)>,
+    /// 还没写进文件的行。
+    pending: Vec<u8>,
 }
 
 impl EventFile {
@@ -21,21 +28,27 @@ impl EventFile {
         Self {
             path: dir.join("events.jsonl"),
             old: dir.join("events.1.jsonl"),
+            file: None,
+            pending: Vec::new(),
         }
     }
 
-    /// 最近的 `n` 条，从早到晚。
+    /// 最近的 `n` 条，从早到晚。从文件末尾往前解析，够了就停（启动时不必把两个文件全解析一遍）。
     pub fn load_tail(&self, n: usize) -> Vec<EventEntry> {
-        let mut tail = VecDeque::with_capacity(n + 1);
-        for path in [&self.old, &self.path] {
-            let Ok(file) = std::fs::File::open(path) else {
+        let mut tail = VecDeque::with_capacity(n);
+        for path in [&self.path, &self.old] {
+            if tail.len() >= n {
+                break;
+            }
+            // 按字节读、逐行解析：断电时写坏的一行（甚至不是合法的 UTF-8）只丢那一行，不丢整个文件。
+            let Ok(bytes) = std::fs::read(path) else {
                 continue;
             };
-            for line in BufReader::new(file).lines().map_while(Result::ok) {
-                if let Ok(entry) = serde_json::from_str::<EventEntry>(&line) {
-                    tail.push_back(entry);
-                    if tail.len() > n {
-                        tail.pop_front();
+            for line in bytes.split(|&b| b == b'\n').rev() {
+                if let Ok(entry) = serde_json::from_slice::<EventEntry>(line) {
+                    tail.push_front(entry);
+                    if tail.len() >= n {
+                        break;
                     }
                 }
             }
@@ -43,23 +56,48 @@ impl EventFile {
         tail.into()
     }
 
-    /// 追加一条。写不进去时只记文本日志：结构化日志丢一条不影响任何功能。
-    pub fn append(&self, entry: &EventEntry) {
-        if std::fs::metadata(&self.path).is_ok_and(|m| m.len() >= MAX_BYTES) {
-            let _ = std::fs::remove_file(&self.old);
-            let _ = std::fs::rename(&self.path, &self.old);
+    /// 追加一条（先放着，[`EventFile::flush`] 时一起写）。
+    pub fn append(&mut self, entry: &EventEntry) {
+        if serde_json::to_writer(&mut self.pending, entry).is_ok() {
+            self.pending.push(b'\n');
         }
-        let Ok(mut line) = serde_json::to_string(entry) else {
+    }
+
+    /// 把放着的行写进文件。写不进去时只记文本日志：结构化日志丢几条不影响任何功能。
+    pub fn flush(&mut self) {
+        if self.pending.is_empty() {
             return;
-        };
-        line.push('\n');
-        let written = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&self.path)
-            .and_then(|mut f| f.write_all(line.as_bytes()));
-        if let Err(e) = written {
-            log::warn!("写入 events.jsonl 失败：{e}");
         }
+        // 写满了：改名为旧文件（直接替换掉更旧的）。改名失败（文件被别的程序占着）时接着往原文件里写，
+        // 下一批再试；不先删旧文件，免得改名失败时历史全没了。
+        if self.file.as_ref().is_some_and(|(_, len)| *len >= MAX_BYTES) {
+            self.file = None;
+            if let Err(e) = std::fs::rename(&self.path, &self.old) {
+                log::debug!("轮换 events.jsonl 失败（下次再试）：{e}");
+            }
+        }
+        if self.file.is_none() {
+            match OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&self.path)
+            {
+                Ok(f) => {
+                    let len = f.metadata().map_or(0, |m| m.len());
+                    self.file = Some((f, len));
+                }
+                Err(e) => log::warn!("打开 events.jsonl 失败：{e}"),
+            }
+        }
+        if let Some((f, len)) = self.file.as_mut() {
+            match f.write_all(&self.pending) {
+                Ok(()) => *len += self.pending.len() as u64,
+                Err(e) => {
+                    log::warn!("写入 events.jsonl 失败：{e}");
+                    self.file = None;
+                }
+            }
+        }
+        self.pending.clear();
     }
 }

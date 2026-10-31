@@ -1,5 +1,4 @@
 using CommunityToolkit.Mvvm.ComponentModel;
-using Microsoft.UI.Xaml;
 using Poise.Core.Ipc;
 using Poise.Core.Presentation;
 
@@ -20,6 +19,7 @@ public sealed partial class ProcessItem : ObservableObject
         Pid = p.Pid;
         Name = p.Name;
         Path = p.Path;
+        Key = KeyOf(p);
         Update(p);
     }
 
@@ -30,7 +30,7 @@ public sealed partial class ProcessItem : ObservableObject
     public string Path { get; }
 
     /// <summary>进程号会被系统复用，加上文件名区分。</summary>
-    public string Key => KeyOf(Pid, Name);
+    public string Key { get; }
 
     internal static string KeyOf(AppProcess p) => KeyOf(p.Pid, p.Name);
 
@@ -45,12 +45,9 @@ public sealed partial class ProcessItem : ObservableObject
     [ObservableProperty]
     public partial string Memory { get; private set; } = "";
 
-    /// <summary>可以单独设置类别时显示类别选项。</summary>
+    /// <summary>可以单独设置类别时才创建类别下拉框。</summary>
     [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(PreferenceVisibility))]
     public partial bool CanSetPreference { get; private set; }
-
-    public Visibility PreferenceVisibility => CanSetPreference ? Visibility.Visible : Visibility.Collapsed;
 
     /// <summary><see cref="AppPreference"/> 的数值。</summary>
     [ObservableProperty]

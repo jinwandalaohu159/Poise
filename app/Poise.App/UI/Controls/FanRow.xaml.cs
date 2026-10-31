@@ -25,7 +25,15 @@ public sealed partial class FanRow : UserControl
         Boost.AddHandler(PointerReleasedEvent, new PointerEventHandler((_, _) => EndDrag()), true);
         Boost.PointerCaptureLost += (_, _) => EndDrag();
         _commit.Tick += (_, _) => Commit();
-        Unloaded += (_, _) => _commit.Stop();
+        // 离开页面时还没提交的调节（键盘调完不到 0.4 秒、拖着没松手）照样提交，不悄悄丢掉。
+        Unloaded += (_, _) =>
+        {
+            _dragging = false;
+            if (_commit.IsEnabled || (_committed >= 0 && (int)Math.Round(Boost.Value) != _committed))
+            {
+                Commit();
+            }
+        };
     }
 
     /// <summary>用户选定了加速（0～100，0 = 自动）。</summary>

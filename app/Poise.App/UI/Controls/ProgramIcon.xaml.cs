@@ -21,18 +21,24 @@ public sealed partial class ProgramIcon : UserControl
 
     private async Task LoadAsync(string? path)
     {
-        Picture.Source = null;
-        Fallback.Visibility = Visibility.Visible;
-        if (string.IsNullOrEmpty(path))
+        // 已经取到过：直接显示，不先闪一下通用图标。
+        var image = string.IsNullOrEmpty(path) ? null : AppIcons.Cached(path);
+        Show(image);
+        if (image is not null || string.IsNullOrEmpty(path))
         {
             return;
         }
-        var image = await AppIcons.LoadAsync(path);
+        image = await AppIcons.LoadAsync(path);
         // 加载期间换了程序（列表行被复用）：丢弃旧的结果。
-        if (image is not null && path == Path)
+        if (path == Path)
         {
-            Picture.Source = image;
-            Fallback.Visibility = Visibility.Collapsed;
+            Show(image);
         }
+    }
+
+    private void Show(Microsoft.UI.Xaml.Media.ImageSource? image)
+    {
+        Picture.Source = image;
+        Fallback.Visibility = image is null ? Visibility.Visible : Visibility.Collapsed;
     }
 }

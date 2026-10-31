@@ -37,6 +37,8 @@ struct Proc {
     renders_fullscreen: bool,
     /// 程序自己设的优先级。
     own_priority: PriorityClass,
+    /// Windows 目录下的程序（命令提示符等）：不参与调度。
+    system: bool,
 }
 
 fn app(pid: Pid) -> Proc {
@@ -50,6 +52,7 @@ fn app(pid: Pid) -> Proc {
         preference: AppPreference::Auto,
         renders_fullscreen: false,
         own_priority: PriorityClass::Normal,
+        system: false,
     }
 }
 
@@ -76,6 +79,8 @@ struct Sim {
     decisions: Vec<Decision>,
     last_plan: Option<SchedulePlan>,
     on_battery: bool,
+    /// 用户多久没操作。
+    idle_ms: Millis,
     /// 整机累计的忙碌时间、总时间（100 纳秒）。
     system_times: (u64, u64),
 }
@@ -98,6 +103,7 @@ impl Sim {
             decisions: Vec::new(),
             last_plan: None,
             on_battery: false,
+            idle_ms: 0,
             system_times: (0, 0),
         }
     }
@@ -183,7 +189,11 @@ impl Sim {
                         || (foreground && p.renders_fullscreen),
                     anti_cheat_present: false,
                     restartable_service: None,
-                    schedule: ScheduleScope::App,
+                    schedule: if p.system {
+                        ScheduleScope::Excluded
+                    } else {
+                        ScheduleScope::App
+                    },
                 };
                 (p.pid, class)
             })
@@ -204,6 +214,7 @@ impl Sim {
             game_mode: Some(Mode::Full),
             on_battery: self.on_battery,
             hot: false,
+            user_idle_ms: self.idle_ms,
         });
         for a in &plan.actions {
             self.scheduler.report(a, &Ok(ExecOutcome::default()));
@@ -255,8 +266,9 @@ impl Sim {
         rounds.into_iter().map(|(pid, r)| (pid, r.len())).collect()
     }
 
+    /// 让路了：完整让路，或负载轻、只挪开不节能（见 `Desired::NUDGED`）。
     fn is_yielded(&self, pid: Pid) -> bool {
-        self.state_of(pid) == Some(Desired::YIELDED)
+        matches!(self.state_of(pid), Some(Desired::YIELDED | Desired::NUDGED))
     }
 
     /// 只降了优先级（正在用的程序在忙，而没有重点程序）。

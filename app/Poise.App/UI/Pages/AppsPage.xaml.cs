@@ -1,6 +1,7 @@
 using Microsoft.UI;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Navigation;
 using Poise.App.UI.Controls;
 using Poise.Core.Ipc;
 using Poise.Core.Localization;
@@ -25,6 +26,7 @@ public sealed partial class AppsPage : Page
         InitializeComponent();
         Header.Title = Loc.Get("apps.title");
         Vm.Error += ErrorBar.ShowError;
+        Vm.Recovered += ErrorBar.HideError;
         NameHeader.Click += () => Vm.SortBy(AppSort.Name);
         CpuHeader.Click += () => Vm.SortBy(AppSort.Cpu);
         MemoryHeader.Click += () => Vm.SortBy(AppSort.Memory);
@@ -36,11 +38,13 @@ public sealed partial class AppsPage : Page
             }
         };
         ShowSort();
-        Loaded += async (_, _) => await Vm.StartAsync();
-        Unloaded += (_, _) => Vm.Stop();
     }
 
     public AppsViewModel Vm { get; } = new(AppHost.Current);
+
+    protected override void OnNavigatedTo(NavigationEventArgs e) => Vm.Start();
+
+    protected override void OnNavigatedFrom(NavigationEventArgs e) => Vm.Stop();
 
     /// <summary>选择一个程序（.exe），再选择偏好。</summary>
     /// <summary>当前排序的列加深并显示方向箭头；每个列名的提示说明再点会怎样排序。</summary>

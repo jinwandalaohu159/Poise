@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Globalization;
 
 namespace Poise.Core.Presentation;
@@ -6,6 +7,10 @@ namespace Poise.Core.Presentation;
 /// 程序名的排序，与"开始"菜单、通讯录一致：按首字母分组，中文取拼音首字母，中英文混排
 /// （百度网盘在 B，Chrome 在 C，钉钉和 docker 都在 D）；数字和符号开头的排在最前。
 /// 同一字母内按中文拼音 / 英文字母顺序，不区分大小写。与界面语言无关。
+/// <para>
+/// 每个名称的首字母和排序键只算一次（见 <see cref="KeyOf"/>）：程序列表每两秒重新排一次，几百个名称
+/// 每次比较都按中文规则现算的话，一次排序要做十几万次中文比较。
+/// </para>
 /// </summary>
 public sealed class NameOrder : IComparer<string>
 {
@@ -26,6 +31,11 @@ public sealed class NameOrder : IComparer<string>
         ('Y', "丫"), ('Z', "帀"),
     ];
 
+    /// <summary>记住的名称最多这么多（程序装了又卸，名称不会无限增长，这只是兜底）。</summary>
+    private const int MaxKeys = 4096;
+
+    private static readonly ConcurrentDictionary<string, (char Initial, SortKey Key)> Keys = new();
+
     private NameOrder()
     {
     }
@@ -40,8 +50,24 @@ public sealed class NameOrder : IComparer<string>
         {
             return x is null ? -1 : 1;
         }
-        var byInitial = Initial(x).CompareTo(Initial(y));
-        return byInitial != 0 ? byInitial : Chinese.Compare(x, y, Options);
+        var (a, b) = (KeyOf(x), KeyOf(y));
+        var byInitial = a.Initial.CompareTo(b.Initial);
+        return byInitial != 0 ? byInitial : SortKey.Compare(a.Key, b.Key);
+    }
+
+    private static (char Initial, SortKey Key) KeyOf(string name)
+    {
+        if (Keys.TryGetValue(name, out var key))
+        {
+            return key;
+        }
+        if (Keys.Count >= MaxKeys)
+        {
+            Keys.Clear();
+        }
+        key = (Initial(name), Chinese.GetSortKey(name, Options));
+        Keys.TryAdd(name, key);
+        return key;
     }
 
     /// <summary>首字母（A～Z）；数字、符号或空名称为 '#'，排在字母前面。</summary>

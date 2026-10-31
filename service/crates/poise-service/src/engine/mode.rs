@@ -11,8 +11,7 @@ use poise_core::journal::{Journal, JournalError};
 use poise_core::model::Millis;
 use poise_core::prefs::Mode;
 use poise_core::setting::SettingStore;
-use poise_hardware::Hardware;
-use poise_platform::observe::system;
+use poise_hardware::{Applied, Hardware};
 use poise_protocol::Event;
 
 use super::Engine;
@@ -20,8 +19,7 @@ use super::changes::ChangeError;
 
 impl Engine {
     /// 应用电源/散热模式，返回实际落到硬件上的模式（界面显示它）。观察模式下不写入。
-    fn apply_hardware_mode(&mut self, mode: Mode, now: Millis) -> Mode {
-        let on_battery = system::on_battery();
+    fn apply_hardware_mode(&mut self, mode: Mode, on_battery: bool, now: Millis) -> Mode {
         if self.cfg.dry_run {
             if self.observed.mode != Some((mode, on_battery)) {
                 self.observed.mode = Some((mode, on_battery));
@@ -32,21 +30,26 @@ impl Engine {
             return mode;
         }
         if !self.hardware.needs_apply(mode, on_battery) {
+            self.mode_attempts.settled();
+            return mode;
+        }
+        if !self.mode_attempts.due((mode, on_battery), now) {
             return mode;
         }
         let started = Instant::now();
         let result = self.edit_hardware(|h, s, j| h.apply_mode(mode, on_battery, s, j, now));
-        let written_in = started.elapsed();
+        self.mode_attempts.record((mode, on_battery), &result, now);
         match result {
-            // 读回实际的设置，确认真的写进去了。记下写入和读回各用了多久（切换期间调度在等它）。
-            Ok(()) => {
-                let settings = self
-                    .hardware
-                    .describe_power(&self.changes.store, on_battery);
+            // 第一次接管，原值还在预读：读好后再写（界面先显示要切换到的模式；这期间采样勤一些，见 `cadence`）。
+            Ok(Applied::Unchanged | Applied::Waiting) => {}
+            // 记下要写入的设置和调度为它停了多久（真正写进电源服务在硬件执行线程里，慢时另记日志）。
+            // 不读回确认：电源服务这时正忙着让新设置生效，读一次要几百毫秒到两秒多；
+            // 真被别处改掉的由电源守护发现、改回。
+            Ok(Applied::Written) => {
                 let detail = format!(
-                    "{settings}（写入 {} 毫秒，读回 {} 毫秒）",
-                    written_in.as_millis(),
-                    (started.elapsed() - written_in).as_millis()
+                    "{}（记录 {} 毫秒）",
+                    self.hardware.describe_power(mode, on_battery),
+                    started.elapsed().as_millis()
                 );
                 self.logbook
                     .event_with(Event::ModeChanged { mode, on_battery }, detail);
@@ -58,7 +61,7 @@ impl Engine {
         mode
     }
 
-    /// 服务停止：硬件模式回到 Poise 接管之前的状态。
+    /// 硬件模式回到 Poise 接管之前的状态（Poise 退出、服务停止），不等待（要等时见 [`Engine::settle_hardware`]）。
     pub(super) fn restore_hardware(&mut self) {
         let _ = self.edit_hardware(|h, s, j| {
             h.restore(s, j);
@@ -66,20 +69,26 @@ impl Engine {
         });
     }
 
+    /// 等交给执行线程的还原做完（排着的电源设置写完、散热模式还原），之后落盘的日志不再带上撤销了的条目。
+    pub(super) fn settle_hardware(&mut self) {
+        self.hardware.settle();
+        self.changes.settle();
+    }
+
     /// 通过变更日志修改硬件设置（同时借用硬件和变更日志）。
-    fn edit_hardware(
+    fn edit_hardware<T>(
         &mut self,
-        f: impl FnOnce(&mut Hardware, &dyn SettingStore, &mut Journal) -> Result<(), JournalError>,
-    ) -> Result<(), ChangeError> {
+        f: impl FnOnce(&mut Hardware, &dyn SettingStore, &mut Journal) -> Result<T, JournalError>,
+    ) -> Result<T, ChangeError> {
         let Self {
             hardware, changes, ..
         } = self;
         changes.edit(|s, j| f(hardware, s, j))
     }
 
-    /// 把实际模式和风扇加速落到硬件，返回落到硬件上的模式。
-    pub(super) fn apply_modes(&mut self, effective: Mode, now: Millis) -> Mode {
-        let mode = self.apply_hardware_mode(effective, now);
+    /// 把实际模式和风扇加速落到硬件，返回落到硬件上的模式。`on_battery` 取这一轮采样时的供电状态。
+    pub(super) fn apply_modes(&mut self, effective: Mode, on_battery: bool, now: Millis) -> Mode {
+        let mode = self.apply_hardware_mode(effective, on_battery, now);
         self.apply_fan_boost();
         mode
     }

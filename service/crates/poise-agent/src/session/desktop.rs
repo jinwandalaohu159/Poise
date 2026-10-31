@@ -7,13 +7,18 @@ use windows::Win32::Foundation::{HWND, LPARAM, RECT};
 use windows::Win32::Graphics::Gdi::{
     GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow,
 };
+use windows::Win32::System::RemoteDesktop::{
+    WTS_CONNECTSTATE_CLASS, WTS_CURRENT_SESSION, WTSActive, WTSConnectState, WTSFreeMemory,
+    WTSQuerySessionInformationW,
+};
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetLastInputInfo, LASTINPUTINFO};
 use windows::Win32::UI::Shell::{
-    QUNS_BUSY, QUNS_PRESENTATION_MODE, QUNS_RUNNING_D3D_FULL_SCREEN, SHQueryUserNotificationState,
+    QUNS_ACCEPTS_NOTIFICATIONS, QUNS_NOT_PRESENT, SHQueryUserNotificationState,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    EnumChildWindows, EnumWindows, GWL_STYLE, GetClassNameW, GetForegroundWindow, GetShellWindow,
-    GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId, IsWindowVisible, WS_CAPTION,
+    EnumChildWindows, EnumWindows, GWL_EXSTYLE, GWL_STYLE, GetClassNameW, GetForegroundWindow,
+    GetShellWindow, GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId, IsWindow,
+    IsWindowVisible, IsZoomed, WS_CAPTION, WS_EX_TOOLWINDOW,
 };
 use windows::core::BOOL;
 
@@ -93,18 +98,16 @@ pub fn visible_window_pids() -> Vec<Pid> {
     pids.into_iter().collect()
 }
 
-/// 独占全屏、演示模式，或无边框窗口铺满整个显示器（多数游戏的"全屏"）。
+/// 前台窗口铺满它所在的显示器：独占全屏，或无边框窗口铺满整个显示器（多数游戏的"全屏"）。
+/// 只看前台窗口自己：系统的"有程序在全屏"是全局的（副屏在全屏放视频时，主屏上的程序也会被算进去）。
+/// 有标题栏、又是最大化的窗口（任务栏自动隐藏时会铺满屏幕）不算；有些无边框游戏保留了标题栏样式
+/// （自己去掉边框），没有最大化，照样算。
 pub fn is_fullscreen(foreground: HWND) -> bool {
-    // SAFETY: 输出到本地变量。
-    if let Ok(state) = unsafe { SHQueryUserNotificationState() }
-        && matches!(
-            state,
-            QUNS_RUNNING_D3D_FULL_SCREEN | QUNS_PRESENTATION_MODE | QUNS_BUSY
-        )
-    {
-        return true;
+    if foreground.is_invalid() || is_desktop(foreground) {
+        return false;
     }
-    if foreground.is_invalid() || is_desktop(foreground) || has_caption(foreground) {
+    // SAFETY: 读取窗口状态。
+    if has_caption(foreground) && unsafe { IsZoomed(foreground) }.as_bool() {
         return false;
     }
     let mut rect = RECT::default();
@@ -138,6 +141,70 @@ fn is_desktop(hwnd: HWND) -> bool {
         class_name(hwnd).as_str(),
         "Progman" | "WorkerW" | "Shell_TrayWnd"
     )
+}
+
+/// 切换过程中短暂成为前台的窗口：Alt+Tab 和任务视图、切换前台时的过渡窗口、任务栏与托盘溢出区，
+/// 以及工具窗口（浮动面板、通知）。它们不算"用户切到了别的程序"，前台沿用之前的。
+pub fn is_transient(hwnd: HWND) -> bool {
+    // SAFETY: 读取窗口样式。
+    let ex_style = unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) } as u32;
+    if ex_style & WS_EX_TOOLWINDOW.0 != 0 {
+        return true;
+    }
+    matches!(
+        class_name(hwnd).as_str(),
+        "ForegroundStaging"
+            | "XamlExplorerHostIslandWindow"
+            | "MultitaskingViewFrame"
+            | "TaskSwitcherWnd"
+            | "Shell_TrayWnd"
+            | "Shell_SecondaryTrayWnd"
+            | "NotifyIconOverflowWindow"
+            | "TopLevelWindowForOverflowXamlIsland"
+    )
+}
+
+/// 用户不在桌面前：锁屏、屏幕保护、切换了用户。
+/// 本会话是不是正在使用的那个（控制台上没切走、远程连接没断开）。查不到时按是。
+pub fn session_active() -> bool {
+    let mut buf = windows::core::PWSTR::null();
+    let mut len = 0u32;
+    // SAFETY: 输出由系统分配，用完用 WTSFreeMemory 释放；连接状态是一个 4 字节的枚举值。
+    unsafe {
+        if WTSQuerySessionInformationW(
+            None,
+            WTS_CURRENT_SESSION,
+            WTSConnectState,
+            &mut buf,
+            &mut len,
+        )
+        .is_err()
+            || buf.is_null()
+        {
+            return true;
+        }
+        let active = len as usize >= size_of::<WTS_CONNECTSTATE_CLASS>()
+            && *(buf.0 as *const WTS_CONNECTSTATE_CLASS) == WTSActive;
+        WTSFreeMemory(buf.0.cast());
+        active
+    }
+}
+
+/// 窗口还在（程序没关掉它）。
+pub fn window_exists(hwnd: HWND) -> bool {
+    // SAFETY: 只读取窗口是否存在。
+    !hwnd.is_invalid() && unsafe { IsWindow(Some(hwnd)) }.as_bool()
+}
+
+/// 现在弹通知不打扰人：没在全屏玩游戏、演示、专注，也没离开。
+pub fn notifications_welcome() -> bool {
+    // SAFETY: 输出到本地变量。
+    unsafe { SHQueryUserNotificationState() }.is_ok_and(|s| s == QUNS_ACCEPTS_NOTIFICATIONS)
+}
+
+pub fn desktop_away() -> bool {
+    // SAFETY: 输出到本地变量。
+    unsafe { SHQueryUserNotificationState() }.is_ok_and(|s| s == QUNS_NOT_PRESENT)
 }
 
 fn class_name(hwnd: HWND) -> String {

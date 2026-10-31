@@ -3,6 +3,7 @@
 
 use poise_core::diagnose::Thermals;
 use poise_core::model::Millis;
+use poise_platform::observe::gpu::DiscreteActivity;
 
 use crate::nvml::Nvml;
 use crate::profiles::{FanReading, MachineNeed, MachineReading, MachineSensors};
@@ -21,7 +22,8 @@ pub struct HardwareReading {
 /// 不靠温度推测，所以界面没显示时温度只用于健康状态和走势，少读即可。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SensorLevel {
-    /// 后台：机型接口只读处理器温度。不访问显卡（避免唤醒休眠中的独显），不读风扇。
+    /// 后台：机型接口最多每 [`BASIC_MACHINE_EVERY_MS`] 读一次处理器温度（详细程度来回变化时也不多读）。
+    /// 不访问显卡（避免唤醒休眠中的独显），不读风扇。
     #[default]
     Basic,
     /// 有重点程序（正在用的程序在持续干重活，不是游戏）：完全不调用机型接口（每次调用都可能让所有核心
@@ -30,20 +32,53 @@ pub enum SensorLevel {
     /// 玩游戏、界面没显示：完全不调用机型接口（每次调用都可能让所有核心短暂停顿，表现为掉帧）。
     /// 显卡温度和占用从显卡驱动读（独显本来就醒着），不刷新硬盘信息。
     Gaming,
-    /// 界面显示着：全部；风扇转速变化慢，隔一会儿读一次（见 [`FANS_EVERY_MS`]）。
+    /// 玩游戏或有重点程序、界面显示着：显卡从显卡驱动读；机型接口最多每 [`WATCHED_MACHINE_EVERY_MS`]
+    /// 读一次处理器温度，其间界面显示上次的读数；不读风扇、不刷新硬盘信息。界面开在副屏上玩游戏时
+    /// 也不会每隔几秒停顿一下。
+    Watched,
+    /// 界面显示着、没有要紧的事：全部；风扇转速变化慢，隔一会儿读一次（见 [`FANS_EVERY_MS`]）。
     Full,
+}
+
+impl SensorLevel {
+    /// 按当前情况选详细程度：要紧的事（游戏、重点程序）优先于界面。
+    pub fn choose(ui_visible: bool, gaming: bool, focused: bool) -> Self {
+        match (ui_visible, gaming || focused) {
+            (true, false) => Self::Full,
+            (true, true) => Self::Watched,
+            (false, _) if gaming => Self::Gaming,
+            (false, _) if focused => Self::Focused,
+            _ => Self::Basic,
+        }
+    }
+
+    /// 界面显示着：读得勤一些（走势图、温度每隔几秒刷新）。
+    pub fn shown(self) -> bool {
+        matches!(self, Self::Watched | Self::Full)
+    }
 }
 
 /// 界面显示着时，风扇转速多久读一次。
 const FANS_EVERY_MS: Millis = 10_000;
 
+/// 玩游戏或有重点程序、界面显示着时，处理器温度多久从机型接口读一次。
+const WATCHED_MACHINE_EVERY_MS: Millis = 30_000;
+
+/// 后台时处理器温度多久从机型接口读一次（采集线程平时 30 秒读一轮，略短一些不错过）。
+const BASIC_MACHINE_EVERY_MS: Millis = 20_000;
+
 pub struct Sensors {
     machine: Box<dyn MachineSensors>,
     nvml: Nvml,
+    /// 独显有没有醒着（读 NVML 之前看一眼，见 [`DiscreteActivity`]）。
+    discrete: DiscreteActivity,
     storage: StorageMonitor,
     /// 最近一次读到的风扇转速与时间。
     fans: Vec<FanReading>,
     fans_at: Option<Millis>,
+    /// 最近一次从机型接口读到的处理器温度与时间。
+    cpu_temp: Option<f32>,
+    cpu_temp_at: Option<Millis>,
 }
 
 impl Sensors {
@@ -51,16 +86,22 @@ impl Sensors {
         Self {
             machine,
             nvml: Nvml::default(),
+            discrete: DiscreteActivity::default(),
             storage: StorageMonitor::default(),
             fans: Vec::new(),
             fans_at: None,
+            cpu_temp: None,
+            cpu_temp_at: None,
         }
     }
 
     /// 按详细程度读取温度、显卡、风扇、硬盘（见 [`SensorLevel`]）。
-    /// 不玩游戏时，机型接口能从主板读显卡温度就优先用它，不会唤醒独显。
+    /// 不玩游戏时，机型接口能从主板读显卡温度就优先用它，不会唤醒独显；独显在休眠时也不读 NVML。
     pub fn read(&mut self, level: SensorLevel, now: Millis) -> HardwareReading {
-        let gpu = if matches!(level, SensorLevel::Basic | SensorLevel::Focused) {
+        // 每轮都看一眼独显：只在需要时才看的话，比较的是很久以前的读数，早就睡了的独显也会被当成醒着。
+        let asleep = self.discrete.busy() == Some(false);
+        let skip_gpu = matches!(level, SensorLevel::Basic | SensorLevel::Focused) || asleep;
+        let gpu = if skip_gpu {
             self.nvml.release_if_idle();
             Default::default()
         } else {
@@ -79,14 +120,23 @@ impl Sensors {
             self.fans.clear();
             self.fans_at = None;
         }
-        let storage = if matches!(level, SensorLevel::Gaming | SensorLevel::Focused) {
-            self.storage.latest()
+        if need.cpu_temp {
+            self.cpu_temp = machine.cpu_temp;
+            self.cpu_temp_at = Some(now);
+        }
+        let cpu_temp = if matches!(level, SensorLevel::Watched | SensorLevel::Basic) {
+            self.cpu_temp
         } else {
-            self.storage.read(now)
+            machine.cpu_temp
+        };
+        let storage = if matches!(level, SensorLevel::Basic | SensorLevel::Full) {
+            self.storage.read(now, level == SensorLevel::Full)
+        } else {
+            self.storage.latest()
         };
         HardwareReading {
             thermals: Thermals {
-                cpu_temp: machine.cpu_temp,
+                cpu_temp,
                 gpu_temp: machine.gpu_temp.or(gpu.temp),
             },
             gpu_pct: gpu.utilization,
@@ -99,8 +149,16 @@ impl Sensors {
     fn machine_need(&self, level: SensorLevel, now: Millis) -> MachineNeed {
         match level {
             SensorLevel::Gaming | SensorLevel::Focused => MachineNeed::default(),
+            SensorLevel::Watched => MachineNeed {
+                cpu_temp: self
+                    .cpu_temp_at
+                    .is_none_or(|t| now.saturating_sub(t) >= WATCHED_MACHINE_EVERY_MS),
+                ..Default::default()
+            },
             SensorLevel::Basic => MachineNeed {
-                cpu_temp: true,
+                cpu_temp: self
+                    .cpu_temp_at
+                    .is_none_or(|t| now.saturating_sub(t) >= BASIC_MACHINE_EVERY_MS),
                 ..Default::default()
             },
             SensorLevel::Full => MachineNeed {
@@ -166,6 +224,46 @@ mod tests {
             }]
         );
         assert_eq!(r.thermals.cpu_temp, Some(60.0));
+    }
+
+    #[test]
+    fn switching_back_to_the_background_does_not_read_again_right_away() {
+        let (mut s, calls) = sensors();
+        s.read(SensorLevel::Basic, 0);
+        s.read(SensorLevel::Gaming, 2_000);
+        let r = s.read(SensorLevel::Basic, 4_000);
+        assert_eq!(r.thermals.cpu_temp, Some(60.0));
+        assert_eq!(calls.lock().unwrap().len(), 1);
+        s.read(SensorLevel::Basic, BASIC_MACHINE_EVERY_MS);
+        assert_eq!(calls.lock().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn with_the_ui_open_while_gaming_the_machine_interface_is_read_rarely() {
+        let (mut s, calls) = sensors();
+        assert_eq!(
+            s.read(SensorLevel::Watched, 0).thermals.cpu_temp,
+            Some(60.0)
+        );
+        // 其间不调用机型接口，照样显示上次的温度。
+        let r = s.read(SensorLevel::Watched, 2_000);
+        assert_eq!(r.thermals.cpu_temp, Some(60.0));
+        assert!(r.fans.is_empty());
+        s.read(SensorLevel::Watched, WATCHED_MACHINE_EVERY_MS);
+        assert_eq!(calls.lock().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn games_and_focused_work_come_before_the_ui() {
+        assert_eq!(SensorLevel::choose(true, false, false), SensorLevel::Full);
+        assert_eq!(SensorLevel::choose(true, true, false), SensorLevel::Watched);
+        assert_eq!(SensorLevel::choose(true, false, true), SensorLevel::Watched);
+        assert_eq!(SensorLevel::choose(false, true, true), SensorLevel::Gaming);
+        assert_eq!(
+            SensorLevel::choose(false, false, true),
+            SensorLevel::Focused
+        );
+        assert_eq!(SensorLevel::choose(false, false, false), SensorLevel::Basic);
     }
 
     #[test]

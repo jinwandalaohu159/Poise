@@ -4,7 +4,9 @@ namespace Poise.Core.Monitoring;
 /// 协调"定期查询"与"用户修改"，避免界面跳回旧值：
 /// <list type="bullet">
 /// <item>修改进行中、或查询期间发生过修改时，这次查询的结果可能是旧的，丢弃不发布；</item>
-/// <item>查询进行中又收到刷新请求，不丢弃，等当前这次结束后再查一次。</item>
+/// <item>查询进行中又收到刷新请求（用户刚改了什么），不丢弃，等当前这次结束后再查一次；</item>
+/// <item>定时查询（<see cref="TickAsync"/>）遇到上一次还没回来（服务忙）时跳过：否则查询一慢，
+/// 定时器就把它变成一次接一次、不停地查。</item>
 /// </list>
 /// 只在界面线程上使用（不加锁）。
 /// </summary>
@@ -31,6 +33,9 @@ public sealed class RefreshGate
             _version++;
         }
     }
+
+    /// <summary>定时查询：上一次还没回来时跳过这一次，不排队。</summary>
+    public Task TickAsync(Func<Task<Action>> query) => _busy ? Task.CompletedTask : RefreshAsync(query);
 
     /// <summary>
     /// 查询并发布。<paramref name="query"/> 返回"如何应用结果"，只有结果仍然有效时才会执行。

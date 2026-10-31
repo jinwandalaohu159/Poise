@@ -1,5 +1,5 @@
 //! 把每轮调度的结果整理成记录系统的输入（见 `poise_logbook::Round`），交给日志系统。
-//! 只在有重点程序时才逐个整理程序（取名称、路径），平时只交一个空的摘要，几乎不花时间。
+//! 只在有重点程序时才交（以及重点程序刚结束的那一轮，让记录系统收尾）：平时不去叫醒日志线程。
 
 use poise_core::schedule::Verdict;
 use poise_logbook::{FocusProgram, Round};
@@ -8,10 +8,14 @@ use super::{Engine, unix_now_ms};
 
 impl Engine {
     /// 每轮采样（这一轮的结果已经放进 `view` 之后）调用。
-    pub(super) fn report_round(&self) {
+    pub(super) fn report_round(&mut self) {
         let Some(view) = self.view.as_ref() else {
             return;
         };
+        let was_focused = std::mem::replace(&mut self.round_focused, view.focused);
+        if !view.focused && !was_focused {
+            return;
+        }
         let mut round = Round {
             unix_ms: unix_now_ms(),
             focused: view.focused,

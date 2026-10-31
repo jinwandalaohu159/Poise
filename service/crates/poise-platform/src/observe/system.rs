@@ -1,6 +1,7 @@
 //! 系统级指标：CPU 时间、内存、提交量、内核内存池、实际频率、电源。
 
 use std::ffi::c_void;
+use std::sync::OnceLock;
 
 use poise_core::model::{ProcessorTime, SystemMetrics};
 use windows::Win32::Foundation::FILETIME;
@@ -9,9 +10,11 @@ use windows::Win32::System::Power::{
 };
 use windows::Win32::System::ProcessStatus::{GetPerformanceInfo, PERFORMANCE_INFORMATION};
 use windows::Win32::System::SystemInformation::{
-    GetSystemInfo, GetTickCount64, GlobalMemoryStatusEx, MEMORYSTATUSEX, SYSTEM_INFO,
+    GetTickCount64, GlobalMemoryStatusEx, MEMORYSTATUSEX,
 };
-use windows::Win32::System::Threading::{GetCurrentThread, GetSystemTimes, GetThreadTimes};
+use windows::Win32::System::Threading::{
+    ALL_PROCESSOR_GROUPS, GetActiveProcessorCount, GetCurrentThread, GetSystemTimes, GetThreadTimes,
+};
 
 /// CallNtPowerInformation(ProcessorInformation) 返回的每核结构。
 #[repr(C)]
@@ -38,11 +41,12 @@ pub fn thread_cpu_time() -> std::time::Duration {
     std::time::Duration::from_nanos((ticks(kernel) + ticks(user)) * 100)
 }
 
+/// 全部处理器组的逻辑处理器数（`GetSystemInfo` 只数调用线程所在的组，超过 64 个逻辑处理器时偏少）。
+/// 运行期间不变，只问一次。
 pub fn logical_cpus() -> u32 {
-    let mut info = SYSTEM_INFO::default();
-    // SAFETY: 输出到本地结构体。
-    unsafe { GetSystemInfo(&mut info) };
-    info.dwNumberOfProcessors
+    static COUNT: OnceLock<u32> = OnceLock::new();
+    // SAFETY: 无参数。
+    *COUNT.get_or_init(|| unsafe { GetActiveProcessorCount(ALL_PROCESSOR_GROUPS) }.max(1))
 }
 
 /// 开机到现在的毫秒数。
@@ -61,6 +65,7 @@ pub fn read_metrics(processors: &[ProcessorTime]) -> SystemMetrics {
     let mut m = SystemMetrics {
         logical_cpus: logical_cpus(),
         uptime_ms: uptime_ms(),
+        on_battery: on_battery(),
         ..Default::default()
     };
     if !processors.is_empty() && super::processors::single_group() {

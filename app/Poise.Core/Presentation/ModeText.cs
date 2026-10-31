@@ -57,6 +57,13 @@ public static class ModeText
     };
 
     /// <summary>"游戏时使用"的选项：不切换、全力，机型支持时加极限模式。</summary>
+    /// <summary>
+    /// 下拉框里显示哪一项：机型不支持极限模式时，服务按全力处理，下拉框也显示全力。
+    /// <paramref name="options"/> 来自 <see cref="GameOptions"/>。
+    /// </summary>
+    public static GameModeOption ShownGameOption(IReadOnlyList<GameModeOption> options, GameMode mode) =>
+        options.FirstOrDefault(o => o.Mode == mode) ?? options.First(o => o.Mode == GameMode.Full);
+
     public static IReadOnlyList<GameModeOption> GameOptions(string? vendor)
     {
         var options = new List<GameModeOption>

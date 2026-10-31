@@ -1,6 +1,5 @@
 using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
-using Microsoft.UI.Dispatching;
 using Poise.Core.Ipc;
 using Poise.Core.Presentation;
 using Poise.App.UI.Services;
@@ -16,25 +15,27 @@ namespace Poise.App.UI.ViewModels;
 /// 正在运行的程序像任务管理器一样显示合计的 CPU 和内存，可展开到各个进程。
 /// 前两栏按名称（拼音首字母与英文混排）、CPU 或内存排序，正序或倒序（规则见 <see cref="AppSortState"/>），
 /// 选择保存在界面设置里；"未运行"总是按名称。偏好下拉框打开期间暂停刷新（<see cref="Hold"/>）。
-/// 页面显示期间（<see cref="StartAsync"/> 到 <see cref="Stop"/>）每 <see cref="LiveInterval"/> 重新读取一次，
-/// 调度状态跟随前台切换更新。
+/// 页面显示期间（<see cref="Start"/> 到 <see cref="Stop"/>）每 <see cref="LiveInterval"/> 重新读取一次
+/// （主窗口被挡住时停下，见 <see cref="Poller"/>），调度状态跟随前台切换更新。
+/// 定期读取与修改（设置类别、开关智能调度）经过 <see cref="RefreshGate"/>：修改之前发出的读取结果不显示，
+/// 下拉框不会先跳回旧的类别。
 /// </summary>
 public sealed partial class AppsViewModel(AppHost host) : ObservableObject
 {
     private static readonly TimeSpan LiveInterval = TimeSpan.FromSeconds(2);
 
+    private readonly Poller _poller = new(host, LiveInterval);
+    private readonly RefreshGate _gate = new();
     private List<AppItem> _all = [];
-    private DispatcherQueueTimer? _live;
     /// <summary>按服务的状态同步开关时不发请求。</summary>
     private bool _syncing;
-    /// <summary>有偏好下拉框打开着，暂停定期刷新。</summary>
-    private bool _holding;
+    private bool _wired;
 
-    public ObservableCollection<AppItem> Running { get; } = [];
+    public ResettableCollection<AppItem> Running { get; } = [];
 
-    public ObservableCollection<AppItem> System { get; } = [];
+    public ResettableCollection<AppItem> System { get; } = [];
 
-    public ObservableCollection<AppItem> NotRunning { get; } = [];
+    public ResettableCollection<AppItem> NotRunning { get; } = [];
 
     [ObservableProperty]
     public partial string Query { get; set; } = "";
@@ -67,38 +68,30 @@ public sealed partial class AppsViewModel(AppHost host) : ObservableObject
     /// <summary>出错时的提示（显示在页面顶部）。</summary>
     public event Action<string>? Error;
 
+    /// <summary>出错之后又读成功了。</summary>
+    public event Action? Recovered;
+
     /// <summary>页面显示时调用：读取列表，之后定期刷新。</summary>
-    public async Task StartAsync()
+    public void Start()
     {
+        if (!_wired)
+        {
+            _wired = true;
+            _poller.Error += message => Error?.Invoke(message);
+            _poller.Recovered += () => Recovered?.Invoke();
+        }
         host.Status.Changed += SyncSmartSchedule;
         SyncSmartSchedule();
-        await LoadAsync();
-        IsLoading = false;
-        UpdateSections();
-        if (_live is null)
-        {
-            _live = DispatcherQueue.GetForCurrentThread().CreateTimer();
-            _live.Interval = LiveInterval;
-            _live.Tick += async (_, _) =>
-            {
-                // 下拉框打开时不刷新：重新排序会移动甚至重建它所在的行。
-                // 主窗口最小化或被全屏程序挡住时也不刷新（见 UiPresence）。
-                if (!_holding && host.Presence.MainVisible)
-                {
-                    await LoadAsync();
-                }
-            };
-        }
-        _live.Start();
+        _poller.Start(() => _gate.TickAsync(QueryAsync));
     }
 
-    /// <summary>偏好下拉框打开时暂停定期刷新，关闭后恢复。</summary>
-    public void Hold(bool holding) => _holding = holding;
+    /// <summary>偏好下拉框打开时暂停定期刷新（重新排序会移动甚至重建它所在的行），关闭后恢复。</summary>
+    public void Hold(bool holding) => _poller.Paused = holding;
 
     /// <summary>页面隐藏时调用：停止刷新。</summary>
     public void Stop()
     {
-        _live?.Stop();
+        _poller.Stop();
         host.Status.Changed -= SyncSmartSchedule;
     }
 
@@ -130,9 +123,17 @@ public sealed partial class AppsViewModel(AppHost host) : ObservableObject
         _syncing = false;
     }
 
-    private async Task LoadAsync() => await TryAsync(async () =>
+    /// <summary>读取列表（失败时抛出，由调用方处理）；修改期间读到的不显示，修改完再读一次。</summary>
+    private Task FetchAsync() => _gate.RefreshAsync(QueryAsync);
+
+    private async Task<Action> QueryAsync()
     {
         var entries = await host.Api.ListAppsAsync();
+        return () => Apply(entries);
+    }
+
+    private void Apply(List<AppEntry> entries)
+    {
         // 重新读取时沿用已有的行（只更新偏好和状态），列表不重新入场，图标也不用重新加载。
         var previous = _all.GroupBy(i => (i.Key, i.Running)).ToDictionary(g => g.Key, g => g.First());
         _all = entries.Select(e =>
@@ -144,12 +145,9 @@ public sealed partial class AppsViewModel(AppHost host) : ObservableObject
             }
             return new AppItem(this, e);
         }).ToList();
+        IsLoading = false;
         ApplyFilter();
-        foreach (var item in _all.Where(i => i.Icon is null))
-        {
-            item.Icon = await AppIcons.LoadAsync(item.Path);
-        }
-    });
+    }
 
     /// <summary>搜索匹配程序名或其中任一进程名；只有进程名匹配时展开该程序，便于看到是哪个进程。</summary>
     private void ApplyFilter()
@@ -167,8 +165,8 @@ public sealed partial class AppsViewModel(AppHost host) : ObservableObject
                 }
             }
         }
-        Replace(Running, Ordered(visible.Where(a => a.Kind == AppKind.App && a.Running)));
-        Replace(System, Ordered(visible.Where(a => a.Kind != AppKind.App)));
+        Replace(Running, Settled(Running, Ordered(visible.Where(a => a.Kind == AppKind.App && a.Running))));
+        Replace(System, Settled(System, Ordered(visible.Where(a => a.Kind != AppKind.App))));
         Replace(NotRunning, visible.Where(a => a.Kind == AppKind.App && !a.Running).OrderBy(a => a.Name, NameOrder.Instance));
         UpdateSections();
     }
@@ -176,6 +174,18 @@ public sealed partial class AppsViewModel(AppHost host) : ObservableObject
     private IEnumerable<AppItem> Ordered(IEnumerable<AppItem> items) =>
         // 按显示的精度比较（CPU 到 0.1%）：看起来相同的数值按名称排，不因看不见的差别来回跳。
         AppsText.Order(items, Sort, a => a.Name, a => MathF.Round(a.CpuPct, 1), a => a.MemoryBytes);
+
+    /// <summary>按占用排序时，相近的行保持原来的位置（见 <see cref="AppsText.Settle"/>）。</summary>
+    private IEnumerable<AppItem> Settled(ObservableCollection<AppItem> current, IEnumerable<AppItem> ordered)
+    {
+        var sorted = ordered.ToList();
+        return Sort.Column switch
+        {
+            AppSort.Cpu => AppsText.Settle(current, sorted, a => a.Key, a => a.CpuPct, Sort.Descending, slack: 0.5),
+            AppSort.Memory => AppsText.Settle(current, sorted, a => a.Key, a => a.MemoryBytes, Sort.Descending, slack: 16 * 1024 * 1024),
+            _ => sorted,
+        };
+    }
 
     private void UpdateSections()
     {
@@ -192,15 +202,16 @@ public sealed partial class AppsViewModel(AppHost host) : ObservableObject
     /// <summary>为不在列表里的程序（例如没在运行）设置偏好，成功后重新读取列表。</summary>
     public Task<bool> AddAsync(string path, AppPreference preference) => TryAsync(async () =>
     {
-        await host.Api.SetAppPreferenceAsync(path, preference);
-        await LoadAsync();
+        await _gate.ChangeAsync(() => host.Api.SetAppPreferenceAsync(path, preference));
+        await FetchAsync();
     });
 
     /// <summary>开关智能调度：先按预期更新状态（界面立即响应），再重新读取列表里的调度状态。</summary>
     private Task SetSmartScheduleAsync(bool on) => TryAsync(async () =>
     {
-        await host.Status.ChangeAsync(() => host.Api.SetSmartScheduleAsync(on), s => ExpectedStatus.WithSmartSchedule(s, on));
-        await LoadAsync();
+        await _gate.ChangeAsync(() =>
+            host.Status.ChangeAsync(() => host.Api.SetSmartScheduleAsync(on), s => ExpectedStatus.WithSmartSchedule(s, on)));
+        await FetchAsync();
     });
 
     /// <summary>设置一个程序（按路径）的类别。立即生效，顺便刷新列表；失败时调用 <paramref name="revert"/> 回到原来的选项。</summary>
@@ -208,8 +219,8 @@ public sealed partial class AppsViewModel(AppHost host) : ObservableObject
     {
         if (!await TryAsync(async () =>
             {
-                await host.Api.SetAppPreferenceAsync(path, value);
-                await LoadAsync();
+                await _gate.ChangeAsync(() => host.Api.SetAppPreferenceAsync(path, value));
+                await FetchAsync();
             }))
         {
             revert();

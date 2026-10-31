@@ -1,14 +1,15 @@
-//! 命名管道服务端：每个连接一个线程，请求交给引擎处理；日志与使用记录由日志系统直接回答，
-//! 不等引擎的锁（界面看日志时不会和调度抢）。
+//! 命名管道服务端：每个连接一个线程，按请求交给日志系统或引擎（见 [`route`]）。
 //!
 //! 服务模式下额外校验客户端：必须是安装目录里的 Poise 程序。
+
+mod route;
 
 use std::io::BufReader;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use poise_core::model::Pid;
 use poise_logbook::Logbook;
@@ -16,13 +17,12 @@ use poise_platform::ipc::pipe::{PipeConnection, PipeServer};
 use poise_platform::win::handle::image_path;
 use poise_platform::win::security::SERVICE_PIPE_SDDL;
 use poise_protocol::{
-    ErrorCode, FramingError, PIPE_NAME, Request, RequestEnvelope, ResponseEnvelope, read_message,
+    ErrorCode, FramingError, PIPE_NAME, RequestEnvelope, ResponseEnvelope, read_message,
     write_message,
 };
 
 use crate::config::RunMode;
 use crate::engine::Engine;
-use crate::engine::catalog::Catalog;
 
 /// 同时连接数上限，防止被大量连接拖垮。
 const MAX_CONNECTIONS: usize = 8;
@@ -85,12 +85,24 @@ fn accept_loop(
     active: &Arc<AtomicUsize>,
     allowed_dir: Option<&PathBuf>,
 ) {
+    let mut failures = 0u32;
     loop {
         let conn = match server.accept() {
-            Ok(c) => c,
+            Ok(c) => {
+                failures = 0;
+                c
+            }
             Err(e) => {
-                log::error!("管道服务失败：{e}");
-                return;
+                if stop.load(Ordering::SeqCst) {
+                    return;
+                }
+                // 多是一时的（客户端连上就断开等）：等一会儿再接，不能让托盘和界面从此连不上。
+                failures += 1;
+                if failures.is_power_of_two() {
+                    log::warn!("接受连接失败（连续第 {failures} 次）：{e}");
+                }
+                std::thread::sleep(ACCEPT_RETRY.saturating_mul(failures.min(50)));
+                continue;
             }
         };
         if stop.load(Ordering::SeqCst) {
@@ -124,34 +136,6 @@ fn accept_loop(
     }
 }
 
-/// 交给引擎处理（要等它的锁：采样进行中时会等一会儿）。
-fn ask_engine(engine: &Mutex<Engine>, pid: Pid, id: u64, request: Request) -> ResponseEnvelope {
-    let started = Instant::now();
-    let name = request_name(&request);
-    if let Some(max_age) = Catalog::freshness_for(&request)
-        && let Ok((catalog, user)) = engine.lock().map(|e| e.catalog_handle())
-    {
-        // 慢的枚举在引擎锁外进行。
-        catalog.refresh(user.as_ref(), max_age);
-    }
-    match engine.lock() {
-        Ok(mut eng) => {
-            let waited = started.elapsed();
-            let response = eng.handle(id, pid, request);
-            let total = started.elapsed();
-            if total > SLOW_REQUEST {
-                log::info!(
-                    "请求 {name} 耗时 {} ms（等待采样 {} ms）",
-                    total.as_millis(),
-                    waited.as_millis()
-                );
-            }
-            response
-        }
-        Err(_) => ResponseEnvelope::error(id, ErrorCode::Internal, "服务内部错误"),
-    }
-}
-
 fn client_allowed(pid: Pid, allowed_dir: Option<&PathBuf>) -> bool {
     let Some(dir) = allowed_dir else {
         // 开发模式：管道默认只允许当前用户连接。
@@ -161,19 +145,14 @@ fn client_allowed(pid: Pid, allowed_dir: Option<&PathBuf>) -> bool {
     path.is_some_and(|p| p.parent().is_some_and(|parent| parent.eq(dir.as_path())))
 }
 
-/// 一次请求（含等待引擎）超过这个时间就记一条日志，用来发现界面操作"不跟手"的原因。
-const SLOW_REQUEST: Duration = Duration::from_millis(100);
-
-/// 请求的名称（不含参数），用于日志。
-fn request_name(request: &impl std::fmt::Debug) -> String {
-    let text = format!("{request:?}");
-    text.split([' ', '{', '('])
-        .next()
-        .unwrap_or_default()
-        .to_string()
-}
+/// 接受连接失败后，等这么久（连续失败时逐次加长，最长 5 秒）再接。
+const ACCEPT_RETRY: Duration = Duration::from_millis(100);
 
 fn serve(conn: PipeConnection, pid: Pid, engine: &Mutex<Engine>, logbook: &Logbook) {
+    // 连着的界面和托盘视为 Poise 自己，永不触碰。
+    if let Ok(mut eng) = engine.lock() {
+        eng.client_connected(pid);
+    }
     let mut reader = BufReader::new(conn);
     loop {
         let envelope: RequestEnvelope = match read_message(&mut reader) {
@@ -195,13 +174,7 @@ fn serve(conn: PipeConnection, pid: Pid, engine: &Mutex<Engine>, logbook: &Logbo
                 break;
             }
         };
-        let response = match envelope.request {
-            Request::Events { after } => {
-                ResponseEnvelope::ok(envelope.id, &logbook.events_after(after))
-            }
-            Request::Records => ResponseEnvelope::ok(envelope.id, &logbook.records()),
-            request => ask_engine(engine, pid, envelope.id, request),
-        };
+        let response = route::answer(envelope.request, envelope.id, pid, engine, logbook);
         if write_message(reader.get_mut(), &response).is_err() {
             break;
         }

@@ -32,7 +32,9 @@ impl AudioTracker {
                 self.emitters.insert(p.facts.key, now);
             }
         }
-        self.trees.retain(|_, t| now.saturating_sub(*t) < hold_ms);
+        // 退出了的程序不再保持（进程号之后被别的程序复用时，不继承"在发声"）。
+        self.trees
+            .retain(|root, t| now.saturating_sub(*t) < hold_ms && classes.contains_key(root));
         self.emitters
             .retain(|_, t| now.saturating_sub(*t) < hold_ms);
     }

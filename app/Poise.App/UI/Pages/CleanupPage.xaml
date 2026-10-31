@@ -48,12 +48,7 @@
                         <ColumnDefinition Width="20" />
                         <ColumnDefinition Width="*" />
                     </Grid.ColumnDefinitions>
-                    <Grid Width="20" Height="20" VerticalAlignment="Center">
-                        <Image Source="{x:Bind Icon, Mode=OneWay}" />
-                        <FontIcon FontFamily="{StaticResource IconFont}" Glyph="&#xE7C4;" FontSize="16"
-                                  Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                  Visibility="{x:Bind FallbackIconVisibility, Mode=OneWay}" />
-                    </Grid>
+                    <c:ProgramIcon Path="{x:Bind Path}" VerticalAlignment="Center" />
                     <StackPanel Grid.Column="1" VerticalAlignment="Center">
                         <TextBlock Text="{x:Bind Name, Mode=OneWay}" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" />
                         <TextBlock Text="{x:Bind ProcessCount, Mode=OneWay}" Style="{StaticResource CaptionSecondaryTextStyle}"

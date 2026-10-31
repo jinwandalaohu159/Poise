@@ -8,7 +8,6 @@ use poise_core::model::{Pid, ProcessKey, Snapshot};
 use poise_core::prefs::Mode;
 use poise_core::safety::{GuardedExecutor, Trigger};
 use poise_core::schedule::{GameInfo, PlannedAction, ScheduleInput};
-use poise_platform::observe::system;
 use poise_protocol::{ErrorCode, Event};
 
 use super::error::RequestError;
@@ -30,10 +29,11 @@ impl Engine {
         &mut self,
         active: bool,
         snapshot: &Snapshot,
+        previous: Option<&Snapshot>,
         classes: &HashMap<Pid, Classification>,
     ) -> ScheduleOutcome {
         if active {
-            self.schedule(snapshot, classes)
+            self.schedule(snapshot, previous, classes)
         } else {
             ScheduleOutcome {
                 effective_mode: self.settings.mode,
@@ -43,10 +43,12 @@ impl Engine {
         }
     }
 
-    /// 生成调度计划并执行其中的进程调整，返回实际模式和当前游戏。
+    /// 生成调度计划并执行其中的进程调整，返回实际模式和当前游戏。`previous` 是上一次的采样
+    /// （日志里给刚退出的程序取名字）。
     fn schedule(
         &mut self,
         snapshot: &Snapshot,
+        previous: Option<&Snapshot>,
         classes: &HashMap<Pid, Classification>,
     ) -> ScheduleOutcome {
         let now = self.now();
@@ -58,8 +60,9 @@ impl Engine {
             enabled: self.settings.smart_schedule,
             user_mode,
             game_mode: self.game_target(),
-            on_battery: system::on_battery(),
+            on_battery: snapshot.system.on_battery,
             hot: self.headroom.exhausted(),
+            user_idle_ms: self.session.current(now).idle_ms,
         });
         self.execute_plan(&plan.actions, snapshot, classes);
         if !plan.actions.is_empty() || !plan.decisions.is_empty() {
@@ -67,7 +70,7 @@ impl Engine {
         }
         self.adjusted.update(self.scheduler.adjusted(), now);
         let domains = self.topology.domains.len();
-        for event in decision_events::events(&plan.decisions, snapshot, domains) {
+        for event in decision_events::events(&plan.decisions, snapshot, previous, domains) {
             self.logbook.event(event);
         }
         ScheduleOutcome {
@@ -96,7 +99,7 @@ impl Engine {
                 Err(ExecError::AccessDenied) => {
                     self.logbook.event_with(
                         Event::AccessDenied {
-                            program: decision_events::program_ref(planned.key, snapshot),
+                            program: decision_events::program_ref(planned.key, [snapshot]),
                         },
                         format!("{:?}", planned.action),
                     );
@@ -135,7 +138,7 @@ impl Engine {
     pub(super) fn release_processes(&mut self) {
         for _ in 0..2 {
             let now = self.now();
-            let Ok(snapshot) = self.snapshotter.take(now) else {
+            let Some(snapshot) = self.sampler.take(now) else {
                 return;
             };
             let classes = self.classify(&snapshot, now);
@@ -148,6 +151,7 @@ impl Engine {
                 game_mode: None,
                 on_battery: false,
                 hot: false,
+                user_idle_ms: 0,
             });
             self.execute_plan(&plan.actions, &snapshot, &classes);
         }
@@ -179,6 +183,7 @@ fn execute(
 ) -> Option<Result<ExecOutcome, ExecError>> {
     let class = classes.get(&planned.key.pid)?;
     Some(executor.execute(
+        planned.key,
         &planned.action,
         class,
         planned.original_priority,

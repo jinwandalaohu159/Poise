@@ -2,11 +2,16 @@ using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using Poise.Core.Ipc;
 using Poise.Core.Localization;
+using Poise.Core.Monitoring;
 using Poise.Core.Presentation;
 
 namespace Poise.App.UI.ViewModels;
 
-/// <summary>系统优化页：顶部进度与一键优化，下方按分组列出每一项。</summary>
+/// <summary>
+/// 系统优化页：顶部进度与一键优化，下方按分组列出每一项。
+/// 修改后重新读取整张列表校正（电源服务忙时要好几秒）；连着改几项时读取经过 <see cref="RefreshGate"/> 合并：
+/// 不每改一项排一次，修改之前发出的读取结果也不显示（开关不会跳回去又跳回来）。
+/// </summary>
 public sealed partial class OptimizeViewModel(AppHost host) : ObservableObject
 {
     /// <summary>分组顺序：先固定项，再逐个开关的项。</summary>
@@ -17,6 +22,7 @@ public sealed partial class OptimizeViewModel(AppHost host) : ObservableObject
     ];
 
     private readonly Dictionary<string, OptimizationRow> _rows = [];
+    private readonly RefreshGate _gate = new();
 
     public ObservableCollection<OptimizationSection> Sections { get; } = [];
 
@@ -33,7 +39,7 @@ public sealed partial class OptimizeViewModel(AppHost host) : ObservableObject
         IsLoading = true;
         try
         {
-            var items = await host.Api.ListOptimizationsAsync();
+            var items = await host.Optimizations.ReloadAsync();
             SummaryChanged?.Invoke(OptimizeSummary.From(items));
             Sections.Clear();
             _rows.Clear();
@@ -71,7 +77,7 @@ public sealed partial class OptimizeViewModel(AppHost host) : ObservableObject
         row.SetBusy(true);
         try
         {
-            await action();
+            await _gate.ChangeAsync(action);
             row.Assume(optimize);
         }
         catch (Exception e) when (e is ServiceUnavailableException or ServiceErrorException)
@@ -90,7 +96,8 @@ public sealed partial class OptimizeViewModel(AppHost host) : ObservableObject
     {
         try
         {
-            var report = await host.Api.ApplyRecommendedAsync();
+            ApplyReport report = null!;
+            await _gate.ChangeAsync(async () => report = await host.Api.ApplyRecommendedAsync());
             await RefreshStatesAsync();
             return new Feedback(FeedbackKind.Success,
                 report.Applied.Count > 0 ? Loc.Format("optimize.done", report.Applied.Count) : Loc.Get("optimize.nothing"), []);
@@ -105,7 +112,7 @@ public sealed partial class OptimizeViewModel(AppHost host) : ObservableObject
     {
         try
         {
-            await host.Api.RevertAllAsync();
+            await _gate.ChangeAsync(host.Api.RevertAllAsync);
         }
         catch (Exception e) when (e is ServiceUnavailableException or ServiceErrorException)
         {
@@ -119,7 +126,19 @@ public sealed partial class OptimizeViewModel(AppHost host) : ObservableObject
     {
         try
         {
-            var items = await host.Api.ListOptimizationsAsync();
+            await _gate.RefreshAsync(QueryStatesAsync);
+        }
+        catch (Exception e) when (e is ServiceUnavailableException or ServiceErrorException)
+        {
+            Error?.Invoke(ErrorText.For(e));
+        }
+    }
+
+    private async Task<Action> QueryStatesAsync()
+    {
+        var items = await host.Optimizations.ReloadAsync();
+        return () =>
+        {
             SummaryChanged?.Invoke(OptimizeSummary.From(items));
             foreach (var status in items)
             {
@@ -128,10 +147,6 @@ public sealed partial class OptimizeViewModel(AppHost host) : ObservableObject
                     row.Update(status);
                 }
             }
-        }
-        catch (Exception e) when (e is ServiceUnavailableException or ServiceErrorException)
-        {
-            Error?.Invoke(ErrorText.For(e));
-        }
+        };
     }
 }

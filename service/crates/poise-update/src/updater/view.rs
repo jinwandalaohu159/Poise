@@ -103,6 +103,7 @@ pub fn ending(text: &Text, version: Option<&str>, outcome: &Outcome) -> Ending {
             Failure::Verification => text.get("updater.failed.verification"),
             Failure::Declined => text.get("updater.failed.declined"),
             Failure::Launch(_) => text.get("updater.failed.launch"),
+            Failure::Unfinished(_) => text.get("updater.failed.unfinished"),
             Failure::Install(code) => text.format("updater.failed.install", &[&code.to_string()]),
             Failure::Start => text.get("updater.failed.start"),
         }),

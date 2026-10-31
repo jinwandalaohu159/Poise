@@ -1,6 +1,12 @@
 //! 用户目录下的 INI 配置文件（例如 `.wslconfig`）。只改指定的键，文件里的其他内容原样保留。
+//!
+//! 服务以 SYSTEM 身份写用户目录：用户目录归用户自己管，文件或目录被换成指向别处的链接时不读不写，
+//! 否则就成了替用户以 SYSTEM 身份改别处的文件。
 
-use std::path::PathBuf;
+use std::os::windows::fs::MetadataExt;
+use std::path::{Path, PathBuf};
+
+use windows::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
 
 use poise_core::setting::{StoreError, UserFile, Value};
 
@@ -9,9 +15,21 @@ use crate::settings::user::UserContext;
 
 fn path_of(user: Option<&UserContext>, file: UserFile) -> Result<PathBuf, StoreError> {
     let user = user.ok_or(StoreError::Unsupported)?;
-    Ok(match file {
+    let path = match file {
         UserFile::WslConfig => user.profile_dir.join(".wslconfig"),
-    })
+    };
+    if [path.as_path(), user.profile_dir.as_path()]
+        .into_iter()
+        .any(is_reparse_point)
+    {
+        return Err(StoreError::AccessDenied);
+    }
+    Ok(path)
+}
+
+fn is_reparse_point(path: &Path) -> bool {
+    std::fs::symlink_metadata(path)
+        .is_ok_and(|m| m.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT.0 != 0)
 }
 
 fn io_err(e: std::io::Error) -> StoreError {

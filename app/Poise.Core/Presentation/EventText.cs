@@ -59,7 +59,7 @@ public static class EventText
             Pressure.High => "log.demand.high",
             Pressure.Normal => "log.demand.normal",
             _ => "log.demand.none",
-        }), null, TagTone.None, null),
+        }), d.Reason is { } r ? Loc.Get(DemandReasonKey(r)) : null, TagTone.None, null),
         ProgramEvent p => (Loc.Format("log.program", p.Program.Name, What(p, m)), ProgramDetail(p), TagTone.None, NonEmpty(p.Program.Path)),
         MovedAsideEvent { Count: 0 } => (Loc.Get("log.moved_back"), null, TagTone.None, null),
         MovedAsideEvent a => (Loc.Format(m.Hybrid ? "log.moved_aside" : "log.moved_aside.groups", a.Count), null, TagTone.None, null),
@@ -128,7 +128,18 @@ public static class EventText
         Ipc.Cause.Marked => "log.cause.marked",
         Ipc.Cause.NoDemand => "log.cause.no_demand",
         Ipc.Cause.LessDemand => "log.cause.less_demand",
+        Ipc.Cause.LooksLikeGame => "log.cause.looks_like_game",
+        Ipc.Cause.LoadDropped => "log.cause.load_dropped",
+        Ipc.Cause.LeftForeground => "log.cause.left_foreground",
         _ => "log.cause.exited",
+    };
+
+    private static string DemandReasonKey(DemandReason r) => r switch
+    {
+        DemandReason.Focus => "log.demand.reason.focus",
+        DemandReason.Heat => "log.demand.reason.heat",
+        DemandReason.Battery => "log.demand.reason.battery",
+        _ => "log.demand.reason.in_use",
     };
 
     private static string Setting(SettingRestoredEvent s)

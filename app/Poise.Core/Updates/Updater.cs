@@ -21,17 +21,20 @@ public sealed class Updater : IDisposable
 
     private readonly Version? _installed;
     private readonly UpdateFiles _files;
-    private readonly HttpClient _http;
+    private readonly HttpMessageHandler? _handler;
+    /// <summary>第一次检查时才创建（界面启动时不加载网络相关的东西，第一次定时检查在启动之后一会儿）。</summary>
+    private HttpClient? _http;
     private bool _working;
 
     public Updater(Version? installed, UpdateFiles files, HttpMessageHandler? handler = null)
     {
         _installed = installed;
         _files = files;
-        _http = handler is null ? new HttpClient() : new HttpClient(handler);
-        _http.Timeout = CheckTimeout;
+        _handler = handler;
         State = installed is null ? new UpdateState(UpdatePhase.Unavailable) : new UpdateState(UpdatePhase.Idle);
     }
+
+    private HttpClient Http => _http ??= new HttpClient(_handler ?? new HttpClientHandler()) { Timeout = CheckTimeout };
 
     public UpdateState State { get; private set; }
 
@@ -57,7 +60,7 @@ public sealed class Updater : IDisposable
                 Set(new UpdateState(UpdatePhase.Checking, known));
             }
             using var cancel = new CancellationTokenSource(CheckTimeout);
-            var latest = await GitHubReleases.FetchLatestAsync(_http, _installed, cancel.Token);
+            var latest = await GitHubReleases.FetchLatestAsync(Http, _installed, cancel.Token);
             if (latest is not null && latest.Version > _installed)
             {
                 if (latest.Version != known?.Version)
@@ -119,5 +122,5 @@ public sealed class Updater : IDisposable
         Changed?.Invoke();
     }
 
-    public void Dispose() => _http.Dispose();
+    public void Dispose() => _http?.Dispose();
 }

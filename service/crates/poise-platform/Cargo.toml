@@ -10,7 +10,7 @@ publish.workspace = true
 poise-core.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-log.workspace = true
+log = { workspace = true, features = ["std"] }
 
 [dependencies.windows]
 version = "0.62"

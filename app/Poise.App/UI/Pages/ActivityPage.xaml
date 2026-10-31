@@ -110,7 +110,7 @@
         <!-- 日志：虚拟化列表，几百条也只创建看得见的行 -->
         <Grid x:Name="LogPanel" Grid.Row="3">
             <Border Style="{StaticResource CardStyle}" Padding="8,4">
-                <ListView ItemsSource="{x:Bind Log.Events}" ItemTemplate="{StaticResource EventTemplate}"
+                <ListView ItemsSource="{x:Bind Log.Events, Mode=OneWay}" ItemTemplate="{StaticResource EventTemplate}"
                           SelectionMode="None" IsItemClickEnabled="False" />
             </Border>
             <TextBlock Text="{l:L Key=log.empty}" Style="{StaticResource CaptionSecondaryTextStyle}"

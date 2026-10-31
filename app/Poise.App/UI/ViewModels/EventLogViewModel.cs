@@ -10,7 +10,8 @@ namespace Poise.App.UI.ViewModels;
 /// <summary>
 /// 日志：第一次取最新的一批，之后每 <see cref="LiveInterval"/> 只取比已有的更新的几条，最新的在上面，可按类别筛选。
 /// 只在日志显示期间（<see cref="Start"/> 到 <see cref="Stop"/>）读取，主窗口被挡住或最小化时不读。
-/// 服务由日志系统直接回答，不等调度引擎。
+/// 服务由日志系统直接回答，不等调度引擎。第一次（几百条）和换筛选时整张列表一次换上，不逐条插入
+/// （每插一条列表都要通知、重新排版一次）。
 /// </summary>
 public sealed partial class EventLogViewModel(AppHost host) : ObservableObject
 {
@@ -18,14 +19,18 @@ public sealed partial class EventLogViewModel(AppHost host) : ObservableObject
     /// <summary>界面里最多留多少条（服务那边留得更多，见 events.jsonl）。</summary>
     private const int MaxRows = 1000;
 
-    /// <summary>全部日志，最新的在前。</summary>
+    /// <summary>新来的多于这么多条时整张列表换上，不逐条插入。</summary>
+    private const int BulkRows = 20;
+
+    /// <summary>全部日志，从早到晚（新的追加在后面）。</summary>
     private readonly List<EventRow> _all = [];
     private readonly Poller _poller = new(host, LiveInterval);
     private ulong _last;
     private string? _logDir;
 
     /// <summary>筛选后的日志，最新的在前。</summary>
-    public ObservableCollection<EventRow> Events { get; } = [];
+    [ObservableProperty]
+    public partial ObservableCollection<EventRow> Events { get; private set; } = [];
 
     public IReadOnlyList<EventFilter> Filters { get; } = EventText.Filters();
 
@@ -41,6 +46,13 @@ public sealed partial class EventLogViewModel(AppHost host) : ObservableObject
     {
         add => _poller.Error += value;
         remove => _poller.Error -= value;
+    }
+
+    /// <summary>出错之后又读成功了。</summary>
+    public event Action? Recovered
+    {
+        add => _poller.Recovered += value;
+        remove => _poller.Recovered -= value;
     }
 
     public void Start()
@@ -60,13 +72,12 @@ public sealed partial class EventLogViewModel(AppHost host) : ObservableObject
         }
     }
 
-    partial void OnFilterChanged(EventFilter? value)
+    partial void OnFilterChanged(EventFilter? value) => Rebuild();
+
+    /// <summary>按筛选整张换上（最新的在前）。</summary>
+    private void Rebuild()
     {
-        Events.Clear();
-        foreach (var row in _all.Where(Passes))
-        {
-            Events.Add(row);
-        }
+        Events = new ObservableCollection<EventRow>(Enumerable.Reverse(_all).Where(Passes));
         OnPropertyChanged(nameof(EmptyVisibility));
     }
 
@@ -84,26 +95,36 @@ public sealed partial class EventLogViewModel(AppHost host) : ObservableObject
         }
         var machine = Machine.From(host.Status.Latest);
         var now = DateTimeOffset.Now;
-        // 服务给的是从早到晚：逐条放到最上面。
-        foreach (var entry in page.Entries)
+        // 服务给的是从早到晚。
+        var rows = page.Entries.Select(e => EventText.Row(e, machine, now)).ToList();
+        var newest = page.Entries.Max(e => e.Id);
+        // 都不比已有的新：服务的日志重新编号了（日志文件被删掉、重新开始），给的是最新的一批，整张换上。
+        if (newest <= _last)
         {
-            var row = EventText.Row(entry, machine, now);
-            _all.Insert(0, row);
-            if (Passes(row))
-            {
-                Events.Insert(0, row);
-            }
-            _last = Math.Max(_last, entry.Id);
+            _all.Clear();
         }
-        while (_all.Count > MaxRows)
+        _last = newest;
+        _all.AddRange(rows);
+        var dropped = Math.Max(0, _all.Count - MaxRows);
+        if (_all.Count == rows.Count || rows.Count > BulkRows)
         {
-            var oldest = _all[^1];
-            _all.RemoveAt(_all.Count - 1);
+            _all.RemoveRange(0, dropped);
+            Rebuild();
+            return;
+        }
+        // 少量新的：逐条放到最上面，最早的从底下移走。
+        foreach (var row in rows.Where(Passes))
+        {
+            Events.Insert(0, row);
+        }
+        foreach (var oldest in _all.Take(dropped))
+        {
             if (Events.Count > 0 && ReferenceEquals(Events[^1], oldest))
             {
                 Events.RemoveAt(Events.Count - 1);
             }
         }
+        _all.RemoveRange(0, dropped);
         OnPropertyChanged(nameof(EmptyVisibility));
     }
 

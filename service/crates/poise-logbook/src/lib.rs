@@ -16,7 +16,7 @@ mod worker;
 
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{self, Sender};
+use std::sync::mpsc::{self, Sender, SyncSender};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -26,6 +26,8 @@ pub use round::{FocusProgram, Round};
 
 /// 服务停止时最多等日志线程这么久把剩下的写完。
 const FLUSH_TIMEOUT: Duration = Duration::from_secs(3);
+/// 最多积压多少条没处理的（日志线程被磁盘卡住时不越积越多，满了丢掉新来的：日志丢几条不影响任何功能）。
+const BACKLOG: usize = 8192;
 
 /// 交给日志线程的东西。
 enum Message {
@@ -53,7 +55,7 @@ struct Shared {
 /// 日志系统与记录系统的接口。可以复制，调度引擎、命名管道服务端各拿一份。
 #[derive(Clone)]
 pub struct Logbook {
-    tx: Sender<Message>,
+    tx: SyncSender<Message>,
     shared: Arc<Mutex<Shared>>,
     dir: PathBuf,
 }
@@ -61,7 +63,7 @@ pub struct Logbook {
 impl Logbook {
     /// 在数据目录里打开日志与记录，启动日志线程（之前保存的在日志线程里读回）。
     pub fn open(dir: &Path) -> Self {
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = mpsc::sync_channel(BACKLOG);
         let shared = Arc::new(Mutex::new(Shared::default()));
         worker::start(dir.to_path_buf(), rx, shared.clone());
         Self {
@@ -83,18 +85,18 @@ impl Logbook {
 
     /// 交来一轮调度的摘要（记录系统据此汇总）。
     pub fn round(&self, round: Round) {
-        let _ = self.tx.send(Message::Round(round));
+        let _ = self.tx.try_send(Message::Round(round));
     }
 
     /// 结束正在记录的一段（Poise 暂停、服务停止时）。
     pub fn end_session(&self) {
-        let _ = self.tx.send(Message::EndSession);
+        let _ = self.tx.try_send(Message::EndSession);
     }
 
     /// 等日志线程把之前交来的都写完（服务停止前），最多等 [`FLUSH_TIMEOUT`]。
     pub fn flush(&self) {
         let (done, wait) = mpsc::channel();
-        if self.tx.send(Message::Flush(done)).is_ok() {
+        if self.tx.try_send(Message::Flush(done)).is_ok() {
             let _ = wait.recv_timeout(FLUSH_TIMEOUT);
         }
     }
@@ -113,7 +115,7 @@ impl Logbook {
     }
 
     fn send_event(&self, event: Event, detail: Option<String>) {
-        let _ = self.tx.send(Message::Event {
+        let _ = self.tx.try_send(Message::Event {
             at_unix_ms: unix_now_ms(),
             event,
             detail,

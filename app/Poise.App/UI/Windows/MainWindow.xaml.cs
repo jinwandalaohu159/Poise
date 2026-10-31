@@ -7,6 +7,7 @@ using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Animation;
 using Poise.Core.Localization;
 using Poise.App.UI.Pages;
+using Poise.App.UI.Theme;
 using Windows.Graphics;
 
 namespace Poise.App.UI.Windows;
@@ -50,6 +51,7 @@ public sealed partial class MainWindow : Window
             UpdatePassthrough();
         };
         Root.SizeChanged += (_, _) => UpdatePassthrough();
+        ThemeManager.TrackCaptionButtons(this);
         _host.Theme.Changed += OnThemeChanged;
         Loc.Changed += OnLanguageChanged;
         Activated += (_, _) => UpdateVisible();
@@ -131,10 +133,13 @@ public sealed partial class MainWindow : Window
 
     private void OnThemeChanged() => _host.Theme.Apply(this, animate: true);
 
-    /// <summary>切换语言后立即生效：重建当前页面。</summary>
+    /// <summary>切换语言后立即生效：重建当前页面；留在导航缓存里的页面（主页）也丢掉，回去时按新语言重建。</summary>
     private void OnLanguageChanged()
     {
         ToolTipService.SetToolTip(SettingsButton, Loc.Get("settings.title"));
+        var cacheSize = ContentFrame.CacheSize;
+        ContentFrame.CacheSize = 0;
+        ContentFrame.CacheSize = cacheSize;
         if (ContentFrame.CurrentSourcePageType is { } page)
         {
             ContentFrame.Navigate(page, null, new SuppressNavigationTransitionInfo());
@@ -142,8 +147,9 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    /// <summary>最小化或被前台的全屏程序挡住时按"不显示"处理：停止刷新和动画，不打扰游戏。</summary>
-    private void UpdateVisible() => SetVisible(!IsMinimized && !FullscreenCover.Covers(_hwnd));
+    /// <summary>最小化、在别的虚拟桌面上，或被前台的全屏程序挡住时按"不显示"处理：停止刷新和动画，不打扰游戏。</summary>
+    private void UpdateVisible() =>
+        SetVisible(!IsMinimized && !WindowCloak.IsCloaked(_hwnd) && !FullscreenCover.Covers(_hwnd));
 
     private void SetVisible(bool visible) => _host.Presence.SetMainVisible(visible);
 
@@ -154,7 +160,10 @@ public sealed partial class MainWindow : Window
         _coverCheck.Stop();
         _foreground.Dispose();
         SetVisible(false);
-        // 释放页面，让页面里的 ViewModel 取消订阅。
+        // 离开当前页面（触发它的 OnNavigatedFrom、Unloaded），让页面里的 ViewModel 取消订阅、停止刷新。
+        // 直接清空内容不会触发 OnNavigatedFrom，页面会一直挂在状态更新上。
+        ContentFrame.Navigate(typeof(Page), null, new SuppressNavigationTransitionInfo());
+        ContentFrame.BackStack.Clear();
         ContentFrame.Content = null;
     }
 }

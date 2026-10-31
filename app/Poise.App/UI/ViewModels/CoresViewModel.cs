@@ -22,7 +22,8 @@ public sealed partial class CoresViewModel(AppHost host) : ObservableObject
 
     [ObservableProperty] public partial string Summary { get; private set; } = "";
     [ObservableProperty] public partial string Demand { get; private set; } = "";
-    [ObservableProperty] public partial string Note { get; private set; } = "";
+    [ObservableProperty, NotifyPropertyChangedFor(nameof(NoteVisibility))]
+    public partial string Note { get; private set; } = "";
 
     public Visibility NoteVisibility => Note.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
 
@@ -33,6 +34,13 @@ public sealed partial class CoresViewModel(AppHost host) : ObservableObject
     {
         add => _poller.Error += value;
         remove => _poller.Error -= value;
+    }
+
+    /// <summary>出错之后又读成功了。</summary>
+    public event Action? Recovered
+    {
+        add => _poller.Recovered += value;
+        remove => _poller.Recovered -= value;
     }
 
     public void Start() => _poller.Start(LoadAsync);
@@ -50,7 +58,6 @@ public sealed partial class CoresViewModel(AppHost host) : ObservableObject
         Summary = view.Summary;
         Demand = view.Demand;
         Note = view.Note ?? "";
-        OnPropertyChanged(nameof(NoteVisibility));
         var sameShape = view.Groups.Count == Groups.Count && Groups.Zip(view.Groups).All(p => p.First.SameShape(p.Second));
         if (sameShape)
         {
@@ -67,7 +74,11 @@ public sealed partial class CoresViewModel(AppHost host) : ObservableObject
                 Groups.Add(new CacheGroupItem(g));
             }
         }
+        var wasEmpty = Unrestricted.Count == 0;
         PlacedItem.SyncInto(Unrestricted, view.Unrestricted);
-        OnPropertyChanged(nameof(UnrestrictedEmptyVisibility));
+        if (wasEmpty != (Unrestricted.Count == 0))
+        {
+            OnPropertyChanged(nameof(UnrestrictedEmptyVisibility));
+        }
     }
 }

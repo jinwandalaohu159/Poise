@@ -3,7 +3,6 @@
 use poise_core::diagnose::HISTORY_WINDOW_MS;
 use poise_core::diagnose::{self, DiagnoseConfig, StutterInput};
 use poise_hardware::HardwareReading;
-use poise_platform::observe::system;
 use poise_protocol::{Diagnosis, HardwareInfo, Metrics, Status, Trend};
 
 use super::{Engine, convert};
@@ -31,7 +30,7 @@ impl Engine {
                 mem_used_bytes: sys.mem_used_bytes(),
                 mem_total_bytes: sys.mem_total,
                 cpu_mhz: sys.cpu_mhz_current,
-                on_battery: system::on_battery(),
+                on_battery: sys.on_battery,
             },
             hardware: self.hardware_info(reading),
             adjusted_processes: self.scheduler.adjusted_count(),
@@ -64,7 +63,7 @@ impl Engine {
                 classes: &view.classes,
                 activity: &self.activity,
                 thermals: view.reading.thermals,
-                suspects: &self.cleanup.suspects,
+                suspects: self.leak_suspects(),
             },
         );
         Some(Diagnosis {

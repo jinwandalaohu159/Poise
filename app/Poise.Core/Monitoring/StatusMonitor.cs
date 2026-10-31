@@ -4,7 +4,7 @@ using Poise.Core.Ipc;
 namespace Poise.Core.Monitoring;
 
 /// <summary>
-/// 定期向服务查询状态：窗口或托盘面板显示时每秒一次，否则每 10 秒一次。
+/// 定期向服务查询状态：窗口或托盘面板显示时每秒一次，都不显示时不查（没人看；托盘图标由托盘代理自己查）。
 /// 结果在创建它的线程（界面线程）上通过 <see cref="Changed"/> 通知。
 /// <para>
 /// 修改状态的操作（切换模式、开关）要经过 <see cref="ChangeAsync"/>，见 <see cref="RefreshGate"/>：
@@ -13,8 +13,7 @@ namespace Poise.Core.Monitoring;
 /// </summary>
 public sealed class StatusMonitor : IDisposable
 {
-    private static readonly TimeSpan Visible = TimeSpan.FromSeconds(1);
-    private static readonly TimeSpan Hidden = TimeSpan.FromSeconds(10);
+    private static readonly TimeSpan Interval = TimeSpan.FromSeconds(1);
 
     private readonly PoiseApi _api;
     private readonly SynchronizationContext _ui;
@@ -27,7 +26,8 @@ public sealed class StatusMonitor : IDisposable
         _api = api;
         _ui = SynchronizationContext.Current
               ?? throw new InvalidOperationException("StatusMonitor 必须在界面线程上创建");
-        _timer = new Timer(_ => _ui.Post(_ => _ = RefreshAsync(), null), null, TimeSpan.Zero, Hidden);
+        // 先查一次（启动时就要知道连没连上），之后等有界面显示再定期查。
+        _timer = new Timer(_ => _ui.Post(_ => _ = _gate.TickAsync(QueryAsync), null), null, TimeSpan.Zero, Timeout.InfiniteTimeSpan);
     }
 
     public Status? Latest { get; private set; }
@@ -43,12 +43,19 @@ public sealed class StatusMonitor : IDisposable
     /// <summary>在界面线程上触发。</summary>
     public event Action? Changed;
 
-    public bool Fast
+    /// <summary>有界面显示着：立即查一次，之后每秒一次；都不显示时停止。</summary>
+    public bool Watched
     {
         set
         {
-            var interval = value ? Visible : Hidden;
-            _timer.Change(interval, interval);
+            if (value)
+            {
+                _timer.Change(TimeSpan.Zero, Interval);
+            }
+            else
+            {
+                _timer.Change(Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
+            }
         }
     }
 
@@ -74,7 +81,10 @@ public sealed class StatusMonitor : IDisposable
         }
     }
 
-    public Task RefreshAsync() => _gate.RefreshAsync(async () =>
+    public Task RefreshAsync() => _gate.RefreshAsync(QueryAsync);
+
+    /// <summary>读一次状态，返回如何发布（见 <see cref="RefreshGate"/>）。</summary>
+    private async Task<Action> QueryAsync()
     {
         try
         {
@@ -96,7 +106,7 @@ public sealed class StatusMonitor : IDisposable
                 Publish();
             };
         }
-    });
+    }
 
     private void Publish()
     {

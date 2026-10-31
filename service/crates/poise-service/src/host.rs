@@ -13,6 +13,7 @@ use windows_service::{define_windows_service, service_dispatcher};
 use poise_platform::persist::paths;
 
 use crate::config::RunConfig;
+use crate::runtime::StopReason;
 use crate::{logging, runtime};
 
 pub const SERVICE_NAME: &str = "Poise";
@@ -32,14 +33,16 @@ fn service_main(_args: Vec<OsString>) {
     if let Err(e) = run(cfg) {
         log::error!("服务异常退出：{e:#}");
     }
+    logging::flush();
 }
 
 fn status(state: ServiceState) -> ServiceStatus {
     ServiceStatus {
         service_type: ServiceType::OWN_PROCESS,
         current_state: state,
+        // 关机时先收到"即将关机"（系统服务都还在）：趁散热接口（WMI）还能用时还原。
         controls_accepted: if state == ServiceState::Running {
-            ServiceControlAccept::STOP | ServiceControlAccept::SHUTDOWN
+            ServiceControlAccept::STOP | ServiceControlAccept::PRESHUTDOWN
         } else {
             ServiceControlAccept::empty()
         },
@@ -53,8 +56,12 @@ fn status(state: ServiceState) -> ServiceStatus {
 fn run(cfg: RunConfig) -> anyhow::Result<()> {
     let (tx, rx) = mpsc::channel();
     let handler = move |event| match event {
-        ServiceControl::Stop | ServiceControl::Shutdown => {
-            let _ = tx.send(());
+        ServiceControl::Stop => {
+            let _ = tx.send(StopReason::Requested);
+            ServiceControlHandlerResult::NoError
+        }
+        ServiceControl::Preshutdown | ServiceControl::Shutdown => {
+            let _ = tx.send(StopReason::SystemShutdown);
             ServiceControlHandlerResult::NoError
         }
         ServiceControl::Interrogate => ServiceControlHandlerResult::NoError,
@@ -62,7 +69,13 @@ fn run(cfg: RunConfig) -> anyhow::Result<()> {
     };
     let handle = service_control_handler::register(SERVICE_NAME, handler)?;
     handle.set_service_status(status(ServiceState::Running))?;
-    let result = runtime::run(cfg, rx);
-    handle.set_service_status(status(ServiceState::Stopped))?;
+    let result = runtime::run(cfg, rx, || {
+        let _ = handle.set_service_status(status(ServiceState::StopPending));
+    });
+    // 异常退出时报告非零的退出码，服务管理器据此按"失败"处理（自动重启，见 `install`）。
+    handle.set_service_status(ServiceStatus {
+        exit_code: ServiceExitCode::ServiceSpecific(u32::from(result.is_err())),
+        ..status(ServiceState::Stopped)
+    })?;
     result
 }

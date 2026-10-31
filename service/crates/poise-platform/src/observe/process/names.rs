@@ -8,6 +8,9 @@ use std::sync::mpsc::{self, Receiver, Sender};
 
 use crate::win::version_info;
 
+/// 记住的名称超过这么多时，只留下还在运行的程序的（版本号目录、临时安装程序会让路径越来越多）。
+const MAX_KNOWN: usize = 4096;
+
 #[derive(Default)]
 pub struct NameResolver {
     /// 已经读到的名称（None 表示文件里没有）。
@@ -39,10 +42,20 @@ impl NameResolver {
         if let Some(name) = self.known.get(path) {
             return name.clone();
         }
-        if self.asked.insert(path.to_string()) {
+        if !self.asked.contains(path) {
+            self.asked.insert(path.to_string());
             let _ = self.worker().ask.send(path.to_string());
         }
         None
+    }
+
+    /// 记住的名称太多时（见 [`MAX_KNOWN`]）只留下 `alive` 选中的路径；不多时什么都不做，也不调用 `alive`。
+    pub fn trim(&mut self, alive: impl FnOnce() -> HashSet<String>) {
+        if self.known.len() <= MAX_KNOWN {
+            return;
+        }
+        let alive = alive();
+        self.known.retain(|path, _| alive.contains(path));
     }
 
     fn worker(&mut self) -> &Worker {
@@ -53,11 +66,8 @@ impl NameResolver {
                 .name("names".into())
                 .spawn(move || {
                     for path in paths {
-                        let v = version_info::read(&path);
-                        if reply
-                            .send((path, v.file_description.or(v.product_name)))
-                            .is_err()
-                        {
+                        let name = display_name(version_info::read(&path));
+                        if reply.send((path, name)).is_err() {
                             return;
                         }
                     }
@@ -68,9 +78,55 @@ impl NameResolver {
     }
 }
 
+/// 程序的友好名称：文件描述，其次产品名，再其次原始文件名（去掉 .exe，保留大小写）。
+/// 系统组件常把描述写成"Microsoft® Windows® Operating System"，看不出是哪个程序（实测是"小组件"），
+/// 这类笼统的说法不用。
+fn display_name(v: version_info::VersionStrings) -> Option<String> {
+    let stem = v.original_filename.map(|f| {
+        let f = f.trim();
+        f.strip_suffix(".exe")
+            .or_else(|| f.strip_suffix(".EXE"))
+            .unwrap_or(f)
+            .to_string()
+    });
+    [v.file_description, v.product_name, stem]
+        .into_iter()
+        .flatten()
+        .map(|s| s.trim().to_string())
+        .find(|s| !s.is_empty() && !is_generic(s))
+}
+
+/// 只说明是 Windows 的一部分、看不出是哪个程序的名称。
+fn is_generic(name: &str) -> bool {
+    let lower = name.to_lowercase();
+    lower.contains("operating system")
+        || lower.contains("操作系统")
+        || matches!(lower.as_str(), "windows" | "microsoft windows")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn generic_windows_descriptions_give_way_to_the_file_name() {
+        let v = |desc: &str, product: &str, original: Option<&str>| version_info::VersionStrings {
+            file_description: Some(desc.into()),
+            product_name: Some(product.into()),
+            company_name: None,
+            original_filename: original.map(Into::into),
+        };
+        let os = "Microsoft® Windows® Operating System";
+        assert_eq!(
+            display_name(v(os, os, Some("Widgets.exe"))).as_deref(),
+            Some("Widgets")
+        );
+        assert_eq!(
+            display_name(v("Windows Terminal", os, None)).as_deref(),
+            Some("Windows Terminal")
+        );
+        assert_eq!(display_name(v(os, os, None)), None);
+    }
 
     #[test]
     fn names_arrive_later_without_blocking() {

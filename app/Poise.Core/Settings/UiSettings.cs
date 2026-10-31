@@ -34,7 +34,7 @@ public sealed class UiSettings
         try
         {
             return File.Exists(FilePath)
-                ? JsonSerializer.Deserialize<UiSettings>(File.ReadAllText(FilePath)) ?? new UiSettings()
+                ? JsonSerializer.Deserialize(File.ReadAllText(FilePath), LocalJson.Default.UiSettings) ?? new UiSettings()
                 : new UiSettings();
         }
         catch (Exception e) when (e is IOException or JsonException or UnauthorizedAccessException)
@@ -48,7 +48,8 @@ public sealed class UiSettings
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(FilePath)!);
-            File.WriteAllText(FilePath, JsonSerializer.Serialize(this));
+            File.WriteAllText(FilePath, JsonSerializer.Serialize(this, LocalJson.Default.UiSettings));
+            Lifecycle.Agent.PrefsChanged();
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {

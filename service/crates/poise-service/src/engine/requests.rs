@@ -1,11 +1,12 @@
 //! 把 IPC 请求分派到引擎的各个部分。只处理协议里列出的固定请求。
+//! 只读的请求先看有没有留着的回复（见 [`super::answers`]）；会改变状态的请求让留着的回复作废。
 
 use poise_core::model::Pid;
-use poise_core::prefs::Mode;
-use poise_protocol::{ErrorCode, Event, HelloResult, PROTOCOL_VERSION, Request, ResponseEnvelope};
+use poise_protocol::{ErrorCode, HelloResult, PROTOCOL_VERSION, Request, ResponseEnvelope};
 use serde::Serialize;
 
 use super::Engine;
+use super::answers::Query;
 use super::error::RequestError;
 
 fn ok<T: Serialize>(id: u64, value: &T) -> ResponseEnvelope {
@@ -29,10 +30,21 @@ fn reply<T: Serialize>(id: u64, r: Result<T, RequestError>) -> ResponseEnvelope 
 
 impl Engine {
     pub fn handle(&mut self, id: u64, client: Pid, request: Request) -> ResponseEnvelope {
+        if self.stopped {
+            return ResponseEnvelope::error(id, ErrorCode::NotReady, "服务正在停止");
+        }
+        // 只读的请求不改变状态；上报会话、界面显示与否只在前台切换时改变状态（那时会立即重新调度，
+        // 见 `reschedule_now`）。其余的都让留着的回复作废。
+        let keeps = Query::of(&request).is_some()
+            || matches!(
+                request,
+                Request::Hello { .. } | Request::ReportSession(_) | Request::SetUiVisible { .. }
+            );
+        if !keeps {
+            self.answers.invalidate();
+        }
         match request {
             Request::Hello { protocol } => {
-                // 已连接的界面和托盘视为 Poise 自己，永不触碰。
-                self.own_pids.insert(client);
                 if protocol != PROTOCOL_VERSION {
                     return ResponseEnvelope::error(
                         id,
@@ -56,7 +68,8 @@ impl Engine {
                     self.on_session_changed(state.session_id);
                 }
                 let now = self.now();
-                if self.session.report(state, client, now) {
+                // 前台变了，或者暂停中托盘代理又上报了（重新打开 Poise）：立即重新调度，不等下一轮采样。
+                if self.session.report(state, client, now) || self.paused {
                     self.reschedule_now();
                 }
                 ok(id, &())
@@ -66,66 +79,30 @@ impl Engine {
                 self.session.set_ui_visible(visible, now);
                 ok(id, &())
             }
-            Request::GetStatus => {
-                let status = self.status();
-                ok(id, &status)
-            }
+            Request::GetStatus => self.answer(id, Query::Status),
             Request::SnoozeRestartAdvice => {
                 self.kernel_pool.snooze();
                 ok(id, &())
             }
-            Request::SetMode { mode } => {
-                if mode == Mode::Vendor && !self.vendor_available() {
-                    return reply::<()>(
-                        id,
-                        Err(RequestError::new(
-                            ErrorCode::InvalidRequest,
-                            "这台电脑没有机型极限模式",
-                        )),
-                    );
-                }
-                self.settings.mode = mode;
-                self.save_settings();
-                self.reschedule_now();
-                ok(id, &())
-            }
+            Request::SetMode { mode } => reply(id, self.set_mode(mode)),
             Request::SetFanBoost { percent } => {
-                self.settings.fan_boost = percent.min(100);
-                self.save_settings();
-                // Poise 暂停时只保存，恢复时再落到硬件。
-                if !self.paused {
-                    self.apply_fan_boost();
-                }
+                self.set_fan_boost(percent);
                 ok(id, &())
             }
             Request::SetGameMode { mode } => {
-                self.settings.game_mode = mode;
-                self.save_settings();
-                // 正在玩游戏时立即换到新的目标模式。
-                self.reschedule_now();
+                self.set_game_mode(mode);
                 ok(id, &())
             }
             Request::SetSmartSchedule { enabled } => {
-                if self.settings.smart_schedule != enabled {
-                    self.logbook.event(Event::SmartSchedule { enabled });
-                }
-                self.settings.smart_schedule = enabled;
-                self.save_settings();
-                // 关闭时立即撤销全部进程调整，打开时立即按类别调整。
-                self.reschedule_now();
+                self.set_smart_schedule(enabled);
                 ok(id, &())
             }
             Request::SetAutoClean { enabled } => {
-                self.settings.auto_clean = enabled;
-                self.save_settings();
+                self.set_auto_clean(enabled);
                 ok(id, &())
             }
-            Request::CleanNow => {
-                let result = self.clean_now();
-                ok(id, &result)
-            }
-            Request::CleanupOverview => reply(id, self.cleanup_overview().ok_or_else(not_ready)),
-            Request::ListApps => ok(id, &self.apps()),
+            Request::CleanupOverview => self.answer(id, Query::CleanupOverview),
+            Request::ListApps => self.answer(id, Query::Apps),
             Request::SetAppPreference { path, preference } => {
                 let r = self.set_app_preference(&path, preference);
                 self.reschedule_now();
@@ -135,18 +112,37 @@ impl Engine {
                 let r = self.temp_boost(pid, minutes);
                 reply(id, r)
             }
-            Request::ListOptimizations => ok(id, &self.list_optimizations()),
             Request::ApplyOptimization { id: item } => reply(id, self.apply_optimization(&item)),
             Request::RevertOptimization { id: item } => reply(id, self.revert_optimization(&item)),
             Request::ApplyRecommended => reply(id, self.apply_recommended()),
             Request::RevertAll => reply(id, self.revert_optimizations()),
-            Request::Diagnose => reply(id, self.diagnose().ok_or_else(not_ready)),
-            Request::Trend => ok(id, &self.trend()),
-            Request::Cores => ok(id, &self.core_map()),
-            // 日志与记录由日志系统直接回答（见 `ipc_server`），不经过引擎。
-            Request::Events { .. } | Request::Records => {
-                ResponseEnvelope::error(id, ErrorCode::InvalidRequest, "日志与记录不经过引擎")
+            Request::Diagnose => self.answer(id, Query::Diagnose),
+            Request::Trend => self.answer(id, Query::Trend),
+            Request::Cores => self.answer(id, Query::Cores),
+            // 日志与记录由日志系统直接回答，一键清理、列出优化项在引擎锁外进行（见 `ipc_server::route`）。
+            Request::Events { .. }
+            | Request::Records
+            | Request::CleanNow
+            | Request::ListOptimizations => {
+                ResponseEnvelope::error(id, ErrorCode::InvalidRequest, "这个请求不由引擎直接处理")
             }
         }
+    }
+
+    /// 只读的请求：有留着的回复就直接给，没有时整理一份并留下。
+    fn answer(&mut self, id: u64, query: Query) -> ResponseEnvelope {
+        if let Some(cached) = self.answers.get(query, id) {
+            return cached;
+        }
+        let response = match query {
+            Query::Status => ok(id, &self.status()),
+            Query::Apps => ok(id, &self.apps()),
+            Query::CleanupOverview => reply(id, self.cleanup_overview().ok_or_else(not_ready)),
+            Query::Diagnose => reply(id, self.diagnose().ok_or_else(not_ready)),
+            Query::Trend => ok(id, &self.trend()),
+            Query::Cores => ok(id, &self.core_map()),
+        };
+        self.answers.put(query, &response);
+        response
     }
 }

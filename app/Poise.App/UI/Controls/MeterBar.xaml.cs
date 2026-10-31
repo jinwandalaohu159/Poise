@@ -34,24 +34,32 @@ public sealed partial class MeterBar : UserControl
     public double Fraction
     {
         get => _fraction;
-        set
-        {
-            _fraction = Math.Clamp(double.IsFinite(value) ? value : 0, 0, 1);
-            _hasValue = true;
-            Update();
-        }
+        set => Set(value, _secondary);
     }
 
     /// <summary>主段末端之前以浅色标出的长度，0～1。</summary>
     public double SecondaryFraction
     {
         get => _secondary;
-        set
-        {
-            _secondary = Math.Clamp(double.IsFinite(value) ? value : 0, 0, 1);
-            Update();
-        }
+        set => Set(_fraction, value);
     }
+
+    /// <summary>两段一起设（只更新、只起一次过渡）。和现在的相同时什么都不做。</summary>
+    public void Set(double fraction, double secondary)
+    {
+        fraction = Clamp(fraction);
+        secondary = Clamp(secondary);
+        if (_hasValue && fraction == _fraction && secondary == _secondary)
+        {
+            return;
+        }
+        _fraction = fraction;
+        _secondary = secondary;
+        _hasValue = true;
+        Update();
+    }
+
+    private static double Clamp(double v) => Math.Clamp(double.IsFinite(v) ? v : 0, 0, 1);
 
     /// <summary>按等级着色；null 用强调色。</summary>
     public void SetLevel(Level? level) =>

@@ -17,7 +17,7 @@ mod tree;
 use game::renders_fullscreen;
 use role::{AntiCheat, restartable_service, role_of};
 use scope::{preference_of, schedule_scope};
-use tree::{Lineage, Marks, NeverScheduledPaths, roots};
+use tree::{Lineage, Marks, NeverScheduledPaths, StoodAlone, roots};
 
 /// 进程的角色。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -51,6 +51,9 @@ pub enum ScheduleScope {
     Excluded,
     /// 用户程序：按类别调整核心、优先级和节能。
     App,
+    /// Windows 自己的维护程序（更新安装、搜索索引等，见 `known::is_maintenance_worker`）：只在有重点程序时
+    /// 挪到副域、降低内存与磁盘优先级；不改优先级、不节能、不重启。
+    Maintenance,
 }
 
 /// 分类结果：角色加上与用户感知相关的标记。
@@ -97,6 +100,21 @@ impl Classification {
     pub fn is_schedulable(&self) -> bool {
         self.schedule == ScheduleScope::App
     }
+
+    /// 是否是 Windows 自己的维护程序（见 [`ScheduleScope::Maintenance`]）。
+    pub fn is_maintenance(&self) -> bool {
+        self.schedule == ScheduleScope::Maintenance
+    }
+
+    /// 用户此刻直接在用、或要求一直保持快的：前台的进程树，以及设为"始终优先"或"游戏"的程序。
+    /// 调度策略（`schedule::policy::in_use`）和安全守卫都以它为准判断"正在用"，各自再加上自己看得到的情况。
+    pub fn in_use_by_user(&self) -> bool {
+        self.in_foreground_tree
+            || matches!(
+                self.preference,
+                AppPreference::AlwaysFast | AppPreference::Game
+            )
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -137,6 +155,7 @@ pub struct Classifier {
     cfg: ClassifyConfig,
     never_scheduled_paths: NeverScheduledPaths,
     lineage: Lineage,
+    stood_alone: StoodAlone,
 }
 
 impl Classifier {
@@ -145,6 +164,7 @@ impl Classifier {
             cfg,
             never_scheduled_paths: NeverScheduledPaths::default(),
             lineage: Lineage::default(),
+            stood_alone: StoodAlone::default(),
         }
     }
 
@@ -152,11 +172,21 @@ impl Classifier {
         let snap = input.snapshot;
         let by_pid = snap.by_pid();
         let anti_cheat = AntiCheat::detect(snap);
-        let marks = Marks::new(snap, input.session, &mut self.never_scheduled_paths);
-        let visible = &marks.visible;
-        let audio: HashSet<Pid> = input.session.audio_pids.iter().copied().collect();
+        let marks = Marks::new(
+            snap,
+            input.session,
+            &mut self.never_scheduled_paths,
+            &self.stood_alone,
+        );
         let roots = roots(&by_pid, input, &marks, &self.lineage);
+        let Marks {
+            visible,
+            never_scheduled,
+            ..
+        } = marks;
+        self.stood_alone.remember(&roots, &by_pid, input.session);
         self.lineage.remember(&roots, &by_pid);
+        let audio: HashSet<Pid> = input.session.audio_pids.iter().copied().collect();
         let foreground_root = input
             .session
             .foreground_pid
@@ -187,7 +217,7 @@ impl Classifier {
                         || input.active_games.contains(&pid)
                         || renders_fullscreen(p, input, self.cfg.game_gpu_pct));
                 let c = Classification {
-                    schedule: schedule_scope(p, &role, marks.never_scheduled.contains(&pid)),
+                    schedule: schedule_scope(p, &role, never_scheduled.contains(&pid)),
                     root_pid,
                     in_foreground_tree,
                     has_visible_window,

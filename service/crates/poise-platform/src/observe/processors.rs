@@ -1,13 +1,26 @@
 //! 各逻辑处理器累计的忙碌时间（第 0 个处理器组，64 个逻辑处理器以内的电脑就是全部）。每轮采样读一次：
 //! 整机 CPU 时间由它们相加（见 `system::read_metrics`），各核心的占用由 `ActivityTracker` 换算。只读。
+//!
+//! 明确问第 0 组（`NtQuerySystemInformationEx`）：不带组号的查询回答的是调用线程所在的组，多组的电脑上
+//! 采样线程被调度到别的组时会读到另一组的处理器，和拓扑（按第 0 组编号）对不上。
 
 use std::ffi::c_void;
 
 use poise_core::model::ProcessorTime;
-use windows::Wdk::System::SystemInformation::{NtQuerySystemInformation, SYSTEM_INFORMATION_CLASS};
+use windows::Wdk::System::SystemInformation::SYSTEM_INFORMATION_CLASS;
+use windows::Win32::Foundation::NTSTATUS;
 use windows::Win32::System::Threading::{GetActiveProcessorCount, GetActiveProcessorGroupCount};
 
 const PROCESSOR_PERFORMANCE_CLASS: SYSTEM_INFORMATION_CLASS = SYSTEM_INFORMATION_CLASS(8);
+
+windows::core::link!("ntdll.dll" "system" fn NtQuerySystemInformationEx(
+    class: SYSTEM_INFORMATION_CLASS,
+    input: *const c_void,
+    input_len: u32,
+    info: *mut c_void,
+    info_len: u32,
+    written: *mut u32,
+) -> NTSTATUS);
 
 /// SYSTEM_PROCESSOR_PERFORMANCE_INFORMATION（x64）。内核时间包含空闲时间。
 #[repr(C)]
@@ -31,10 +44,13 @@ pub fn read_processor_times() -> Vec<ProcessorTime> {
     let mut buf = vec![ProcessorTimes::default(); count];
     let bytes = (count * size_of::<ProcessorTimes>()) as u32;
     let mut written = 0u32;
-    // SAFETY: 缓冲区正好容纳 count 个结构，系统只写入不超过 bytes 的数据。
+    let group = 0u16;
+    // SAFETY: 输入是组号（2 字节）；缓冲区正好容纳 count 个结构，系统只写入不超过 bytes 的数据。
     let status = unsafe {
-        NtQuerySystemInformation(
+        NtQuerySystemInformationEx(
             PROCESSOR_PERFORMANCE_CLASS,
+            std::ptr::from_ref(&group).cast(),
+            size_of::<u16>() as u32,
             buf.as_mut_ptr() as *mut c_void,
             bytes,
             &mut written,

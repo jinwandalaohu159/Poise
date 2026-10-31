@@ -44,6 +44,6 @@ public static class Loc
         using var stream = Assembly.GetExecutingAssembly().GetManifestResourceStream(name);
         return stream is null
             ? []
-            : JsonSerializer.Deserialize<Dictionary<string, string>>(stream) ?? [];
+            : JsonSerializer.Deserialize(stream, LocalJson.Default.DictionaryStringString) ?? [];
     }
 }

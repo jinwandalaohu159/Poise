@@ -61,7 +61,7 @@ impl GroupPlacer {
             }
             _ => {}
         }
-        let capacity = |d: u8| layout.threads(d) as f32 * 100.0;
+        let capacity = |d: u8| layout.capacity(d);
         let all_usable = usable.iter().fold(0u16, |m, d| m | (1 << d));
         let mut load = vec![0.0_f32; usize::from(layout.domains())];
         let mut out = HashMap::with_capacity(wants.len());

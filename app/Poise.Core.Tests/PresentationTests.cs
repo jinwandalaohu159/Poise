@@ -62,13 +62,27 @@ public sealed class PresentationTests
 
         Assert.Equal([GameMode.Off, GameMode.Full, GameMode.Vendor], ModeText.GameOptions("dell_g_mode").Select(o => o.Mode));
         Assert.Equal([GameMode.Off, GameMode.Full], ModeText.GameOptions(null).Select(o => o.Mode));
+        // 机型不支持极限模式：下拉框显示全力。
+        Assert.Equal(GameMode.Full, ModeText.ShownGameOption(ModeText.GameOptions(null), GameMode.Vendor).Mode);
+        Assert.Equal(GameMode.Off, ModeText.ShownGameOption(ModeText.GameOptions(null), GameMode.Off).Mode);
     }
 
     [Fact]
     public void Only_restart_advice_can_be_snoozed()
     {
-        Assert.True(HomeViewBuilder.Build(WithHealth(Full, HealthCode.RestartRecommended), Now).CanSnoozeRestart);
+        var restart = HomeViewBuilder.Build(WithHealth(Full, HealthCode.RestartRecommended), Now);
+        Assert.True(restart.CanSnoozeRestart);
+        Assert.Equal((Level.Notice, true), (restart.Notice!.Level, restart.Notice.CanSnooze));
         Assert.False(HomeViewBuilder.Build(WithHealth(Full, HealthCode.Tired), Now).CanSnoozeRestart);
+    }
+
+    [Fact]
+    public void Observe_only_mode_is_a_plain_notice_and_otherwise_there_is_none()
+    {
+        // 样本里是观察模式。
+        var observe = HomeViewBuilder.Build(WithHealth(Full, HealthCode.Tired), Now).Notice!;
+        Assert.Equal((Level.Good, false), (observe.Level, observe.CanSnooze));
+        Assert.Null(HomeViewBuilder.Build(WithHealth(Full with { DryRun = false }, HealthCode.Tired), Now).Notice);
     }
 
     [Fact]
@@ -431,6 +445,23 @@ public sealed class PresentationTests
         Assert.Equal("bac", Names(AppSort.Cpu, false));
         Assert.Equal("bca", Names(AppSort.Memory, true));
         Assert.Equal("acb", Names(AppSort.Memory, false));
+    }
+
+    [Fact]
+    public void Rows_with_similar_usage_keep_their_places_until_clearly_out_of_order()
+    {
+        var shown = new[] { ("a", 10.0), ("b", 9.0), ("c", 1.0) };
+        string Settle((string, double)[] fresh, double slack = 0.5) =>
+            string.Concat(AppsText.Settle(shown, fresh.OrderByDescending(r => r.Item2).ToList(), r => r.Item1, r => r.Item2, true, slack).Select(r => r.Item1));
+
+        // b 稍微超过 a：不换位。
+        Assert.Equal("abc", Settle([("a", 10.0), ("b", 10.5), ("c", 1.0)]));
+        // c 明显超过了 b：按新顺序。
+        Assert.Equal("cab", Settle([("a", 10.0), ("b", 9.0), ("c", 30.0)]));
+        // 差得多但绝对值很小（0.1% 对 0.3%）：不换位。
+        Assert.Equal("abc", Settle([("a", 0.1), ("b", 0.0), ("c", 0.3)]));
+        // 行变了：按新顺序。
+        Assert.Equal("ba", Settle([("a", 1.0), ("b", 2.0)]));
     }
 
     [Fact]

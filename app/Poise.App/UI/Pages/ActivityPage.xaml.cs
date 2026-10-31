@@ -1,5 +1,6 @@
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Navigation;
 using Poise.App.UI.Controls;
 using Poise.App.UI.ViewModels;
 using Poise.Core.Localization;
@@ -21,17 +22,21 @@ public sealed partial class ActivityPage : Page
         Header.Title = Loc.Get("activity.title");
         Log.Error += ErrorBar.ShowError;
         Records.Error += ErrorBar.ShowError;
-        Loaded += (_, _) =>
-        {
-            _shown = true;
-            ShowTab();
-        };
-        Unloaded += (_, _) =>
-        {
-            _shown = false;
-            Log.Stop();
-            Records.Stop();
-        };
+        Log.Recovered += ErrorBar.HideError;
+        Records.Recovered += ErrorBar.HideError;
+    }
+
+    protected override void OnNavigatedTo(NavigationEventArgs e)
+    {
+        _shown = true;
+        ShowTab();
+    }
+
+    protected override void OnNavigatedFrom(NavigationEventArgs e)
+    {
+        _shown = false;
+        Log.Stop();
+        Records.Stop();
     }
 
     public EventLogViewModel Log { get; } = new(AppHost.Current);
@@ -40,7 +45,7 @@ public sealed partial class ActivityPage : Page
 
     private void OnTabChanged(SelectorBar sender, SelectorBarSelectionChangedEventArgs args)
     {
-        // 载入页面时标签可能先于下面的面板建好就触发一次；面板建好后由 Loaded 再显示。
+        // 载入页面时标签可能先于下面的面板建好就触发一次；面板建好后由 OnNavigatedTo 再显示。
         if (RecordsPanel is not null)
         {
             ShowTab();

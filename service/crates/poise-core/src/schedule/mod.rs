@@ -1,6 +1,7 @@
 //! 智能调度：重点程序（正在玩的游戏、正在用又在持续干重活的程序）按需要的线程占用核心，其余没在用的
-//! 程序让到副域；后台持续占用处理器或磁盘的程序按需求分档让路；正在用、正在发声的程序不动；标记的游戏
-//! 提高一级；游戏模式；临时全速。规则见 [`policy`]。
+//! 程序让到副域（Windows 自己的维护程序——更新安装、搜索索引等——也挪开，并让出磁盘）；后台持续占用
+//! 处理器或磁盘的程序按需求分档让路；正在用、正在发声的程序不动；标记的游戏提高一级；游戏模式；临时全速。
+//! 规则见 [`policy`]。
 //!
 //! 对外只有 [`Scheduler`]：每个采样周期调用一次 [`Scheduler::plan`]，
 //! 把动作交给安全执行器后用 [`Scheduler::report`] 回报结果。
@@ -15,6 +16,7 @@ mod decisions;
 mod desired;
 mod explain;
 mod judge;
+mod layout;
 mod leftovers;
 mod placement;
 mod policy;
@@ -30,9 +32,10 @@ use crate::classify::Classification;
 use crate::model::{Millis, Pid, PriorityClass, ProcessKey, ProcessSample, Snapshot};
 use crate::prefs::Mode;
 
-pub use config::{CoreLayout, ScheduleConfig};
+pub use config::ScheduleConfig;
 pub use decisions::{Cause, Decision, ProgramState, Verdict};
 pub use desired::Desired;
+pub use layout::CoreLayout;
 pub use leftovers::Adjusted;
 pub use reconcile::{PlannedAction, ProcessSchedule};
 
@@ -44,7 +47,9 @@ use trackers::{
     AudioTracker, BusyTracker, DemandTracker, FocusTracker, Footprint, ForegroundTracker,
     GameTracker, TempBoosts, TreeLoad,
 };
-pub use trackers::{BusyRule, DemandRule, FocusRule, ForegroundHold, LoadSmoothing, Pressure};
+pub use trackers::{
+    BusyRule, DemandReason, DemandRule, FocusRule, ForegroundHold, LoadSmoothing, Pressure,
+};
 
 pub struct ScheduleInput<'a> {
     pub snapshot: &'a Snapshot,
@@ -60,6 +65,8 @@ pub struct ScheduleInput<'a> {
     pub on_battery: bool,
     /// 处理器接近温度上限（上一轮的判断）。
     pub hot: bool,
+    /// 用户多久没操作（毫秒）。离开很久时，挂在菜单里的游戏不再让需求保持在"高"（见 `judge`）。
+    pub user_idle_ms: Millis,
 }
 
 /// 正在运行的游戏（用于界面显示"游戏中 · 英雄联盟"）。
@@ -90,14 +97,17 @@ pub struct Scheduler {
     game_roots: HashSet<Pid>,
     /// 像游戏、还在等待确认的进程树：先放到大核，不等确认（每轮更新）。
     pending_game_roots: HashSet<Pid>,
+    /// 上一轮按等待确认的游戏放到大核的进程树（负载门槛的滞回，见 `judge::pending_game`）。
+    pending_held: HashSet<Pid>,
     focus: FocusTracker,
     footprint: Footprint,
     placer: GroupPlacer,
     audio: AudioTracker,
     load: TreeLoad,
     demand: DemandTracker,
-    /// 本轮的资源需求，以及已经连续多久没有需求。
+    /// 本轮的资源需求、从哪来，以及已经连续多久没有需求。
     pressure: Pressure,
+    demand_reason: Option<DemandReason>,
     idle_for: Millis,
     busy: BusyTracker,
     /// 有重点程序时，发声又在忙的程序（只让到小核）。
@@ -126,7 +136,15 @@ impl Scheduler {
         };
         let focused = programs.values().any(|p| p.focusing);
         let actions = self.diff(input, &programs);
-        let decisions = self.record_decisions(input.classes, &programs);
+        let decisions = if input.enabled {
+            self.record_decisions(input.classes, &programs, input.snapshot.at)
+        } else {
+            // 不调度（关闭了智能调度、正在撤销）时没有决定可报告，不能当成程序都退出了；
+            // 重新开始调度后从头记。
+            self.decisions = DecisionLog::default();
+            self.explained.clear();
+            Vec::new()
+        };
         SchedulePlan {
             effective_mode,
             game: self.current_game(input.snapshot),
@@ -205,12 +223,17 @@ impl Scheduler {
         let now = snap.at;
         self.foreground
             .update(now, input.classes, self.cfg.foreground_hold);
-        self.games
-            .update(snap, input.classes, now, self.cfg.game_confirm_ms);
+        self.games.update(
+            snap,
+            input.classes,
+            input.activity,
+            now,
+            self.cfg.game_confirm_ms,
+        );
         self.audio
             .update(snap, input.classes, now, self.cfg.audio_hold_ms);
-        self.boosts.expire(now);
         let alive: HashSet<ProcessKey> = snap.processes.iter().map(|p| p.facts.key).collect();
+        self.boosts.retain(&alive, now);
         self.reconciler.retain_alive(&alive);
         self.focus.retain_alive(&alive);
         self.footprint.retain_alive(&alive);
@@ -233,7 +256,7 @@ impl Scheduler {
         // 只认自己就是一个程序的候选（游戏本体）：挂在启动器名下的不算，不把启动器整棵树搬到大核。
         self.pending_game_roots = self
             .games
-            .pending_keys()
+            .pending_keys(now)
             .filter(|k| {
                 input
                     .classes

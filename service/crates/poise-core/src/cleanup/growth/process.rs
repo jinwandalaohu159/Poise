@@ -59,11 +59,23 @@ pub struct Grown {
 #[derive(Debug, Default)]
 pub(super) struct ProcessGrowth {
     processes: HashMap<ProcessKey, ProcessBase>,
+    /// 上次看所有进程的时间（见 [`ProcessGrowth::OBSERVE_EVERY_MS`]）。
+    observed_at: Option<Millis>,
 }
 
 impl ProcessGrowth {
-    /// 忘掉退出的进程；新进程从现在算起，看到它超过 `settle_ms` 后记录基线。
+    /// 多久看一次所有进程：基线在进程启动几分钟后记一次、增长按半小时以上判断，不必每轮都看。
+    const OBSERVE_EVERY_MS: Millis = 30_000;
+
+    /// 忘掉退出的进程；新进程从看到它算起，超过 `settle_ms` 后记录基线。
     pub(super) fn observe(&mut self, snap: &Snapshot, now: Millis, settle_ms: Millis) {
+        if self
+            .observed_at
+            .is_some_and(|t| now.saturating_sub(t) < Self::OBSERVE_EVERY_MS)
+        {
+            return;
+        }
+        self.observed_at = Some(now);
         let alive: HashSet<ProcessKey> = snap.processes.iter().map(|p| p.facts.key).collect();
         self.processes.retain(|k, _| alive.contains(k));
         for p in &snap.processes {

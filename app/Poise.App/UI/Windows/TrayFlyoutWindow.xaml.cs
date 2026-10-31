@@ -31,7 +31,7 @@ public sealed partial class TrayFlyoutWindow : Window
     public TrayFlyoutWindow(AppHost host)
     {
         _host = host;
-        _vm = new HomeViewModel(host);
+        _vm = host.Home;
         InitializeComponent();
         Title = "Poise";
         _hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
@@ -55,16 +55,11 @@ public sealed partial class TrayFlyoutWindow : Window
             }
         };
 
-        _vm.Updated += Render;
         Loc.Changed += Localize;
         host.Theme.Changed += ApplyTheme;
         Activated += OnActivated;
         _foreground.Changed += OnForegroundChanged;
         Closed += OnClosed;
-        if (_vm.Ready)
-        {
-            Render(_vm.Current);
-        }
         ApplyTheme();
     }
 
@@ -85,8 +80,15 @@ public sealed partial class TrayFlyoutWindow : Window
         }
     }
 
+    /// <summary>显示面板。只在显示期间跟着状态更新（收起时不重画、不跑数字动画）。</summary>
     public void Show()
     {
+        _vm.Updated -= Render;
+        _vm.Updated += Render;
+        if (_vm.Ready)
+        {
+            Render(_vm.Current);
+        }
         ShowResult("");
         PlaceAboveTaskbar();
         AppWindow.Show();
@@ -105,6 +107,7 @@ public sealed partial class TrayFlyoutWindow : Window
             return;
         }
         _hiddenAt = DateTime.UtcNow;
+        _vm.Updated -= Render;
         _foreground.Stop();
         AppWindow.Hide();
         SetVisible(false);
@@ -176,7 +179,6 @@ public sealed partial class TrayFlyoutWindow : Window
     private void OnClosed(object sender, WindowEventArgs args)
     {
         _vm.Updated -= Render;
-        _vm.Dispose();
         _foreground.Dispose();
         Loc.Changed -= Localize;
         _host.Theme.Changed -= ApplyTheme;

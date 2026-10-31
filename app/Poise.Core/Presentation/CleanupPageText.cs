@@ -72,7 +72,7 @@ public static class CleanupPageText
         p.MemoryBytes,
         Format.Bytes(p.MemoryBytes),
         maxBytes > 0 ? (double)p.MemoryBytes / maxBytes : 0,
-        $"{p.CpuPct:0.0}%",
+        Format.Share(p.CpuPct),
         Status(p),
         p.Issue == ProcessIssue.None ? TagTone.None : p.Issue == ProcessIssue.Heavy ? TagTone.Info : TagTone.Notice,
         Action(p),

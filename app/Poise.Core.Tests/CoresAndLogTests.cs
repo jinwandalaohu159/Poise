@@ -54,6 +54,11 @@ public sealed class CoresAndLogTests
         var cleaned = page.Entries.Select(e => e.Event).OfType<CleanedEvent>().Single();
         Assert.Equal((CleanupTrigger.Auto, 1UL << 30, 2u, 1u), (cleaned.Trigger, cleaned.FreedBytes, cleaned.Handled, cleaned.Failed));
         Assert.Equal(EventCategory.Schedule, page.Entries[0].Category);
+        Assert.Equal(new DemandEvent(Pressure.High, DemandReason.Focus), page.Entries[0].Event);
+        Assert.Equal("有重点程序", EventText.Row(page.Entries[0], Hybrid, Now).Detail);
+        var lookalike = Assert.IsType<ProgramEvent>(page.Entries[^1].Event);
+        Assert.Equal((Verdict.Focused, (Cause?)Cause.LooksLikeGame), (lookalike.To, lookalike.Cause));
+        Assert.Contains("像游戏，等待确认", EventText.Row(page.Entries[^1], Hybrid, Now).Detail);
         Assert.Contains(page.Entries, e => e.Event is UnthrottledEvent && e.Category == EventCategory.Mode);
     }
 

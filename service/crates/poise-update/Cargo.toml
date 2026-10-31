@@ -18,7 +18,6 @@ poise-platform.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 log.workspace = true
-simplelog = "0.12"
 
 [dependencies.windows]
 version = "0.62"

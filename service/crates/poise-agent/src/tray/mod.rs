@@ -1,14 +1,17 @@
-//! 托盘图标：添加、更新状态（图标与提示文字）、弹出通知、资源管理器重启后重新添加、移除。
+//! 托盘图标：添加、更新状态（图标与提示文字，[`status`] 决定显示什么）、弹出通知、资源管理器重启后
+//! 重新添加、移除。
 
 mod icon;
 pub mod menu;
 pub mod promote;
+pub mod status;
 pub mod theme;
 
 use windows::Win32::Foundation::HWND;
 use windows::Win32::UI::Shell::{
-    NIF_ICON, NIF_INFO, NIF_MESSAGE, NIF_SHOWTIP, NIF_TIP, NIIF_INFO, NIM_ADD, NIM_DELETE,
-    NIM_MODIFY, NIM_SETVERSION, NOTIFYICON_VERSION_4, NOTIFYICONDATAW, Shell_NotifyIconW,
+    NIF_ICON, NIF_INFO, NIF_MESSAGE, NIF_SHOWTIP, NIF_TIP, NIIF_INFO, NIIF_RESPECT_QUIET_TIME,
+    NIM_ADD, NIM_DELETE, NIM_MODIFY, NIM_SETVERSION, NOTIFYICON_VERSION_4, NOTIFYICONDATAW,
+    Shell_NotifyIconW,
 };
 
 use icon::Icons;
@@ -24,27 +27,29 @@ pub struct Tray {
 }
 
 impl Tray {
-    /// 添加托盘图标。图标上的鼠标操作以 `callback_message` 发给 `hwnd`。
-    pub fn add(hwnd: HWND, callback_message: u32, tooltip: &str) -> Self {
-        let tray = Self {
+    /// 托盘图标（还没添加，见 [`Tray::register`]）。图标上的鼠标操作以 `callback_message` 发给 `hwnd`。
+    pub fn new(hwnd: HWND, callback_message: u32, tooltip: &str) -> Self {
+        Self {
             hwnd,
             callback_message,
             icons: Icons::load(),
             attention: false,
             tooltip: tooltip.to_string(),
-        };
-        tray.register();
-        tray
+        }
     }
 
-    /// 资源管理器重启（任务栏重建）后需要重新添加。
-    pub fn register(&self) {
+    /// 添加图标；资源管理器重启（任务栏重建）后需要重新添加。返回是否加上了：登录时任务栏可能还没准备好，
+    /// 加不上时调用方过一会儿再试。
+    pub fn register(&self) -> bool {
         let mut data = self.data();
         data.Anonymous.uVersion = NOTIFYICON_VERSION_4;
         // SAFETY: 结构体由 data() 完整初始化。
         unsafe {
-            let _ = Shell_NotifyIconW(NIM_ADD, &data);
+            let added = Shell_NotifyIconW(NIM_ADD, &data).as_bool()
+                // 已经有了（重复添加）也算加上了。
+                || Shell_NotifyIconW(NIM_MODIFY, &data).as_bool();
             let _ = Shell_NotifyIconW(NIM_SETVERSION, &data);
+            added
         }
     }
 
@@ -60,12 +65,12 @@ impl Tray {
         let _ = unsafe { Shell_NotifyIconW(NIM_MODIFY, &data) };
     }
 
-    /// 弹出一条系统通知（点击时托盘消息是 NIN_BALLOONUSERCLICK）。
-    /// 弹出系统通知，返回是否成功。
+    /// 弹出一条系统通知（点击时托盘消息是 NIN_BALLOONUSERCLICK），返回是否成功。
+    /// 新装系统的头一个小时里系统会把它压下（不打扰刚开始用电脑的人）。
     pub fn notify(&self, title: &str, body: &str) -> bool {
         let mut data = self.data();
         data.uFlags |= NIF_INFO;
-        data.dwInfoFlags = NIIF_INFO;
+        data.dwInfoFlags = NIIF_INFO | NIIF_RESPECT_QUIET_TIME;
         copy_text(&mut data.szInfoTitle, title);
         copy_text(&mut data.szInfo, body);
         // SAFETY: 同上。

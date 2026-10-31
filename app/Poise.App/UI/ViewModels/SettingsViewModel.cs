@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
+using Poise.Core.Collections;
 using Poise.Core.Localization;
 using Poise.Core.Presentation;
 using Poise.Core.Settings;
@@ -10,20 +11,28 @@ namespace Poise.App.UI.ViewModels;
 /// <summary>设置页：语言、外观、开机启动、托盘图标提醒；这台电脑的硬件读数；更新；服务信息。</summary>
 public sealed partial class SettingsViewModel : ObservableObject, IDisposable
 {
+    /// <summary>上次查到的开机启动状态：再打开设置页时先显示它，查到后再更新。</summary>
+    private static bool _lastAutostart;
+
     private readonly AppHost _host;
     private readonly bool _ready;
+    /// <summary>上次通知界面的服务信息（状态每秒刷新，没变时不通知）。</summary>
+    private string? _serviceText;
+    /// <summary>正在把查到的开机启动状态放到开关上（不是用户在切换）。</summary>
+    private bool _syncingAutostart;
 
     public SettingsViewModel(AppHost host)
     {
         _host = host;
         LanguageIndex = host.Settings.Language switch { Loc.Chinese => 1, Loc.English => 2, _ => 0 };
         ThemeIndex = (int)host.Theme.Choice;
-        AutostartEnabled = Autostart.IsEnabled;
+        AutostartEnabled = _lastAutostart;
         TrayAlertEnabled = host.Settings.TrayAlert;
         RefreshHardware();
         host.Status.Changed += RefreshHardware;
         host.Updates.Changed += RefreshUpdate;
         _ready = true;
+        _ = LoadAutostartAsync();
     }
 
     public IReadOnlyList<string> LanguageOptions => [Loc.Get("settings.system"), "中文", "English"];
@@ -47,8 +56,8 @@ public sealed partial class SettingsViewModel : ObservableObject, IDisposable
     /// <summary>找不到托盘代理（开发时单独运行界面）时不能设置开机启动。</summary>
     public bool AutostartAvailable => Autostart.IsAvailable;
 
-    /// <summary>这台电脑的硬件读数（每次状态刷新时更新）。</summary>
-    public ObservableCollection<HardwareRow> Hardware { get; } = [];
+    /// <summary>这台电脑的硬件读数（每次状态刷新时原地更新数值）。</summary>
+    public ObservableCollection<HardwareRowItem> Hardware { get; } = [];
 
     /// <summary>"Poise 0.2.1"，开发版本另有说明。</summary>
     public string VersionText => UpdateText.VersionLine(AppVersion.Installed);
@@ -92,26 +101,23 @@ public sealed partial class SettingsViewModel : ObservableObject, IDisposable
     private void RefreshHardware()
     {
         var rows = _host.Status.Latest is { } s ? HardwareText.Rows(s) : [];
-        // 行数不变时原地更新，避免列表闪动。
-        if (rows.Count == Hardware.Count)
+        // 已有的行只更新数值；多出、少了的行（显卡温度、风扇时有时无）单独增删，不重建整个列表。
+        var existing = Hardware.ToDictionary(r => r.Label);
+        var desired = rows.Select(r =>
         {
-            for (var i = 0; i < rows.Count; i++)
+            if (existing.TryGetValue(r.Label, out var item))
             {
-                if (Hardware[i] != rows[i])
-                {
-                    Hardware[i] = rows[i];
-                }
+                item.Value = r.Value;
+                return item;
             }
-        }
-        else
+            return new HardwareRowItem(r);
+        }).ToList();
+        CollectionSync.Sync(Hardware, desired, r => r.Label);
+        if (ServiceText != _serviceText)
         {
-            Hardware.Clear();
-            foreach (var r in rows)
-            {
-                Hardware.Add(r);
-            }
+            _serviceText = ServiceText;
+            OnPropertyChanged(nameof(ServiceText));
         }
-        OnPropertyChanged(nameof(ServiceText));
     }
 
     partial void OnLanguageIndexChanged(int value)
@@ -132,7 +138,7 @@ public sealed partial class SettingsViewModel : ObservableObject, IDisposable
 
     partial void OnAutostartEnabledChanged(bool value)
     {
-        if (_ready)
+        if (_ready && !_syncingAutostart)
         {
             _ = ApplyAutostartAsync(value);
         }
@@ -141,10 +147,24 @@ public sealed partial class SettingsViewModel : ObservableObject, IDisposable
     /// <summary>没设置成功时，开关回到实际状态。</summary>
     private async Task ApplyAutostartAsync(bool enabled)
     {
-        if (!await Autostart.SetAsync(enabled))
+        if (await Autostart.SetAsync(enabled))
         {
-            AutostartEnabled = Autostart.IsEnabled;
+            _lastAutostart = enabled;
         }
+        else
+        {
+            await LoadAutostartAsync();
+        }
+    }
+
+    /// <summary>查一次开机启动的实际状态，放到开关上（不当成用户的切换）。</summary>
+    private async Task LoadAutostartAsync()
+    {
+        var enabled = await Task.Run(() => Autostart.IsEnabled);
+        _lastAutostart = enabled;
+        _syncingAutostart = true;
+        AutostartEnabled = enabled;
+        _syncingAutostart = false;
     }
 
     partial void OnTrayAlertEnabledChanged(bool value)

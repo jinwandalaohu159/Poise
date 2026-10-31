@@ -5,9 +5,9 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-use super::trackers::Pressure;
+use super::trackers::{DemandReason, Pressure};
 use crate::action::CoreSet;
-use crate::model::ProcessKey;
+use crate::model::{Millis, ProcessKey};
 
 /// 对一个程序（进程树）的决定，按它的主进程算。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -53,6 +53,12 @@ pub enum Cause {
     LessDemand,
     /// 程序退出了。
     Exited,
+    /// 像游戏（前台全屏、显卡在渲染），还在等待确认：先放到大核。
+    LooksLikeGame,
+    /// 重点程序的负载降下来了。
+    LoadDropped,
+    /// 重点程序离开前台太久。
+    LeftForeground,
 }
 
 /// 一个程序此刻的决定、核心范围与负载（单核百分比、磁盘读写 MB/s），以及不让路时的原因。
@@ -68,8 +74,8 @@ pub struct ProgramState {
 /// 一次变化。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Decision {
-    /// 对处理器的需求变了。
-    Pressure(Pressure),
+    /// 对处理器的需求变了，以及从哪来。
+    Pressure(Pressure, Option<DemandReason>),
     /// 对一个程序的决定变了，或重点程序占用的核心变了（`state` 是变化后的）。
     Program {
         root: ProcessKey,
@@ -80,31 +86,45 @@ pub enum Decision {
     Aside(usize),
 }
 
-/// 记着上一轮的决定，每轮报告变化。退出的程序直接忘掉；只有游戏退出时报告一次。
+/// 记着上一轮的决定，每轮报告变化。游戏退出时报告一次；别的程序不在了不报告。
+///
+/// 一个程序这一轮不在，不一定是退出了：进程树会变（辅助进程有时归到主程序名下，有时自己成为一个程序），
+/// 它过一会儿可能又出现。不在的程序的决定再记一会儿（见 [`DecisionLog::FORGET_AFTER_MS`]），重新出现时
+/// 决定没变就不报告——实测有个游戏的辅助进程这样时隐时现，整局游戏每 4 秒报告一次"用大核"。
 #[derive(Debug, Default)]
 pub struct DecisionLog {
     pressure: Pressure,
     programs: HashMap<ProcessKey, (Verdict, CoreSet)>,
+    /// 这一轮之前不在了的程序：最后的决定，以及从什么时候起不在。
+    gone: HashMap<ProcessKey, (Verdict, CoreSet, Millis)>,
     aside: usize,
 }
 
 impl DecisionLog {
+    /// 不在了的程序的决定记多久。
+    const FORGET_AFTER_MS: Millis = 60_000;
+
     pub fn update(
         &mut self,
         pressure: Pressure,
+        reason: Option<DemandReason>,
         programs: impl IntoIterator<Item = (ProcessKey, ProgramState)>,
+        now: Millis,
     ) -> Vec<Decision> {
         let mut changes = Vec::new();
         if pressure != self.pressure {
             self.pressure = pressure;
-            changes.push(Decision::Pressure(pressure));
+            changes.push(Decision::Pressure(pressure, reason));
         }
+        self.gone
+            .retain(|_, (_, _, since)| now.saturating_sub(*since) < Self::FORGET_AFTER_MS);
         let mut current = HashMap::with_capacity(self.programs.len());
         let mut aside = 0;
         for (root, state) in programs {
             let (from, cores) = self
                 .programs
                 .remove(&root)
+                .or_else(|| self.gone.remove(&root).map(|(v, c, _)| (v, c)))
                 .unwrap_or((Verdict::Normal, CoreSet::All));
             aside += usize::from(state.verdict == Verdict::Aside);
             if reportable(from, cores, &state) {
@@ -126,6 +146,8 @@ impl DecisionLog {
                         cause: Some(Cause::Exited),
                     },
                 });
+            } else {
+                self.gone.insert(root, (from, cores, now));
             }
         }
         if (aside == 0) != (self.aside == 0) {
@@ -165,14 +187,19 @@ mod tests {
     fn only_changes_are_reported() {
         let mut log = DecisionLog::default();
         assert!(
-            log.update(Pressure::None, [(KEY, state(Verdict::Normal, 0))])
+            log.update(Pressure::None, None, [(KEY, state(Verdict::Normal, 0))], 0)
                 .is_empty()
         );
-        let changes = log.update(Pressure::Normal, [(KEY, state(Verdict::Yielded, 40))]);
+        let changes = log.update(
+            Pressure::Normal,
+            None,
+            [(KEY, state(Verdict::Yielded, 40))],
+            0,
+        );
         assert_eq!(
             changes,
             vec![
-                Decision::Pressure(Pressure::Normal),
+                Decision::Pressure(Pressure::Normal, None),
                 Decision::Program {
                     root: KEY,
                     from: Verdict::Normal,
@@ -181,23 +208,33 @@ mod tests {
             ]
         );
         assert!(
-            log.update(Pressure::Normal, [(KEY, state(Verdict::Yielded, 30))])
-                .is_empty()
+            log.update(
+                Pressure::Normal,
+                None,
+                [(KEY, state(Verdict::Yielded, 30))],
+                0
+            )
+            .is_empty()
         );
         // 退出的程序不报告。
-        assert!(log.update(Pressure::Normal, []).is_empty());
+        assert!(log.update(Pressure::Normal, None, [], 0).is_empty());
     }
 
     #[test]
     fn games_that_exit_are_reported_once() {
         let mut log = DecisionLog::default();
-        log.update(Pressure::High, [(KEY, state(Verdict::Playing, 300))]);
-        let changes = log.update(Pressure::High, []);
+        log.update(
+            Pressure::High,
+            None,
+            [(KEY, state(Verdict::Playing, 300))],
+            0,
+        );
+        let changes = log.update(Pressure::High, None, [], 0);
         assert!(matches!(
             changes.as_slice(),
             [Decision::Program { from: Verdict::Playing, state, .. }] if state.cause == Some(Cause::Exited)
         ));
-        assert!(log.update(Pressure::High, []).is_empty());
+        assert!(log.update(Pressure::High, None, [], 0).is_empty());
     }
 
     #[test]
@@ -206,10 +243,12 @@ mod tests {
         let other = ProcessKey { pid: 8, created: 1 };
         let changes = log.update(
             Pressure::High,
+            None,
             [
                 (KEY, state(Verdict::Focused, 300)),
                 (other, state(Verdict::Aside, 0)),
             ],
+            0,
         );
         assert_eq!(changes.len(), 3);
         assert_eq!(changes[2], Decision::Aside(1));
@@ -219,12 +258,49 @@ mod tests {
         };
         let changes = log.update(
             Pressure::High,
+            None,
             [(KEY, wider), (other, state(Verdict::Aside, 0))],
+            0,
         );
         assert!(
             matches!(changes.as_slice(), [Decision::Program { state, .. }] if state.cores == wider.cores)
         );
-        let changes = log.update(Pressure::High, [(other, state(Verdict::Normal, 0))]);
+        let changes = log.update(
+            Pressure::High,
+            None,
+            [(other, state(Verdict::Normal, 0))],
+            0,
+        );
         assert_eq!(changes, vec![Decision::Aside(0)]);
+    }
+
+    #[test]
+    fn programs_that_briefly_vanish_are_not_reported_again() {
+        let mut log = DecisionLog::default();
+        let focused = state(Verdict::Focused, 0);
+        assert_eq!(
+            log.update(Pressure::High, None, [(KEY, focused)], 0).len(),
+            2
+        );
+        // 时隐时现：同样的决定不再报告。
+        for t in 1..10 {
+            let now = t * 2_000;
+            let present = if t % 2 == 0 {
+                vec![(KEY, focused)]
+            } else {
+                vec![]
+            };
+            assert!(
+                log.update(Pressure::High, None, present, now).is_empty(),
+                "{now}"
+            );
+        }
+        // 很久以后再出现：当作新的程序。
+        log.update(Pressure::High, None, [], 30_000);
+        assert_eq!(
+            log.update(Pressure::High, None, [(KEY, focused)], 100_000)
+                .len(),
+            1
+        );
     }
 }

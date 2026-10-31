@@ -61,4 +61,23 @@ public sealed class RefreshGateTests
 
         Assert.Equal([1, 2], _applied);
     }
+
+    [Fact]
+    public async Task A_timer_tick_while_busy_is_skipped_instead_of_queued()
+    {
+        var first = new TaskCompletionSource<int>();
+        _answers.Enqueue(first.Task);
+
+        var running = Refresh();
+        await _gate.TickAsync(async () =>
+        {
+            var value = await _answers.Dequeue();
+            return () => _applied.Add(value);
+        });
+        first.SetResult(1);
+        await running;
+
+        Assert.Equal([1], _applied);
+        Assert.Empty(_answers);
+    }
 }

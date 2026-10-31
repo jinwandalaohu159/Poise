@@ -53,6 +53,7 @@ impl Engine {
         if self.changes.store.user().is_none() {
             return;
         }
+        self.merge_legacy_game_owners();
         let mut paths: Vec<(String, AppPreference)> = self
             .settings
             .preferences
@@ -72,6 +73,27 @@ impl Engine {
         for (path, pref) in paths {
             if let Err(e) = self.sync_game_settings(&path, pref) {
                 log::info!("同步游戏 {path} 的系统设置失败：{}", e.detail);
+            }
+        }
+    }
+
+    /// 旧版本记的来源名没有转成小写（"game:D:\Games\…"），和现在的记录成了同一位置上的两层：
+    /// 只撤销现在那层时值回不到原样。撤销旧的那层（原值交给上一层，没有上一层时写回原值），
+    /// 之后按当前偏好重新同步。
+    fn merge_legacy_game_owners(&mut self) {
+        let mut legacy: Vec<String> = self
+            .changes
+            .journal()
+            .entries()
+            .iter()
+            .map(|e| &e.owner)
+            .filter(|o| o.starts_with(GAME_PREFIX) && **o != o.to_lowercase())
+            .cloned()
+            .collect();
+        legacy.dedup();
+        for owner in legacy {
+            if let Err(e) = self.changes.revert(&owner) {
+                log::info!("并入旧的游戏设置记录 {owner} 失败：{e}");
             }
         }
     }

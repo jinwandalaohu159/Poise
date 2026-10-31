@@ -4,53 +4,31 @@ use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
 use poise_core::model::{Pid, ProcessKey, ServiceFacts};
+use windows::Win32::Foundation::{ERROR_MORE_DATA, ERROR_SHUTDOWN_IN_PROGRESS};
 use windows::Win32::System::Services::{
-    CloseServiceHandle, ENUM_SERVICE_STATUS_PROCESSW, EnumDependentServicesW,
-    EnumServicesStatusExW, OpenSCManagerW, OpenServiceW, SC_ENUM_PROCESS_INFO, SC_HANDLE,
-    SC_MANAGER_CONNECT, SC_MANAGER_ENUMERATE_SERVICE, SERVICE_ACCEPT_STOP, SERVICE_ACTIVE,
-    SERVICE_ENUMERATE_DEPENDENTS, SERVICE_WIN32,
+    ENUM_SERVICE_STATUS_PROCESSW, EnumServicesStatusExW, SC_ENUM_PROCESS_INFO, SC_MANAGER_CONNECT,
+    SC_MANAGER_ENUMERATE_SERVICE, SERVICE_ACCEPT_STOP, SERVICE_ACTIVE, SERVICE_WIN32,
 };
 use windows::core::PCWSTR;
 
-use crate::win::wide::WideString;
-
-pub(crate) struct ScHandle(pub(crate) SC_HANDLE);
-
-impl Drop for ScHandle {
-    fn drop(&mut self) {
-        // SAFETY: 句柄由本对象独占。
-        unsafe {
-            let _ = CloseServiceHandle(self.0);
-        }
-    }
-}
-
-pub(crate) fn open_manager(access: u32) -> windows::core::Result<ScHandle> {
-    // SAFETY: 本机、默认数据库。
-    unsafe { OpenSCManagerW(PCWSTR::null(), PCWSTR::null(), access) }.map(ScHandle)
-}
-
-pub(crate) fn open_service(
-    scm: &ScHandle,
-    name: &str,
-    access: u32,
-) -> windows::core::Result<ScHandle> {
-    let w = WideString::new(name);
-    // SAFETY: 名称以 NUL 结尾。
-    unsafe { OpenServiceW(scm.0, w.as_pcwstr(), access) }.map(ScHandle)
-}
+use crate::win::scm::{open_manager, running_dependents};
 
 /// 进程 → 服务 的映射。
 ///
 /// 枚举一次要对服务管理器做几十毫秒的远程调用，所以不按固定间隔刷新，而是看服务管理器拉起的进程：
 /// 有服务启动（新进程）或退出（进程没了）就立即重新枚举，比按间隔刷新更及时。服务也可能在已有的
 /// 共享宿主进程里启动，看不出进程变化，所以另外隔一段时间兜底刷新一次。
+///
+/// 每个独占进程的服务还要数一下依赖它的服务（能不能安全重启）：一百多个服务逐个问一遍要四五十毫秒，
+/// 所以每个服务的结果记一会儿（见 [`ServiceMap::DEPENDENTS_FOR`]），重启前另外再核对一次。
 #[derive(Default)]
 pub struct ServiceMap {
     by_pid: HashMap<Pid, Vec<ServiceFacts>>,
     refreshed_at: Option<Instant>,
     /// 上次枚举时服务管理器拉起的进程。
     hosts: Option<HashSet<ProcessKey>>,
+    /// 各服务正在运行的依赖服务有几个，以及什么时候数的。
+    dependents: HashMap<String, (u32, Instant)>,
 }
 
 impl ServiceMap {
@@ -59,6 +37,9 @@ impl ServiceMap {
     const BLIND_EVERY: Duration = Duration::from_secs(30);
 
     /// `hosts`：服务管理器拉起的进程；找不到服务管理器时为 None。
+    /// 依赖服务的数目记多久。
+    const DEPENDENTS_FOR: Duration = Duration::from_secs(10 * 60);
+
     pub fn refresh(&mut self, hosts: Option<HashSet<ProcessKey>>) {
         let every = if hosts.is_some() {
             Self::BACKSTOP_EVERY
@@ -68,8 +49,12 @@ impl ServiceMap {
         let stale = self.refreshed_at.is_none_or(|t| t.elapsed() >= every);
         let changed = hosts.is_some() && hosts != self.hosts;
         if stale || changed {
-            match enumerate() {
+            match enumerate(&mut self.dependents) {
                 Ok(m) => self.by_pid = m,
+                // 关机时服务管理器不再回答：不是故障。
+                Err(e) if e.code() == ERROR_SHUTDOWN_IN_PROGRESS.to_hresult() => {
+                    log::debug!("枚举服务失败：{e}")
+                }
                 Err(e) => log::warn!("枚举服务失败：{e}"),
             }
             self.refreshed_at = Some(Instant::now());
@@ -82,29 +67,50 @@ impl ServiceMap {
     }
 }
 
-fn enumerate() -> windows::core::Result<HashMap<Pid, Vec<ServiceFacts>>> {
+fn enumerate(
+    dependents: &mut HashMap<String, (u32, Instant)>,
+) -> windows::core::Result<HashMap<Pid, Vec<ServiceFacts>>> {
     let scm = open_manager(SC_MANAGER_ENUMERATE_SERVICE | SC_MANAGER_CONNECT)?;
-    let mut buf = vec![0u8; 256 * 1024];
-    let mut needed = 0u32;
+    // 按 8 字节对齐分配（结构体里有指针）；放不下时（远程桌面服务器上每个用户都有一套服务）按系统
+    // 说的大小加大再枚举一遍。
+    let mut buf = vec![0u64; 256 * 1024 / 8];
     let mut count = 0u32;
-    // SAFETY: 缓冲区由我们分配，系统写入不超过其长度。
-    unsafe {
-        EnumServicesStatusExW(
-            scm.0,
-            SC_ENUM_PROCESS_INFO,
-            SERVICE_WIN32,
-            SERVICE_ACTIVE,
-            Some(&mut buf),
-            &mut needed,
-            &mut count,
-            None,
-            PCWSTR::null(),
-        )
-    }?;
-    // SAFETY: 系统在缓冲区开头写入 count 个结构。
+    let mut attempts = 0;
+    loop {
+        attempts += 1;
+        let mut needed = 0u32;
+        // SAFETY: 把 u64 缓冲区按字节交给系统，长度一致。
+        let bytes =
+            unsafe { std::slice::from_raw_parts_mut(buf.as_mut_ptr().cast::<u8>(), buf.len() * 8) };
+        // SAFETY: 缓冲区由我们分配，系统写入不超过其长度。
+        let result = unsafe {
+            EnumServicesStatusExW(
+                scm.0,
+                SC_ENUM_PROCESS_INFO,
+                SERVICE_WIN32,
+                SERVICE_ACTIVE,
+                Some(bytes),
+                &mut needed,
+                &mut count,
+                None,
+                PCWSTR::null(),
+            )
+        };
+        match result {
+            Err(e) if e.code() == ERROR_MORE_DATA.to_hresult() && attempts < 3 => {
+                let more = (needed as usize).div_ceil(8) + 1024;
+                buf.resize(buf.len() + more, 0);
+            }
+            other => {
+                other?;
+                break;
+            }
+        }
+    }
+    // SAFETY: 系统在缓冲区开头写入 count 个结构（缓冲区按 8 字节对齐）。
     let entries = unsafe {
         std::slice::from_raw_parts(
-            buf.as_ptr() as *const ENUM_SERVICE_STATUS_PROCESSW,
+            buf.as_ptr().cast::<ENUM_SERVICE_STATUS_PROCESSW>(),
             count as usize,
         )
     };
@@ -127,38 +133,21 @@ fn enumerate() -> windows::core::Result<HashMap<Pid, Vec<ServiceFacts>>> {
                 running_dependents: 0,
             });
     }
-    // 只有单服务进程才可能被重启，只为它们计算依赖者。
+    // 只有单服务进程才可能被重启，只为它们计算依赖者；最近数过的直接用。
+    dependents.retain(|_, (_, at)| at.elapsed() < ServiceMap::DEPENDENTS_FOR);
     for services in map.values_mut() {
         if let [only] = services.as_mut_slice() {
-            only.running_dependents = running_dependents(&scm, &only.name).unwrap_or(u32::MAX);
+            only.running_dependents = match dependents.get(&only.name) {
+                Some((n, _)) => *n,
+                None => {
+                    let n = running_dependents(&scm, &only.name).unwrap_or(u32::MAX);
+                    dependents.insert(only.name.clone(), (n, Instant::now()));
+                    n
+                }
+            };
         }
     }
     Ok(map)
-}
-
-fn running_dependents(scm: &ScHandle, name: &str) -> windows::core::Result<u32> {
-    let svc = open_service(scm, name, SERVICE_ENUMERATE_DEPENDENTS)?;
-    let mut needed = 0u32;
-    let mut count = 0u32;
-    // SAFETY: 先用空缓冲区询问大小。
-    let first =
-        unsafe { EnumDependentServicesW(svc.0, SERVICE_ACTIVE, None, 0, &mut needed, &mut count) };
-    if first.is_ok() {
-        return Ok(count);
-    }
-    let mut buf = vec![0u8; needed as usize];
-    // SAFETY: 缓冲区大小为系统要求的字节数。
-    unsafe {
-        EnumDependentServicesW(
-            svc.0,
-            SERVICE_ACTIVE,
-            Some(buf.as_mut_ptr() as *mut _),
-            needed,
-            &mut needed,
-            &mut count,
-        )
-    }?;
-    Ok(count)
 }
 
 #[cfg(test)]

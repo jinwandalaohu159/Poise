@@ -31,7 +31,8 @@ fn replay_switching_between_busy_programs() {
 /// - 用户没在用电脑（前台闲着）：没人需要处理器，它全速干活，不让路；
 /// - 用户开始干活：它让路一次——只降优先级，用户的程序需要时优先，其余时间空闲的核心照样给它用；
 ///   之后时忙时闲也一直保持，不来回调整；
-/// - 用户点回它：立即恢复；用户离开一会儿（持续没有需求）：恢复全速，让后台的工作尽快完成。
+/// - 用户点回它：立即恢复；用户离开一会儿（持续没有需求）：它不限核心、不节能，速度不受影响；
+///   只是还留着"低于正常"，等它的活干完了再恢复——不在用户一走一回之间来回调整。
 #[test]
 fn replay_background_work_yields_only_when_someone_needs_the_processor() {
     const USER_APP: Pid = 1;
@@ -61,13 +62,19 @@ fn replay_background_work_yields_only_when_someone_needs_the_processor() {
     assert!(sim.is_lowered(UPDATER));
     assert_eq!(sim.adjustments_per_process(), HashMap::from([(UPDATER, 1)]));
 
-    // 用户离开电脑：持续没有需求后，它恢复全速。
+    // 用户离开电脑：持续没有需求。它还在忙：不来回调整（"低于正常"在没人抢处理器时不影响它的速度）。
     sim.proc_mut(USER_APP).cpu_pct = 0.0;
     sim.run_for(2 * 60_000);
+    assert!(sim.is_lowered(UPDATER));
+    assert_eq!(sim.adjustments_per_process(), HashMap::from([(UPDATER, 1)]));
+    // 它的活干完了：恢复。
+    sim.proc_mut(UPDATER).cpu_pct = 0.0;
+    sim.run_for(2 * 60_000);
     assert_eq!(sim.state_of(UPDATER), None);
-    // 用户回来干活：它再让路。
+    // 用户回来干活，它又忙起来：再让路。
+    sim.proc_mut(UPDATER).cpu_pct = 60.0;
     sim.proc_mut(USER_APP).cpu_pct = 50.0;
-    sim.run_for(30_000);
+    sim.run_for(60_000);
     assert!(sim.is_lowered(UPDATER));
     // 用户点开它：立即恢复。
     sim.foreground = Some(UPDATER);

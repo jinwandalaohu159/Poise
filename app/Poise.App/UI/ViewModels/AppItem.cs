@@ -1,7 +1,6 @@
 using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using Microsoft.UI.Xaml;
-using Microsoft.UI.Xaml.Media;
 using Poise.Core.Collections;
 using Poise.Core.Ipc;
 using Poise.Core.Localization;
@@ -28,6 +27,7 @@ public sealed partial class AppItem : ObservableObject
         Path = entry.Path;
         Running = entry.Running;
         Kind = entry.Kind;
+        Key = KeyOf(entry);
         Update(entry);
     }
 
@@ -41,23 +41,21 @@ public sealed partial class AppItem : ObservableObject
     public AppKind Kind { get; }
 
     /// <summary>列表里的唯一标识：系统服务进程的路径相同，按服务名称区分。</summary>
-    public string Key => KeyOf(Kind, Path, Name);
+    public string Key { get; }
 
     /// <summary>与 <see cref="Key"/> 相同的规则，用于把服务返回的条目对应到已有的行。</summary>
     internal static string KeyOf(AppEntry e) => KeyOf(e.Kind, e.Path, e.Name);
 
     private static string KeyOf(AppKind kind, string path, string name) => kind == AppKind.App ? path : $"{path}|{name}";
 
-    public Visibility PreferenceVisibility => Kind == AppKind.App ? Visibility.Visible : Visibility.Collapsed;
+    /// <summary>可以设置类别（系统一栏只供查看）：不能时类别下拉框不创建。</summary>
+    public bool CanSetPreference => Kind == AppKind.App;
 
     [ObservableProperty]
     public partial int PreferenceIndex { get; set; }
 
     [ObservableProperty]
     public partial string Detail { get; set; } = "";
-
-    [ObservableProperty]
-    public partial ImageSource? Icon { get; set; }
 
     /// <summary>全部进程合计（排序用）。</summary>
     public float CpuPct { get; private set; }

@@ -10,4 +10,7 @@ internal static class InfoBarExtensions
         bar.Title = message;
         bar.IsOpen = true;
     }
+
+    /// <summary>又读成功了：收起错误提示。</summary>
+    public static void HideError(this InfoBar bar) => bar.IsOpen = false;
 }

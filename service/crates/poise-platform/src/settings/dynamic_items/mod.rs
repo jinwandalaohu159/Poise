@@ -30,24 +30,7 @@ pub(super) fn is_guid(s: &str) -> bool {
 }
 
 pub(super) fn expand_env(path: &str) -> String {
-    let mut out = path.to_string();
-    for var in [
-        "SystemRoot",
-        "windir",
-        "ProgramFiles",
-        "ProgramFiles(x86)",
-        "CommonProgramFiles",
-        "LOCALAPPDATA",
-        "APPDATA",
-    ] {
-        if let Some(v) = std::env::var_os(var) {
-            let pat = format!("%{var}%");
-            if let Some(i) = out.to_lowercase().find(&pat.to_lowercase()) {
-                out.replace_range(i..i + pat.len(), &v.to_string_lossy());
-            }
-        }
-    }
-    out.trim_matches('"').to_string()
+    crate::win::env::expand(path).trim_matches('"').to_string()
 }
 
 pub(super) fn is_system_file(path: &str) -> bool {

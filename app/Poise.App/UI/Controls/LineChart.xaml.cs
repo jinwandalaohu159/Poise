@@ -33,6 +33,8 @@ public sealed partial class LineChart : UserControl
     private TrendSeries _series = TrendSeries.Empty;
     /// <summary>当前曲线是按哪个时刻画的。</summary>
     private TimeSpan _drawnAt;
+    /// <summary>这次重画用到了几个高负载底色矩形（其余的删掉）。</summary>
+    private int _bandsUsed;
 
     public LineChart()
     {
@@ -98,11 +100,12 @@ public sealed partial class LineChart : UserControl
         var samples = _series.Samples;
         double X(TrendSample s) => _series.X(s.At, now, w);
 
-        LoadLine.Points = Line(samples.Select(s => new Point(X(s), Y(s.Load, h))));
+        var load = samples.Select(s => new Point(X(s), Y(s.Load, h))).ToList();
+        LoadLine.Points = Line(load);
         EfficiencyLine.Points = Line(samples.Where(s => s.Efficiency is not null).Select(s => new Point(X(s), Y(s.Efficiency!.Value, h))));
         MemoryLine.Points = Line(samples.Select(s => new Point(X(s), Y(s.Memory, h))));
         TempLine.Points = Line(samples.Where(s => s.CpuTemp is not null).Select(s => new Point(X(s), Y(s.CpuTemp!.Value, h))));
-        LoadArea.Points = Area(LoadLine.Points, h);
+        LoadArea.Points = Area(load, h);
         DrawBands(samples.Select(s => (X(s), s.Load >= HighLoadPct)).ToList(), h);
         _drawnAt = now;
         Slider.Translation = Vector3.Zero;
@@ -129,7 +132,8 @@ public sealed partial class LineChart : UserControl
     private void Scroll()
     {
         var elapsed = TrendFeed.Now - _drawnAt;
-        if (elapsed > Stale)
+        // 窗口被挡住、最小化时不再平移（重新显示时会拿到新数据、重新开始）。
+        if (elapsed > Stale || !AppHost.Current.Presence.MainVisible)
         {
             _scroll.Stop();
             return;
@@ -151,7 +155,7 @@ public sealed partial class LineChart : UserControl
         return line;
     }
 
-    private static PointCollection Area(PointCollection line, double h)
+    private static PointCollection Area(List<Point> line, double h)
     {
         var area = new PointCollection();
         if (line.Count < 2)
@@ -167,10 +171,10 @@ public sealed partial class LineChart : UserControl
         return area;
     }
 
-    /// <summary>连续的高负载点合并成一段底色，延伸到下一个点。</summary>
+    /// <summary>连续的高负载点合并成一段底色，延伸到下一个点。已有的矩形原地挪动，多出来的才删掉。</summary>
     private void DrawBands(List<(double X, bool High)> points, double h)
     {
-        Bands.Children.Clear();
+        _bandsUsed = 0;
         double? start = null;
         for (var i = 0; i < points.Count; i++)
         {
@@ -190,18 +194,28 @@ public sealed partial class LineChart : UserControl
             var step = points[^1].X - points[^2].X;
             AddBand(open, points[^1].X + step, h);
         }
+        while (Bands.Children.Count > _bandsUsed)
+        {
+            Bands.Children.RemoveAt(Bands.Children.Count - 1);
+        }
     }
 
     private void AddBand(double from, double to, double h)
     {
-        var band = new Rectangle
+        Rectangle band;
+        if (_bandsUsed < Bands.Children.Count)
         {
-            Width = Math.Max(2, to - from),
-            Height = h,
-            Fill = LoadLine.Stroke,
-            Opacity = 0.08,
-        };
+            band = (Rectangle)Bands.Children[_bandsUsed];
+        }
+        else
+        {
+            band = new Rectangle { Opacity = 0.08 };
+            Bands.Children.Add(band);
+        }
+        _bandsUsed++;
+        band.Width = Math.Max(2, to - from);
+        band.Height = h;
+        band.Fill = LoadLine.Stroke;
         Canvas.SetLeft(band, from);
-        Bands.Children.Add(band);
     }
 }

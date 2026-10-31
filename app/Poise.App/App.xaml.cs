@@ -32,7 +32,13 @@ public partial class App : Application
         InitializeComponent();
         DispatcherShutdownMode = DispatcherShutdownMode.OnExplicitShutdown;
         AppLog.Init();
-        UnhandledException += (_, e) => AppLog.Error("未处理的异常", e.Exception);
+        UnhandledException += (_, e) =>
+        {
+            AppLog.Error("未处理的异常", e.Exception);
+            // 某个页面、控件里的一次出错不该让整个界面闪退（托盘面板、主窗口一起消失）；
+            // 内存耗尽这类进程已经不可靠的除外。
+            e.Handled = e.Exception is not (OutOfMemoryException or InsufficientExecutionStackException);
+        };
         TaskScheduler.UnobservedTaskException += (_, e) =>
         {
             AppLog.Error("未观察的任务异常", e.Exception);
@@ -68,8 +74,9 @@ public partial class App : Application
         // 更新助手接手后界面立即退出：安装程序要替换界面的文件。
         _host.Updates.UpdaterStarted += () => dispatcher.TryEnqueue(Quit);
         _instance.OnRequest(r => dispatcher.TryEnqueue(() => Handle(r)));
-        Agent.EnsureRunning();
         Handle(request);
+        // 托盘代理通常已经在运行；不在时（开发时单独运行界面除外）启动它，不挡住窗口的显示。
+        _ = Task.Run(Agent.EnsureRunning);
     }
 
     /// <summary>
@@ -113,7 +120,15 @@ public partial class App : Application
             return;
         }
         _main = new MainWindow(_host!);
-        _main.Closed += (_, _) => _main = null;
+        _main.Closed += (_, _) =>
+        {
+            _main = null;
+            // 最小化着关掉的：关之前已经算"不显示"，不会再触发 AllHidden，在这里开始计时。
+            if (_host?.Presence.AnyVisible == false)
+            {
+                _idleExit?.Start();
+            }
+        };
         _main.Activate();
     }
 
@@ -147,9 +162,16 @@ public partial class App : Application
         _flyout.Toggle();
     }
 
-    /// <summary>闲置到时退出；正在检查或下载更新时等它做完再说。</summary>
+    /// <summary>
+    /// 闲置到时退出；正在检查或下载更新时等它做完再说。主窗口只是最小化、托盘面板还开着时不退出
+    /// （"不显示"包括最小化，但用户的窗口不能自己消失），等它们关掉再计时。
+    /// </summary>
     private void QuitIfIdle()
     {
+        if (_main is not null || _flyout?.IsShown == true)
+        {
+            return;
+        }
         if (_host?.Updates.State.IsBusy == true)
         {
             _idleExit?.Start();

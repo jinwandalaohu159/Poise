@@ -6,9 +6,9 @@ use std::collections::HashMap;
 use super::Scheduler;
 use super::decisions::{Cause, Decision, ProgramState, Verdict};
 use super::program::Program;
-use super::trackers::Pressure;
+use super::trackers::{FocusEnd, Pressure};
 use crate::classify::Classification;
-use crate::model::Pid;
+use crate::model::{Millis, Pid};
 use crate::prefs::AppPreference;
 
 impl Scheduler {
@@ -17,16 +17,22 @@ impl Scheduler {
         &mut self,
         classes: &HashMap<Pid, Classification>,
         programs: &HashMap<Pid, Program>,
+        now: Millis,
     ) -> Vec<Decision> {
         let states: Vec<_> = programs
             .iter()
             .filter_map(|(root_pid, program)| {
                 let root = self.load.root(*root_pid)?;
-                let class = classes.get(root_pid)?;
+                let class = classes.get(&program.class_pid)?;
                 let (desired, verdict) = self.desired(class, program, false);
                 let usage = self.load.of(&root);
                 let cause = match verdict {
-                    Verdict::Normal => Some(self.cause(class, program)),
+                    Verdict::Normal => Some(
+                        program
+                            .focus_end
+                            .map_or_else(|| self.cause(class, program), focus_end_cause),
+                    ),
+                    Verdict::Focused => Some(focus_cause(class, program)),
                     Verdict::Yielded if class.preference == AppPreference::Background => {
                         Some(Cause::MarkedLow)
                     }
@@ -44,12 +50,17 @@ impl Scheduler {
                 ))
             })
             .collect();
-        let decisions = self.decisions.update(self.pressure, states.iter().copied());
+        let decisions = self.decisions.update(
+            self.pressure,
+            self.demand_reason,
+            states.iter().copied(),
+            now,
+        );
         self.explained = states;
         decisions
     }
 
-    /// 程序没有让路的原因。
+    /// 程序没有让路（或者恢复）的原因。
     fn cause(&self, class: &Classification, program: &Program) -> Cause {
         if class.in_foreground_tree {
             Cause::Foreground
@@ -71,5 +82,31 @@ impl Scheduler {
         } else {
             Cause::LessDemand
         }
+    }
+}
+
+/// 为什么是重点程序。
+fn focus_cause(class: &Classification, program: &Program) -> Cause {
+    if program.pending_game {
+        Cause::LooksLikeGame
+    } else if program.boosted {
+        Cause::Boosted
+    } else if matches!(
+        class.preference,
+        AppPreference::AlwaysFast | AppPreference::Game
+    ) {
+        Cause::Marked
+    } else if class.in_foreground_tree {
+        Cause::Foreground
+    } else {
+        Cause::RecentlyUsed
+    }
+}
+
+/// 重点程序为什么结束了。
+fn focus_end_cause(end: FocusEnd) -> Cause {
+    match end {
+        FocusEnd::LoadDropped => Cause::LoadDropped,
+        FocusEnd::LeftForeground => Cause::LeftForeground,
     }
 }

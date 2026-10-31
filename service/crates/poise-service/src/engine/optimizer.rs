@@ -1,8 +1,12 @@
 //! 系统优化项：列出状态、应用、还原。项目本身来自目录（[`super::catalog`]）；电源项被别处改回时由 [`super::power_guard`] 补回。
 
 use std::sync::Arc;
+use std::time::Duration;
 
+use poise_core::journal::Journal;
 use poise_core::optimize::{self, ApplyReport, ItemStatus, OptimizationItem};
+use poise_hardware::PendingWrites;
+use poise_platform::settings::store::WinSettingStore;
 use poise_platform::settings::user::UserContext;
 
 use poise_protocol::{ErrorCode, Event};
@@ -23,12 +27,14 @@ impl Engine {
         (self.catalog.clone(), self.changes.store.user())
     }
 
-    pub fn list_optimizations(&self) -> Vec<ItemStatus> {
-        optimize::status(
-            &self.optimization_items(),
-            &self.changes.store,
-            self.changes.journal(),
-        )
+    /// 列出优化项要用的东西（见 [`OptimizationQuery`]）。
+    pub fn optimization_query(&self) -> OptimizationQuery {
+        OptimizationQuery {
+            catalog: self.catalog.clone(),
+            user: self.changes.store.user(),
+            journal: self.changes.journal().clone(),
+            pending: self.changes.pending_writes(),
+        }
     }
 
     fn optimization_item(&self, id: &str) -> Result<OptimizationItem, RequestError> {
@@ -91,6 +97,29 @@ impl Engine {
     fn note_reverted(&mut self, ids: Vec<String>) {
         if !ids.is_empty() {
             self.logbook.event(Event::OptimizationsReverted { ids });
+        }
+    }
+}
+
+/// 列出优化项：目录、当前用户、变更日志的副本。请求线程拿到后在引擎锁外重新枚举目录、读取各项的现状
+/// （读注册表和电源设置，电源服务忙时要几百毫秒到几秒），调度不用等它。还排在电源执行线程里的写入
+/// 当作已经写下：刚应用的电源项不会显示成没应用。
+pub struct OptimizationQuery {
+    catalog: Arc<Catalog>,
+    user: Option<UserContext>,
+    journal: Journal,
+    pending: Option<PendingWrites>,
+}
+
+impl OptimizationQuery {
+    pub fn run(self) -> Vec<ItemStatus> {
+        // 界面显示的是现状：总是重新枚举。
+        self.catalog.refresh(self.user.as_ref(), Duration::ZERO);
+        let items = self.catalog.items(self.user.as_ref());
+        let store = WinSettingStore::new(self.user);
+        match &self.pending {
+            Some(pending) => optimize::status(&items, &pending.view(&store), &self.journal),
+            None => optimize::status(&items, &store, &self.journal),
         }
     }
 }

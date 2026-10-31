@@ -1,5 +1,6 @@
 //! 界面程序（Poise.exe，WinUI）：按需启动；已经在运行时用命名事件通知它，不再启动第二个。
 
+use std::os::windows::process::CommandExt;
 use std::path::PathBuf;
 use std::process::Command;
 use std::time::{Duration, Instant};
@@ -8,7 +9,9 @@ use poise_core::model::Pid;
 use poise_platform::win::handle::image_path;
 use poise_platform::win::wide::WideString;
 use windows::Win32::Foundation::CloseHandle;
-use windows::Win32::System::Threading::{EVENT_MODIFY_STATE, OpenEventW, SetEvent};
+use windows::Win32::System::Threading::{
+    EVENT_MODIFY_STATE, NORMAL_PRIORITY_CLASS, OpenEventW, SetEvent,
+};
 use windows::Win32::UI::WindowsAndMessaging::{ASFW_ANY, AllowSetForegroundWindow};
 
 use crate::session::desktop;
@@ -99,10 +102,15 @@ fn allow_foreground() {
     let _ = unsafe { AllowSetForegroundWindow(ASFW_ANY) };
 }
 
+/// 启动界面。明确用普通优先级：托盘代理自己是"低于正常"，不写明的话界面会继承它，忙的时候界面跟着卡。
 fn launch(args: &[&str]) {
     allow_foreground();
     let Some(exe) = exe_path() else { return };
-    if let Err(e) = Command::new(&exe).args(args).spawn() {
+    let spawned = Command::new(&exe)
+        .args(args)
+        .creation_flags(NORMAL_PRIORITY_CLASS.0)
+        .spawn();
+    if let Err(e) = spawned {
         log::warn!("启动界面失败（{}）：{e}", exe.display());
     }
 }

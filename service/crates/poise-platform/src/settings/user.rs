@@ -54,7 +54,8 @@ impl UserContext {
             &format!(r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\{sid}"),
             "ProfileImagePath",
         ) {
-            Ok(Some(Value::String(p))) => PathBuf::from(p),
+            // 通常是 REG_EXPAND_SZ（`%SystemDrive%\Users\x`）。
+            Ok(Some(Value::String(p))) => PathBuf::from(crate::win::env::expand(&p)),
             _ => return None,
         };
         Some(Self {

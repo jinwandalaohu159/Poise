@@ -21,11 +21,11 @@ use poise_platform::observe::topology::CpuTopology;
 #[ignore]
 fn measure_one_cycle() {
     let topology = CpuTopology::detect();
-    let mut snapshotter = Snapshotter::default();
+    let mut snapshotter = Snapshotter::start();
     let mut activity = ActivityTracker::new(ActivityConfig::default());
     let mut classifier = Classifier::new(ClassifyConfig::default());
     let mut scheduler = Scheduler::new(ScheduleConfig {
-        cores: CoreLayout::new(&topology.domain_threads()),
+        cores: CoreLayout::with_cores(&topology.domain_sizes()),
         ..Default::default()
     });
     let prefs = Preferences::default();
@@ -68,6 +68,7 @@ fn measure_one_cycle() {
             game_mode: None,
             on_battery: false,
             hot: false,
+            user_idle_ms: 0,
         });
         let schedule = t.elapsed();
         processes = snap.processes.len();
@@ -195,4 +196,37 @@ fn measure_gpu_of_a_rendering_process() {
         let v = meter.usage_3d(pid);
         println!("占用 {v:?}（{} 微秒）", t.elapsed().as_micros());
     }
+}
+
+/// 电源设置的读取：当前电源计划、读一项设置。电源服务空闲时都很快；开机、刚切换模式时它忙，
+/// 每次要几十到几百毫秒，所以服务把这些读取放在单独的线程里（见服务的 `power_reader`）。
+#[test]
+#[ignore]
+fn measure_power_reads() {
+    use poise_core::power_settings::{EPP, MIN_STATE, target};
+    use poise_core::setting::SettingStore;
+    use poise_platform::settings::power_plan;
+    use poise_platform::settings::store::WinSettingStore;
+
+    let rounds = 20;
+    let t = Instant::now();
+    for _ in 0..rounds {
+        power_plan::active_scheme().expect("读不到当前电源计划");
+    }
+    println!(
+        "当前电源计划：每次 {} 微秒",
+        t.elapsed().as_micros() / rounds
+    );
+    let store = WinSettingStore::new(None);
+    let settings = [MIN_STATE[0], MIN_STATE[1], EPP[0], EPP[1]];
+    let t = Instant::now();
+    for _ in 0..rounds {
+        for s in settings {
+            store.read(&target(s, true)).expect("读不到电源设置");
+        }
+    }
+    println!(
+        "读一项电源设置：每次 {} 微秒",
+        t.elapsed().as_micros() / (rounds * settings.len() as u128)
+    );
 }

@@ -6,7 +6,8 @@
       "category": "schedule",
       "event": {
         "type": "demand",
-        "level": "normal"
+        "level": "high",
+        "reason": "focus"
       }
     },
     {
@@ -240,6 +241,29 @@
       "event": {
         "type": "smart_schedule",
         "enabled": false
+      }
+    },
+    {
+      "id": 23,
+      "at_unix_ms": 1800000022000,
+      "category": "schedule",
+      "event": {
+        "type": "program",
+        "program": {
+          "pid": 9,
+          "name": "Game",
+          "path": ""
+        },
+        "from": "normal",
+        "to": "focused",
+        "cores": {
+          "all": false,
+          "main": true,
+          "others": 0
+        },
+        "load_pct": 35,
+        "disk_mb_s": 0,
+        "cause": "looks_like_game"
       }
     }
   ],

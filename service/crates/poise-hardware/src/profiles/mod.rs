@@ -2,12 +2,15 @@
 
 mod awcc;
 mod bios;
-mod dell_g15;
+mod dell;
+mod takeover;
+
+use std::path::Path;
 
 use bios::read_bios;
 use poise_core::prefs::Mode;
 
-use dell_g15::DellG15;
+use dell::Dell;
 
 /// 一个风扇的转速与最高转速。各机型档案都返回这个结构。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -34,12 +37,12 @@ pub trait MachineProfile: Send {
         false
     }
 
-    /// 切换散热模式。默认不做任何事。
-    fn apply_thermal_mode(&mut self, _mode: Mode, _on_battery: bool) -> Result<(), String> {
-        Ok(())
+    /// 切换散热模式，返回是否真的写了 BIOS（写了的话风扇加速会被清零，要重新写入）。默认不做任何事。
+    fn apply_thermal_mode(&mut self, _mode: Mode, _on_battery: bool) -> Result<bool, String> {
+        Ok(false)
     }
 
-    /// 回到 Poise 启动前的散热模式（服务停止时调用）。
+    /// 回到 Poise 接管之前的散热模式（Poise 退出、服务停止时调用）。没有接管时不做任何事。
     fn restore_thermal_mode(&mut self) {}
 
     /// 机型极限模式（[`Mode::Vendor`]）的标识，例如 "dell_g_mode"；界面按它显示名称。
@@ -103,10 +106,13 @@ impl MachineProfile for Generic {
     }
 }
 
-pub fn detect() -> Box<dyn MachineProfile> {
+/// 认出这台电脑的档案。`data_dir`：档案在这里记下需要跨重启保存的状态（见 `takeover`）。
+pub fn detect(data_dir: &Path) -> Box<dyn MachineProfile> {
     let bios = read_bios();
-    if DellG15::matches(&bios) {
-        return Box::new(DellG15::new(&bios));
+    if Dell::matches(&bios)
+        && let Some(dell) = Dell::open(&bios, data_dir)
+    {
+        return Box::new(dell);
     }
     Box::new(Generic)
 }

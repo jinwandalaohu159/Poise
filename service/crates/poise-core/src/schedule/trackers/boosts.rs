@@ -16,8 +16,9 @@ impl TempBoosts {
         self.until.insert(key, until);
     }
 
-    pub fn expire(&mut self, now: Millis) {
-        self.until.retain(|_, t| *t > now);
+    /// 到期的、进程已经退出的都去掉：进程号可能被新进程复用，不能让它继承"临时全速"。
+    pub fn retain(&mut self, alive: &HashSet<ProcessKey>, now: Millis) {
+        self.until.retain(|k, t| *t > now && alive.contains(k));
     }
 
     /// 被临时全速的程序（进程树的根）。
@@ -47,7 +48,34 @@ mod tests {
         );
         let classes = test_classes(None);
         assert_eq!(b.roots(&classes), HashSet::from([10]));
-        b.expire(1000);
+        let alive = HashSet::from([ProcessKey {
+            pid: 10,
+            created: 1,
+        }]);
+        b.retain(&alive, 999);
+        assert_eq!(b.roots(&classes).len(), 1);
+        b.retain(&alive, 1000);
         assert!(b.roots(&classes).is_empty());
+    }
+
+    #[test]
+    fn a_boost_ends_when_its_process_exits() {
+        let mut b = TempBoosts::default();
+        b.add(
+            ProcessKey {
+                pid: 10,
+                created: 1,
+            },
+            1000,
+        );
+        // 同一个进程号，换了一个进程。
+        b.retain(
+            &HashSet::from([ProcessKey {
+                pid: 10,
+                created: 2,
+            }]),
+            0,
+        );
+        assert!(b.roots(&test_classes(None)).is_empty());
     }
 }

@@ -20,11 +20,11 @@ public static class HardwareText
         }
         if (m.CpuTemp is { } cpu)
         {
-            rows.Add(new(Loc.Get("hw.cpu_temp"), $"{cpu:0}°C"));
+            rows.Add(new(Loc.Get("hw.cpu_temp"), Format.Celsius(cpu)));
         }
         if (m.GpuTemp is { } gpu)
         {
-            rows.Add(new(Loc.Get("hw.gpu_temp"), $"{gpu:0}°C"));
+            rows.Add(new(Loc.Get("hw.gpu_temp"), Format.Celsius(gpu)));
         }
         if (FanText.Speed(hw.Fans) is { } fans)
         {
@@ -110,7 +110,7 @@ public static class HardwareText
         }));
         if (d.TempC is { } t)
         {
-            parts.Add($"{t}°C");
+            parts.Add(Format.Celsius(t));
         }
         if (d.WearPct is { } w)
         {

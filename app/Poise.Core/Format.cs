@@ -8,11 +8,18 @@ public static class Format
 {
     public static string Bytes(ulong bytes)
     {
+        var (value, unit) = BytesParts(bytes);
+        return $"{value} {unit}";
+    }
+
+    /// <summary>同 <see cref="Bytes"/>，数字和单位分开（大数字旁边配小号的单位）。</summary>
+    public static (string Value, string Unit) BytesParts(ulong bytes)
+    {
         const double gb = 1024d * 1024 * 1024;
         const double mb = 1024d * 1024;
         return bytes >= gb
-            ? (bytes / gb).ToString("0.0", CultureInfo.InvariantCulture) + " GB"
-            : (bytes / mb).ToString("0", CultureInfo.InvariantCulture) + " MB";
+            ? ((bytes / gb).ToString("0.0", CultureInfo.InvariantCulture), "GB")
+            : ((bytes / mb).ToString("0", CultureInfo.InvariantCulture), "MB");
     }
 
     /// <summary>
@@ -59,9 +66,16 @@ public static class Format
             : Loc.Format("time.span.minutes", Math.Max(1, (int)d.TotalMinutes));
     }
 
+    /// <summary>温度（紧凑写法，几个并列时用）："62°"。</summary>
     public static string Temperature(float celsius) => $"{celsius:0}°";
 
+    /// <summary>温度（单独一项时用）："62°C"。</summary>
+    public static string Celsius(float celsius) => $"{celsius:0}°C";
+
     public static string Percent(float pct) => $"{pct:0}%";
+
+    /// <summary>占整机的份额，保留一位小数（任务管理器的口径）："1.2%"。</summary>
+    public static string Share(double pct) => $"{pct:0.0}%";
 
     /// <summary>某个时刻（按本地时间）：今天 14:02 / 昨天 14:02 / 10月25日。</summary>
     public static string When(DateTimeOffset at, DateTimeOffset now)

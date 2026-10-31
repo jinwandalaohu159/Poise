@@ -12,6 +12,10 @@ mod window;
 
 use std::sync::Arc;
 
+use poise_platform::win::wide::WideString;
+use windows::Win32::Foundation::{ERROR_ALREADY_EXISTS, GetLastError};
+use windows::Win32::System::Threading::CreateMutexW;
+
 use args::Args;
 use progress::Shared;
 use text::Text;
@@ -22,6 +26,15 @@ pub fn run() {
         return;
     };
     init_logging(&args);
+    // 同一时间只有一个更新助手（两处点了"更新"、另一个用户也在更新）：两个同时下载、同时运行安装程序
+    // 会互相打断。互斥体在进程整个生命周期内持有（不关闭句柄）。
+    let name = WideString::new(r"Global\Poise.Updater");
+    // SAFETY: 名称以 NUL 结尾；随后立即读取它的错误码。
+    let _instance = unsafe { CreateMutexW(None, true, name.as_pcwstr()) };
+    if unsafe { GetLastError() } == ERROR_ALREADY_EXISTS {
+        log::info!("已经有一个更新助手在运行，这个退出");
+        return;
+    }
     log::info!(
         "更新助手 {} 启动，安装目录 {}",
         poise_update::CURRENT,
@@ -39,14 +52,12 @@ pub fn run() {
 }
 
 fn init_logging(args: &Args) {
+    use poise_platform::logging::{self, LevelFilter, LogFile};
     let _ = std::fs::create_dir_all(&args.data_dir);
-    if let Ok(file) = std::fs::File::create(args.data_dir.join("updater.log")) {
-        let config = simplelog::ConfigBuilder::new()
-            .set_time_offset_to_local()
-            .unwrap_or_else(|b| b)
-            .set_target_level(log::LevelFilter::Off)
-            .set_thread_level(log::LevelFilter::Off)
-            .build();
-        let _ = simplelog::WriteLogger::init(log::LevelFilter::Info, config, file);
-    }
+    let file = LogFile {
+        path: args.data_dir.join("updater.log"),
+        max_bytes: 256 * 1024,
+    };
+    logging::init(Some(file), LevelFilter::Info, false);
+    logging::log_panics();
 }

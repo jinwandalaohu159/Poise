@@ -50,7 +50,8 @@ fn update(args: &Args, shared: &Shared) -> Result<Outcome, Failure> {
         Ok(()) => {}
         // 安装程序没有运行：什么都没变，托盘代理还在。
         Err(f @ (Failure::Declined | Failure::Launch(_))) => return Err(f),
-        // 安装失败会回滚并恢复服务；托盘代理已被安装程序关闭，重新启动它。
+        // 安装程序运行过（失败会回滚并恢复服务，超时则不知道结果）：托盘代理可能已被它关闭，
+        // 重新启动它（只允许一个实例，还在运行时新启动的会自行退出）。
         Err(f) => {
             setup::start_agent(&args.dir);
             return Err(f);
@@ -60,12 +61,14 @@ fn update(args: &Args, shared: &Shared) -> Result<Outcome, Failure> {
     shared.set_stage(Stage::Starting {
         fraction: INSTALLED_AT,
     });
-    setup::wait_for_service(|waited| {
+    let service = setup::wait_for_service(|waited| {
         shared.set_stage(Stage::Starting {
             fraction: INSTALLED_AT + (SERVICE_UP_TO - INSTALLED_AT) * waited,
         });
-    })?;
+    });
+    // 服务启动慢（安全软件在扫描新程序）也照样启动托盘代理：没有服务它也能运行，服务起来后自己连上。
     setup::start_agent(&args.dir);
+    service?;
     shared.set_stage(Stage::Starting { fraction: 1.0 });
     Ok(Outcome::Updated)
 }

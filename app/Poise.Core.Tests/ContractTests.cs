@@ -176,7 +176,7 @@ public sealed class ContractTests
         using var doc = JsonDocument.Parse(TestSupport.FixtureText("error_response.json"));
 
         Assert.False(doc.RootElement.GetProperty("ok").GetBoolean());
-        Assert.Equal(ErrorCode.ObserveOnly, PoiseClient.ParseCode(doc.RootElement));
+        Assert.Equal(ErrorCode.ObserveOnly, CodeOf(doc.RootElement));
     }
 
     [Theory]
@@ -187,6 +187,10 @@ public sealed class ContractTests
     {
         using var doc = JsonDocument.Parse(json);
 
-        Assert.Equal(ErrorCode.Unknown, PoiseClient.ParseCode(doc.RootElement));
+        Assert.Equal(ErrorCode.Unknown, CodeOf(doc.RootElement));
     }
+
+    /// <summary>整条回复里的错误代码。</summary>
+    private static ErrorCode CodeOf(JsonElement reply) =>
+        PipeChannel.ParseCode(reply.TryGetProperty("code", out var code) ? code : default);
 }

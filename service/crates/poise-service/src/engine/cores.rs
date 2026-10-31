@@ -79,6 +79,7 @@ fn place_programs(
 ) -> Vec<PlacedProgram> {
     let count = domains.len();
     let every = CoreSet::All.domain_mask(count);
+    let by_pid = snapshot.by_pid();
     let mut unrestricted = Vec::new();
     for (key, state) in programs {
         let mask = state.cores.domain_mask(count);
@@ -86,7 +87,7 @@ fn place_programs(
         if free && state.load_pct < MIN_UNRESTRICTED_LOAD {
             continue;
         }
-        let Some(p) = snapshot.find(key.pid).filter(|p| p.facts.key == *key) else {
+        let Some(p) = by_pid.get(&key.pid).filter(|p| p.facts.key == *key) else {
             continue;
         };
         let placed = PlacedProgram {

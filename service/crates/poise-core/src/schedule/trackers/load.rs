@@ -6,10 +6,18 @@
 
 use std::collections::HashMap;
 
-use super::busy::TreeUsage;
 use crate::activity::ActivityTracker;
 use crate::classify::Classification;
 use crate::model::{Millis, Pid, ProcessKey, Snapshot};
+
+/// 一个程序的负载。
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct TreeUsage {
+    /// 处理器（单核百分比）。
+    pub core_pct: f32,
+    /// 磁盘读写（字节每秒）。
+    pub disk_bytes_per_s: f64,
+}
 
 /// 一个程序平滑后的负载：慢的（判断在不在忙、核心范围收不收回，短暂的尖峰影响很小）和快的
 /// （判断是不是重点程序，几秒内跟上）。
@@ -37,6 +45,10 @@ pub struct TreeLoad {
     roots: HashMap<Pid, ProcessKey>,
     /// 各进程树此刻的处理器占用（不平滑，单核百分比）：负载突然升高时立即可见。
     instant: HashMap<ProcessKey, f32>,
+    /// 上一轮的。
+    previous: HashMap<ProcessKey, f32>,
+    /// 上一次汇总的采样时刻。
+    sampled_at: Option<Millis>,
 }
 
 impl TreeLoad {
@@ -68,7 +80,14 @@ impl TreeLoad {
             tree.disk_bytes_per_s += usage.disk_rate;
         }
         self.smoothed.retain(|k, _| current.contains_key(k));
-        self.instant = current.iter().map(|(k, u)| (*k, u.core_pct)).collect();
+        let instant = current.iter().map(|(k, u)| (*k, u.core_pct)).collect();
+        // 立即重新调度沿用上一轮的采样（前台切换时）：同一份采样不算"又一轮"，否则一次尖峰会被当成
+        // 连续两轮都达到（见 [`TreeLoad::sustained`]）。
+        if self.sampled_at.replace(snap.at) == Some(snap.at) {
+            self.instant = instant;
+        } else {
+            self.previous = std::mem::replace(&mut self.instant, instant);
+        }
         for (root, load) in current {
             // 新出现的程序从 0 开始：刚启动时的短暂高负载不会直接算在忙。
             let entry = self.smoothed.entry(root).or_insert(Smoothed {
@@ -101,6 +120,13 @@ impl TreeLoad {
     /// 进程树此刻的处理器占用（不平滑，单核百分比）。
     pub fn instant(&self, root: &ProcessKey) -> f32 {
         self.instant.get(root).copied().unwrap_or_default()
+    }
+
+    /// 连续两轮都达到的处理器占用（单核百分比）：真的变忙了，下一轮就看得到；只有一轮的尖峰
+    /// （网页加载、自动存档）不算。
+    pub fn sustained(&self, root: &ProcessKey) -> f32 {
+        let previous = self.previous.get(root).copied().unwrap_or_default();
+        self.instant(root).min(previous)
     }
 }
 

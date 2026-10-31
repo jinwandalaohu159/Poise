@@ -137,8 +137,9 @@ impl Journal {
         first_error.map_or(Ok(()), |e| Err(JournalError::Revert(e)))
     }
 
-    /// 这个来源在这个位置上已经写入了 `value`，并且此刻生效的正是它（处在最上层、没被别处改掉）：
-    /// 再写一遍没有意义。
+    /// 按日志，这个来源在这个位置上写入的就是 `value`，并且处在最上层：再写一遍没有意义。
+    /// 只看日志、不读设置：读设置要经过系统服务，忙的时候（开机、刚切换电源计划）每次几十到几百毫秒。
+    /// 被别处改掉的由守护（见 [`Journal::drifted`]）另外发现、改回。
     pub fn holds(
         &self,
         store: &dyn SettingStore,
@@ -152,10 +153,17 @@ impl Journal {
         self.entries
             .iter()
             .position(|e| e.owner == owner && e.target.same_place(&target))
+            .is_some_and(|i| self.entries[i].applied == *value && self.layer_above(i).is_none())
+    }
+
+    /// 这条修改此刻仍在最上层、写入的值没变。别的线程按日志的副本检查（见 [`Journal::drifted`]），
+    /// 检查期间日志可能已经变了（例如切换了模式）：结果只对仍然有效的条目适用。
+    pub fn is_current(&self, entry: &JournalEntry) -> bool {
+        self.entries
+            .iter()
+            .position(|e| e.owner == entry.owner && e.target.same_place(&entry.target))
             .is_some_and(|i| {
-                self.entries[i].applied == *value
-                    && self.layer_above(i).is_none()
-                    && store.read(&target).is_ok_and(|v| v.as_ref() == Some(value))
+                self.entries[i].applied == entry.applied && self.layer_above(i).is_none()
             })
     }
 
@@ -421,9 +429,32 @@ pub(crate) mod tests {
             .unwrap();
         assert_eq!(store.read(&reg("a")).unwrap(), None);
         assert!(j.holds(&store, "mode", &reg("b"), &Value::Dword(2)));
-        // 被别处改掉了：不算。
+        // 被别处改掉了：只看日志时仍算写过（不读设置），由守护发现、改回。
         store.write(&reg("b"), &Value::Dword(9)).unwrap();
-        assert!(!j.holds(&store, "mode", &reg("b"), &Value::Dword(2)));
+        assert!(j.holds(&store, "mode", &reg("b"), &Value::Dword(2)));
+        let drifted = j.drifted(&store, |_| true);
+        assert_eq!(drifted.len(), 1);
+        assert_eq!(drifted[0].1, Some(Value::Dword(9)));
+    }
+
+    #[test]
+    fn checks_made_on_an_old_copy_only_apply_to_entries_still_in_effect() {
+        let store = MemStore::default();
+        let mut j = Journal::default();
+        j.apply(&store, "mode", &reg("a"), &Value::Dword(1), 0)
+            .unwrap();
+        let copy = j.clone();
+        let entry = copy.entries()[0].clone();
+        assert!(j.is_current(&entry));
+        // 检查期间换了模式：写入的值变了。
+        j.apply(&store, "mode", &reg("a"), &Value::Dword(2), 1)
+            .unwrap();
+        assert!(!j.is_current(&entry));
+        // 别的来源叠在上面：也不再适用。
+        let mut j = copy.clone();
+        j.apply(&store, "item", &reg("a"), &Value::Dword(3), 2)
+            .unwrap();
+        assert!(!j.is_current(&entry));
     }
 
     #[test]

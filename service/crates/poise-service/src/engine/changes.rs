@@ -1,5 +1,10 @@
 //! 持久修改的唯一出口：设置存储 + 变更日志 + 落盘。
-//! 观察模式下拒绝所有修改。
+//! 观察模式下拒绝所有修改。电源设置经电源执行线程写入（见 `poise_hardware::PowerWriter`）：
+//! 电源服务忙的时候每写一项、重新激活一次电源计划都要几十到几百毫秒，引擎不等它。
+//!
+//! 先落盘、后写入：一次修改里的电源设置先记下，变更日志落盘之后才交给执行线程（见 [`Changes::edit`]）；
+//! 撤销的写入还排着的时候，落盘的日志仍带上被撤销的条目（见 [`Changes::settle`]）。这样无论在哪一刻断电、
+//! 崩溃，下次启动都能按日志回到原值。
 
 use std::path::Path;
 
@@ -7,6 +12,7 @@ use poise_core::journal::{Journal, JournalEntry, JournalError, JournalStorage};
 use poise_core::model::Millis;
 use poise_core::optimize::{self, OptimizationItem};
 use poise_core::setting::{SettingStore, Target, Value};
+use poise_hardware::{PendingWrites, PowerWriter};
 use poise_platform::persist::storage::FileJournal;
 use poise_platform::settings::store::WinSettingStore;
 use poise_platform::settings::user::UserContext;
@@ -25,6 +31,10 @@ pub struct Changes {
     journal: Journal,
     file: FileJournal,
     dry_run: bool,
+    /// 电源设置的写入口；没有时（卸载时还原）直接写。
+    power: Option<PowerWriter>,
+    /// 撤销了、但撤销的写入还排在执行线程里的条目：写完之前落盘时仍带上（见 [`Changes::save`]）。
+    unsettled: Vec<JournalEntry>,
 }
 
 #[derive(Debug)]
@@ -62,14 +72,28 @@ impl Changes {
             journal,
             file,
             dry_run,
+            power: None,
+            unsettled: Vec::new(),
         }
+    }
+
+    /// 电源设置经硬件执行线程写入。
+    pub fn with_power(mut self, power: PowerWriter) -> Self {
+        self.power = Some(power);
+        self
+    }
+
+    /// 别的线程读电源设置时用：还排着的写入当作已经写下（电源守护、优化项列表，见 [`PendingWrites`]）。
+    pub fn pending_writes(&self) -> Option<PendingWrites> {
+        self.power.as_ref().map(PowerWriter::pending)
     }
 
     pub fn journal(&self) -> &Journal {
         &self.journal
     }
 
-    /// 在可写的前提下修改日志，并立即落盘。
+    /// 在可写的前提下修改日志，并立即落盘。电源设置的写入在落盘之后才交给执行线程
+    /// （出错时已经记下的部分照样落盘、写入）。
     pub fn edit<T>(
         &mut self,
         f: impl FnOnce(&dyn SettingStore, &mut Journal) -> Result<T, JournalError>,
@@ -78,12 +102,63 @@ impl Changes {
             return Err(ChangeError::DryRun);
         }
         let before = self.journal.clone();
-        let result = f(&self.store, &mut self.journal);
+        let journal = &mut self.journal;
+        let (result, staged) = match &self.power {
+            Some(power) => {
+                let (result, staged) = power.stage(&self.store, |s| f(s, journal));
+                (result, Some(staged))
+            }
+            None => (f(&self.store, journal), None),
+        };
+        if staged.as_ref().is_some_and(|s| s.writes_power()) {
+            self.keep_unsettled(&before);
+        }
         // 没有变化时不重写文件（模式没变、电源设置都还在时很常见）。
         if self.journal != before {
-            self.file.save(self.journal.entries());
+            self.save();
+        }
+        if let (Some(power), Some(staged)) = (&self.power, staged) {
+            power.commit(staged);
         }
         Ok(result?)
+    }
+
+    /// 这次修改去掉的电源设置条目：撤销的写入写下去之前，落盘时仍带上它们。
+    fn keep_unsettled(&mut self, before: &Journal) {
+        for old in before.entries() {
+            let same = |e: &JournalEntry| e.owner == old.owner && e.target.same_place(&old.target);
+            let removed = matches!(old.target, Target::PowerSetting { .. })
+                && !self.journal.entries().iter().any(same);
+            if removed && !self.unsettled.iter().any(same) {
+                self.unsettled.push(old.clone());
+            }
+        }
+    }
+
+    /// 排着的电源设置都写下去了：落盘的日志不再带上已经撤销的条目。每轮调用。
+    pub fn settle(&mut self) {
+        if !self.unsettled.is_empty() && self.power.as_ref().is_none_or(PowerWriter::drained) {
+            self.unsettled.clear();
+            self.save();
+        }
+    }
+
+    /// 落盘。撤销还没写下去的条目接在后面（这个位置又有了新条目的以日志为准：
+    /// 重新接管时读到的原值就是撤销之后的值）。
+    fn save(&self) {
+        let entries = self.journal.entries();
+        let unsettled: Vec<&JournalEntry> = self
+            .unsettled
+            .iter()
+            .filter(|u| !entries.iter().any(|e| e.target.same_place(&u.target)))
+            .collect();
+        if unsettled.is_empty() {
+            self.file.save(entries);
+            return;
+        }
+        let mut all = entries.to_vec();
+        all.extend(unsettled.into_iter().cloned());
+        self.file.save(&all);
     }
 
     pub fn apply(
@@ -138,7 +213,7 @@ impl Changes {
     /// 还原全部修改（卸载时调用）。即使在观察模式下也允许，因为它只会回到原始状态。
     pub fn revert_everything(&mut self) -> Vec<String> {
         let failures = self.journal.revert_all(&self.store);
-        self.file.save(self.journal.entries());
+        self.save();
         failures.into_iter().map(|(o, _)| o).collect()
     }
 }

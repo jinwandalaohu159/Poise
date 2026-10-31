@@ -25,19 +25,31 @@ fn from_baseline(b: &Baseline, setting: &'static str) -> Pair {
     (setting, b.get(setting, true), b.get(setting, false))
 }
 
-/// 某个模式需要写入的设置。`top_class` 是大核的效率等级（见 `CpuTopology::top_class`），不是大小核时为 0。
-pub fn settings_for(mode: Mode, top_class: u8, baseline: &Baseline) -> Vec<(Target, Value)> {
-    let top = usize::from(top_class).min(EPP.len() - 1);
+/// 处理器的组成（决定电源设置按哪些效率等级写）。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CpuShape {
+    /// 大核的效率等级（见 `CpuTopology::top_class`），不是大小核时为 0。
+    pub top_class: u8,
+    /// 大核的几组核心缓存大小不同（7950X3D 这样一组带 3D 缓存）：全力模式也按出厂值停放核心——
+    /// 处理器驱动靠停放把游戏留在缓存大的那组上（反作弊保护的游戏 Poise 不能限制核心范围，只能靠它）。
+    pub uneven_cache: bool,
+}
+
+/// 某个模式需要写入的设置。
+pub fn settings_for(mode: Mode, cpu: CpuShape, baseline: &Baseline) -> Vec<(Target, Value)> {
+    let top = usize::from(cpu.top_class).min(EPP.len() - 1);
+    // 核心停放只分两级：等级 1 的设置管等级 1 及以上的核心（有三个等级的处理器，大核在等级 2）。
+    let top_parking = top.min(CP_MIN_CORES.len() - 1);
     let classes = || EPP.iter().enumerate().take(top + 1);
     let full = matches!(mode, Mode::Full | Mode::Vendor);
     let mut values: Vec<Pair> = Vec::new();
-    // 底线：动态范围完整。全力模式下大核不停放。大小核处理器插电时小核不停放：让路的程序、
-    // 给重点程序让出大核的程序都在小核上，小核被停放到只剩几个时它们挤在一起排队
-    // （实测有机型的出厂值只保留 4%）。
+    // 底线：动态范围完整。全力模式下大核不停放（缓存大小不同的除外，见 `CpuShape`）。
+    // 大小核处理器插电时小核不停放：让路的程序、给重点程序让出大核的程序都在小核上，
+    // 小核被停放到只剩几个时它们挤在一起排队（实测有机型的出厂值只保留 4%）。
     values.extend(MIN_STATE.iter().map(|s| from_baseline(baseline, s)));
     values.extend(MAX_STATE.iter().map(|s| same(s, FULL_STATE)));
     values.extend(CP_MIN_CORES.iter().enumerate().map(|(class, s)| {
-        if full && class == top {
+        if full && class == top_parking && !cpu.uneven_cache {
             same(s, FULL_STATE)
         } else if top > 0 && class == 0 {
             (*s, FULL_STATE, baseline.get(s, false))
@@ -89,7 +101,11 @@ mod tests {
         setting: &str,
         ac: bool,
     ) -> Option<u32> {
-        settings_for(mode, top_class, baseline)
+        let cpu = CpuShape {
+            top_class,
+            uneven_cache: false,
+        };
+        settings_for(mode, cpu, baseline)
             .into_iter()
             .find(|(t, _)| t == &target(setting, ac))
             .map(|(_, v)| match v {
@@ -131,6 +147,28 @@ mod tests {
         assert_eq!(value(Mode::Full, 0, &b, CP_MIN_CORES[0], true), Some(100));
         // 不存在的效率等级不写能效偏好。
         assert_eq!(value(Mode::Full, 0, &b, EPP[1], true), None);
+    }
+
+    #[test]
+    fn three_class_cpus_unpark_the_performance_cores_in_full_mode() {
+        let b = Baseline::default();
+        assert_eq!(value(Mode::Full, 2, &b, CP_MIN_CORES[1], true), Some(100));
+        assert_eq!(value(Mode::Full, 2, &b, EPP[2], true), Some(0));
+    }
+
+    #[test]
+    fn cpus_with_uneven_caches_keep_parking_cores_in_full_mode() {
+        let b = Baseline::from_lookup(|s, _| (s == CP_MIN_CORES[0]).then_some(10));
+        let x3d = CpuShape {
+            top_class: 0,
+            uneven_cache: true,
+        };
+        let parking = settings_for(Mode::Full, x3d, &b)
+            .into_iter()
+            .find(|(t, _)| t == &target(CP_MIN_CORES[0], true))
+            .map(|(_, v)| v);
+        assert_eq!(parking, Some(Value::Dword(10)));
+        assert_eq!(value(Mode::Full, 0, &b, CP_MIN_CORES[0], true), Some(100));
     }
 
     #[test]

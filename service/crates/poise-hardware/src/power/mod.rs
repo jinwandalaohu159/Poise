@@ -8,18 +8,30 @@
 //!   实测小核被停放到只剩几个时，它们挤在一起排队），每个效率等级都设。用户的计划被别的程序改坏了（实测有电脑开机后被改成
 //!   最小状态 100%、睿频被关，处理器空闲时不降频、有负载时又只能跑到基础频率）也不受影响。
 //! - 均衡：睿频方式与能效偏好也取 Windows 平衡计划的出厂值。
-//! - 全力与机型极限：大核的性能全部放开；大小核处理器上其余核心保持均衡的能效偏好——
+//! - 全力与机型极限：大核的性能全部放开（大核几组缓存大小不同的处理器保留出厂的核心停放，见 [`CpuShape`]）；
+//!   大小核处理器上其余核心保持均衡的能效偏好——
 //!   后台程序在小核上不必跑满频率，省下的功耗和温度留给游戏所在的大核（笔记本的处理器和显卡共用散热，
 //!   所有核心都跑满频率只会更早撞上温度墙）。
 //! - 安静：关闭睿频，能效偏好偏向节能。
 //!
-//! [`baseline`]：Windows 平衡计划在这台电脑上的出厂值；[`modes`]：各模式要写入的值；这里负责写入与撤销。
+//! [`baseline`]：Windows 平衡计划在这台电脑上的出厂值；[`modes`]：各模式要写入的值；这里负责写入与撤销；
+//! [`write_behind`]：真正写进电源服务的那一步交给电源执行线程（变更日志落盘之后才发布）；
+//! [`queue`]：排着等写入的电源设置，以及别的线程读设置时用的视图；
+//! [`prefetch`]：第一次接管前在执行线程里预读原值。
 
 mod baseline;
 mod modes;
+mod prefetch;
+mod queue;
+mod write_behind;
 
 pub use baseline::Baseline;
-pub use modes::settings_for;
+pub use modes::{CpuShape, settings_for};
+pub(crate) use prefetch::Prefetched;
+pub use queue::PendingWrites;
+pub(crate) use queue::PowerQueue;
+pub use write_behind::Staged;
+pub(crate) use write_behind::{WriteBehind, publish};
 
 use poise_core::journal::{Journal, JournalError};
 use poise_core::model::Millis;
@@ -36,13 +48,13 @@ pub const OWNER: &str = "hardware:power";
 /// （见 `actuator`）。
 pub fn write(
     mode: Mode,
-    top_class: u8,
+    cpu: CpuShape,
     baseline: &Baseline,
     store: &dyn SettingStore,
     journal: &mut Journal,
     now: Millis,
 ) -> (Result<(), JournalError>, bool) {
-    let wanted = settings_for(mode, top_class, baseline);
+    let wanted = settings_for(mode, cpu, baseline);
     batch(store, || {
         // 换了电源计划之后，记录里的位置属于旧计划：按具体位置比较，旧计划里的撤销（写回旧计划）。
         let places: Vec<Target> = wanted
@@ -81,17 +93,23 @@ fn batch(
     (result, activate)
 }
 
-/// 处理器此刻实际的电源设置（日志用，确认设置真的生效了）。
-pub fn describe(store: &dyn SettingStore, top_class: u8, ac: bool) -> String {
-    let top = usize::from(top_class).min(EPP.len() - 1);
-    let read = |s: &str| match store.read(&target(s, ac)) {
-        Ok(Some(Value::Dword(v))) => v.to_string(),
-        _ => "?".into(),
+/// 一个模式写入的电源设置（日志用）。按要写入的值说明，不读回：读设置要经过电源服务，
+/// 切换模式时它正忙着让新设置生效，读一次要几百毫秒到两秒多（实测），调度会跟着等。
+/// 真被别处改掉的，由电源守护发现、改回并记日志。
+pub fn describe(mode: Mode, cpu: CpuShape, baseline: &Baseline, ac: bool) -> String {
+    let wanted = settings_for(mode, cpu, baseline);
+    let top = usize::from(cpu.top_class).min(EPP.len() - 1);
+    let value = |s: &str| {
+        let t = target(s, ac);
+        match wanted.iter().find(|(w, _)| *w == t) {
+            Some((_, Value::Dword(v))) => v.to_string(),
+            _ => "-".into(),
+        }
     };
     let per_class = |list: &[&str]| {
         list.iter()
             .take(top + 1)
-            .map(|s| read(s))
+            .map(|s| value(s))
             .collect::<Vec<_>>()
             .join("/")
     };
@@ -99,7 +117,7 @@ pub fn describe(store: &dyn SettingStore, top_class: u8, ac: bool) -> String {
         "最小状态 {}%，最大状态 {}%，睿频方式 {}，能效偏好 {}，核心停放最少保留 {}%",
         per_class(&MIN_STATE),
         per_class(&MAX_STATE),
-        read(BOOST_MODE),
+        value(BOOST_MODE),
         per_class(&EPP),
         per_class(&CP_MIN_CORES)
     )
@@ -114,7 +132,10 @@ mod tests {
 
     use super::*;
 
-    const HYBRID: u8 = 1;
+    const HYBRID: CpuShape = CpuShape {
+        top_class: 1,
+        uneven_cache: false,
+    };
 
     fn apply(mode: Mode, store: &dyn SettingStore, journal: &mut Journal) {
         write(mode, HYBRID, &Baseline::default(), store, journal, 0)
@@ -230,11 +251,8 @@ mod tests {
 
     #[test]
     fn describes_the_settings_per_class() {
-        let store = Mem::default();
-        let mut j = Journal::default();
-        apply(Mode::Full, &store, &mut j);
         assert_eq!(
-            describe(&store, HYBRID, true),
+            describe(Mode::Full, HYBRID, &Baseline::default(), true),
             "最小状态 5/5%，最大状态 100/100%，睿频方式 2，能效偏好 50/0，核心停放最少保留 100/100%"
         );
     }

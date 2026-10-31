@@ -8,7 +8,7 @@ namespace Poise.Core.Presentation;
 public static class AppsText
 {
     /// <summary>占整机 CPU 的百分比，"1.2%"。</summary>
-    public static string Cpu(float pct) => $"{pct:0.0}%";
+    public static string Cpu(float pct) => Format.Share(pct);
 
     /// <summary>专用工作集（任务管理器"内存"列）。</summary>
     public static string Memory(ulong bytes) => Format.Bytes(bytes);
@@ -37,6 +37,44 @@ public static class AppsText
 
     private static IOrderedEnumerable<T> By<T, TKey>(IEnumerable<T> items, Func<T, TKey> key, bool descending) =>
         descending ? items.OrderByDescending(key) : items.OrderBy(key);
+
+    /// <summary>
+    /// 按占用排序时，数值相近的行不来回换位：还是同一批行、并且现在的顺序里没有明显排反的相邻两行
+    /// （后一行比前一行多出 10% 以上，并且至少多出 <paramref name="slack"/>）时，保持现在的顺序，否则用新顺序。
+    /// 占用每次刷新都有小的起伏，严格排序会让相近的几行每两秒换一次位置（每次换位都要重建这一行、播放动画）。
+    /// </summary>
+    public static IReadOnlyList<T> Settle<T>(IReadOnlyList<T> current, IReadOnlyList<T> sorted, Func<T, string> key,
+        Func<T, double> value, bool descending, double slack)
+    {
+        if (current.Count != sorted.Count || current.Count < 2)
+        {
+            return sorted;
+        }
+        var fresh = new Dictionary<string, T>(sorted.Count);
+        foreach (var item in sorted)
+        {
+            fresh[key(item)] = item;
+        }
+        var kept = new List<T>(current.Count);
+        foreach (var item in current)
+        {
+            if (!fresh.TryGetValue(key(item), out var latest))
+            {
+                return sorted;
+            }
+            kept.Add(latest);
+        }
+        for (var i = 1; i < kept.Count; i++)
+        {
+            var (before, after) = (value(kept[i - 1]), value(kept[i]));
+            var (low, high) = descending ? (before, after) : (after, before);
+            if (high - low > slack && high > low * 1.1)
+            {
+                return sorted;
+            }
+        }
+        return kept;
+    }
 
     /// <summary>列名的提示文字，说明再点一次会怎样排序（"按 CPU 从高到低排序"）。</summary>
     public static string SortHint(AppSortState current, AppSort column)

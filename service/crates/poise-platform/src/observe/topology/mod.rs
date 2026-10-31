@@ -115,6 +115,17 @@ impl CpuTopology {
         self.performance_count.threads > 0 && self.efficiency_count.threads > 0
     }
 
+    /// 大核的几个核心域最后一级缓存大小不同（例如 7950X3D 这样一组带 3D 缓存的双 CCD 处理器）。
+    pub fn uneven_cache(&self) -> bool {
+        let sizes: HashSet<u32> = self
+            .domains
+            .iter()
+            .filter(|d| d.performance && d.llc_bytes > 0)
+            .map(|d| d.llc_bytes)
+            .collect();
+        sizes.len() > 1
+    }
+
     /// 能不能把进程限制在一部分核心上：至少有两个核心域。
     pub fn partitioned(&self) -> bool {
         self.domains.len() >= 2
@@ -128,9 +139,12 @@ impl CpuTopology {
             .collect()
     }
 
-    /// 各核心域的线程数（调度按它分配，见 `CoreLayout`）。
-    pub fn domain_threads(&self) -> Vec<u32> {
-        self.domains.iter().map(|d| d.ids.len() as u32).collect()
+    /// 各核心域的（线程数，物理核心数）（调度按它分配，见 `CoreLayout`）。
+    pub fn domain_sizes(&self) -> Vec<(u32, u32)> {
+        self.domains
+            .iter()
+            .map(|d| (d.ids.len() as u32, d.cores))
+            .collect()
     }
 
     /// 某个核心集合对应的 CPU Set ID；None 表示不限制（包括覆盖了全部核心域）。
@@ -346,7 +360,7 @@ mod tests {
         assert_eq!(total, crate::observe::system::logical_cpus() as usize);
         // 开发机为 i7-12700H（6P+8E，20 线程）：大核一个域，小核按二级缓存分两组。
         if t.performance_count.threads == 12 && t.efficiency_count.threads == 8 {
-            assert_eq!(t.domain_threads(), vec![12, 4, 4]);
+            assert_eq!(t.domain_sizes(), vec![(12, 6), (4, 4), (4, 4)]);
         }
     }
 }

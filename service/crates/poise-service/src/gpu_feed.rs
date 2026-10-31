@@ -35,6 +35,8 @@ impl GpuFeed {
         std::thread::Builder::new()
             .name("gpu".into())
             .spawn(move || {
+                // 显卡占用用来认游戏：小核被让路的程序挤满时也要按时测到。
+                poise_platform::act::self_tune::responsive_thread();
                 let mut meter = GpuMeter::default();
                 let mut target: Option<Pid> = None;
                 let mut switched = false;

@@ -4,9 +4,14 @@
 //! 优先直接问显卡内核（[`kmt`]，开始测约 0.2 毫秒，每次读数几十微秒）；拿不到完整查询权限的进程句柄
 //! （受保护的进程）或者系统不支持时，退回性能计数器（[`pdh`]，开始测一次约 0.5 秒处理器时间）。换测别的进程时，刚测过的那个留着：
 //! 前台在游戏和别的窗口之间来回切换很常见。
+//!
+//! [`DiscreteActivity`]：独立显卡有没有在干活（读 NVML 之前看一眼，不叫醒休眠中的独显）。
 
+mod awake;
 mod kmt;
 mod pdh;
+
+pub use awake::DiscreteActivity;
 
 use std::time::Instant;
 
@@ -62,7 +67,7 @@ impl GpuMeter {
         let kernel = self.kernel.as_ref().and_then(|k| {
             // 要完整的查询权限，见 `KernelStats::running_3d`。
             let handle = open_process(pid, PROCESS_QUERY_INFORMATION).ok()?;
-            let running = k.running_3d(handle.raw())?;
+            let running = k.first_running_3d(handle.raw())?;
             Some(Source::Kernel {
                 handle,
                 last: (Instant::now(), running),
@@ -140,16 +145,14 @@ mod tests {
     }
 
     #[test]
-    fn this_machine_is_read_from_the_graphics_kernel() {
-        // 有显卡的机器上，自己的进程走显卡内核这条路（不用 0.5 秒的性能计数器）。
-        if KernelStats::open().is_none() {
+    fn a_process_the_kernel_says_nothing_about_is_not_measured_through_it() {
+        // 没用过显卡的进程（测试进程自己）：每个引擎都回答"参数错误"。读数照常是 0，但开始测时不走
+        // 显卡内核这条路（分不清是没用过还是系统不肯回答，见 `KernelStats::first_running_3d`）。
+        let Some(kernel) = KernelStats::open() else {
             return;
-        }
-        let mut meter = GpuMeter::default();
-        meter.usage_3d(std::process::id());
-        assert!(matches!(
-            meter.current.as_ref().map(|p| &p.source),
-            Some(Source::Kernel { .. })
-        ));
+        };
+        let handle = open_process(std::process::id(), PROCESS_QUERY_INFORMATION).unwrap();
+        assert_eq!(kernel.running_3d(handle.raw()), Some(0));
+        assert_eq!(kernel.first_running_3d(handle.raw()), None);
     }
 }

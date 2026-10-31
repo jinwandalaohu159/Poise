@@ -39,6 +39,17 @@ impl Desired {
         resources: ResourcePriority::Low,
     };
 
+    /// 需求高时，在后台忙、但负载轻的程序（达不到需求一般时的门槛）：让开主域、低于正常，不节能、
+    /// 不降内存与磁盘优先级。手柄与按键映射、头部追踪、录像、副屏上的视频这类程序负载不高，却对时延敏感：
+    /// 节能会放宽它们的计时器精度、压低频率，输入跟着变迟、画面跟着掉帧（Windows 自己也只对没有可见窗口的
+    /// 程序这样做）。挪开它们已经足够让出大核。
+    pub const NUDGED: Self = Self {
+        priority: Some(PriorityClass::BelowNormal),
+        eco: EcoQos::Default,
+        cores: CoreSet::Efficiency,
+        resources: ResourcePriority::Default,
+    };
+
     /// 用户标记的游戏：在大核上运行，优先级提高一级（高于正常，见 `reconcile::effective_priority`），
     /// 不让系统自动节能限速。
     pub const GAME: Self = Self {
@@ -80,6 +91,15 @@ impl Desired {
         eco: EcoQos::Default,
         cores: CoreSet::Efficiency,
         resources: ResourcePriority::Default,
+    };
+
+    /// 有重点程序时，Windows 自己的维护程序（更新安装、搜索索引等）：挪到副域，内存与磁盘优先级降低。
+    /// 不改优先级、不节能——它们是系统的一部分，只是不占重点程序用着的核心、不和它抢磁盘。
+    pub const MAINTENANCE_ASIDE: Self = Self {
+        priority: None,
+        eco: EcoQos::Default,
+        cores: CoreSet::Efficiency,
+        resources: ResourcePriority::Low,
     };
 
     /// 低优先级程序到了前台：仍在小核，但不节能，界面照样能点。

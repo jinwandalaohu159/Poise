@@ -3,7 +3,7 @@
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::model::{Pid, PriorityClass};
+use crate::model::{Pid, PriorityClass, ProcessKey};
 
 /// 效率模式（EcoQoS）状态。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -205,8 +205,10 @@ pub struct ExecOutcome {
 }
 
 /// 平台层实现的原始执行器。业务代码不直接使用它，而是通过安全守卫包装。
-pub trait ActionExecutor: Send {
-    fn execute(&self, action: &Action) -> Result<ExecOutcome, ExecError>;
+pub trait ActionExecutor: Send + Sync {
+    /// 对 `target` 执行动作。执行前核对进程还是同一个（创建时间一致，为 0 时不核对）：
+    /// 进程号已被新进程复用时返回 [`ExecError::Gone`]，绝不动到别的程序。
+    fn execute(&self, target: ProcessKey, action: &Action) -> Result<ExecOutcome, ExecError>;
 }
 
 #[cfg(test)]

@@ -20,7 +20,6 @@ serde.workspace = true
 serde_json.workspace = true
 log.workspace = true
 anyhow.workspace = true
-simplelog = "0.12"
 windows-service = "0.8"
 
 [dependencies.windows]
