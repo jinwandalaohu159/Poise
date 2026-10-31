@@ -6,7 +6,7 @@
 //! （见 [`window_proc`]）。退出也是投递关闭消息，不在处理消息的中途销毁窗口。
 
 use std::cell::RefCell;
-use std::sync::atomic::{AtomicIsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
 
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
@@ -89,10 +89,23 @@ unsafe extern "system" fn on_win_event(
     _time: u32,
 ) {
     let raw = WINDOW.load(Ordering::Relaxed);
-    if raw != 0 && object == OBJID_WINDOW.0 {
+    // 还有一条没处理的就不再投递：事件扎堆（切换窗口、最小化动画）时托盘线程只处理一次。
+    if raw != 0 && object == OBJID_WINDOW.0 && !FOREGROUND_PENDING.swap(true, Ordering::AcqRel) {
         // SAFETY: 投递到本进程的窗口。
-        let _ = unsafe { PostMessageW(Some(HWND(raw as _)), WM_FOREGROUND, WPARAM(0), LPARAM(0)) };
+        let posted =
+            unsafe { PostMessageW(Some(HWND(raw as _)), WM_FOREGROUND, WPARAM(0), LPARAM(0)) };
+        if posted.is_err() {
+            FOREGROUND_PENDING.store(false, Ordering::Release);
+        }
     }
+}
+
+/// 有一条前台切换的消息投递了还没处理。
+static FOREGROUND_PENDING: AtomicBool = AtomicBool::new(false);
+
+/// 开始处理前台切换的消息：之后的事件再投递新的一条。
+pub(super) fn foreground_taken() {
+    FOREGROUND_PENDING.store(false, Ordering::Release);
 }
 
 unsafe extern "system" fn window_proc(

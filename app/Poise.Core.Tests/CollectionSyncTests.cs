@@ -27,6 +27,21 @@ public sealed class CollectionSyncTests
     }
 
     [Fact]
+    public void Duplicate_keys_keep_the_first_row_only()
+    {
+        var a = new Item(1, "a");
+        var again = new Item(1, "again");
+        var b = new Item(2, "b");
+        var target = new ObservableCollection<Item>();
+
+        CollectionSync.Sync(target, [a, again, b], i => i.Id);
+        CollectionSync.Sync(target, [b, a, again], i => i.Id);
+
+        Assert.Equal([b, a], target);
+        Assert.Same(a, new[] { a, again }.FirstByKey(i => i.Id)[1]);
+    }
+
+    [Fact]
     public void Reorders_with_moves_instead_of_rebuilding()
     {
         var items = Enumerable.Range(1, 4).Select(i => new Item(i, "")).ToList();

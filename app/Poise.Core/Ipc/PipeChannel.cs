@@ -44,15 +44,34 @@ internal sealed class PipeChannel : IDisposable
 
     public async Task<T?> CallAsync<T>(string method, object? parameters, TimeSpan timeout, CancellationToken ct)
     {
-        await _lock.WaitAsync(ct).ConfigureAwait(false);
+        // 时限从排队等前面的请求就开始算：服务卡住时请求不会越排越长、用户的操作不会等上几分钟。
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
         deadline.CancelAfter(timeout);
+        try
+        {
+            await _lock.WaitAsync(deadline.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException e) when (!ct.IsCancellationRequested)
+        {
+            throw new ServiceUnavailableException("服务没有及时回复（前面的请求还没完成）", e);
+        }
         try
         {
             await EnsureConnectedAsync(deadline.Token).ConfigureAwait(false);
             return await SendAsync<T>(method, parameters, deadline.Token).ConfigureAwait(false);
         }
-        catch (Exception e) when (e is IOException or JsonException)
+        catch (JsonException e) when (_connected)
+        {
+            // 整行已经读完，连接没有错位：只是这一次的回复界面不认识（版本错位、新的取值），不断开——
+            // 断开的话每次查询都会重连、显示"未连接"。
+            throw new ServiceErrorException(ErrorCode.Unknown, $"服务对 {method} 的回复无法解析：{e.Message}");
+        }
+        catch (JsonException e)
+        {
+            // 握手的回复解析不了：EnsureConnectedAsync 已经断开，按连不上处理。
+            throw new ServiceUnavailableException("服务的握手回复无法解析", e);
+        }
+        catch (Exception e) when (e is IOException or ObjectDisposedException)
         {
             Disconnect();
             throw new ServiceUnavailableException("与服务的连接已断开", e);
@@ -156,6 +175,8 @@ internal sealed class PipeChannel : IDisposable
         catch
         {
             Disconnect();
+            _retryAt = Environment.TickCount64 + (long)_retryAfter.TotalMilliseconds;
+            _retryAfter = TimeSpan.FromTicks(Math.Min(_retryAfter.Ticks * 2, MaxRetryAfter.Ticks));
             throw;
         }
         _connected = true;
@@ -174,9 +195,9 @@ internal sealed class PipeChannel : IDisposable
         _connected = false;
     }
 
-    public void Dispose()
-    {
-        Disconnect();
-        _lock.Dispose();
-    }
+    /// <summary>
+    /// 只关管道：还在路上的请求随之以"连不上"结束（见 <see cref="CallAsync{T}"/>）。信号量不释放——
+    /// 那个请求结束时还要归还它。
+    /// </summary>
+    public void Dispose() => _pipe?.Dispose();
 }

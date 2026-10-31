@@ -107,9 +107,27 @@ impl AudioSessions {
     }
 
     /// 处于活动状态的音频会话所属的进程，以及此刻有没有声音。
+    /// 某个设备出错（坏掉的虚拟声卡、半断开的蓝牙耳机）时跳过它；所有设备都出错才算失败（音频服务重启了）。
     fn collect(&mut self) -> windows::core::Result<HashMap<Pid, bool>> {
         let mut pids = HashMap::new();
-        for manager in self.managers()? {
+        let managers = self.managers()?;
+        let mut last_error = None;
+        let mut any_read = managers.is_empty();
+        for manager in managers {
+            match Self::collect_from(manager, &mut pids) {
+                Ok(()) => any_read = true,
+                Err(e) => last_error = Some(e),
+            }
+        }
+        match last_error {
+            Some(e) if !any_read => Err(e),
+            _ => Ok(pids),
+        }
+    }
+
+    /// 一个设备上处于活动状态的会话。
+    fn collect_from(manager: &Manager, pids: &mut HashMap<Pid, bool>) -> windows::core::Result<()> {
+        {
             // SAFETY: 标准的 COM 调用，接口对象由 windows crate 管理引用计数。
             unsafe {
                 let sessions = manager.manager.GetSessionEnumerator()?;
@@ -136,7 +154,7 @@ impl AudioSessions {
                 }
             }
         }
-        Ok(pids)
+        Ok(())
     }
 
     /// 各播放设备的会话管理器；过期了重新取。

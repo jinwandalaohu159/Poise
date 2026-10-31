@@ -1,8 +1,7 @@
 //! 进程树：一个进程属于哪个程序（辅助进程归到主程序，独立程序单独成树）。
 
-use std::collections::{HashMap, HashSet};
-
 use super::ClassifyInput;
+use crate::fast_hash::{HashMap, HashSet};
 use crate::known;
 use crate::model::{Pid, ProcessKey, ProcessSample, SessionState, Snapshot};
 use crate::prefs::AppPreference;
@@ -187,7 +186,8 @@ pub(super) fn roots(
     marks: &Marks,
     lineage: &Lineage,
 ) -> HashMap<Pid, Pid> {
-    let mut roots: HashMap<Pid, Pid> = HashMap::with_capacity(by_pid.len());
+    let mut roots: HashMap<Pid, Pid> =
+        HashMap::with_capacity_and_hasher(by_pid.len(), Default::default());
     let mut chain = Vec::new();
     for &pid in by_pid.keys() {
         chain.clear();

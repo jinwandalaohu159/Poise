@@ -4,8 +4,11 @@
 //! 之后来的（Poise 退出后马上又打开）照常执行。顺序固定为：还原 → 散热模式 → 风扇加速。
 //!
 //! 风扇加速 0 表示不管：BIOS 按温度调节，用户在 AWCC 里设的照旧。Poise 写过非 0 的加速之后才会写 0 收回；
-//! BIOS 切换散热模式时会把风扇加速清零（G15 实测），之后重新写入正在用的加速。
+//! BIOS 切换散热模式时会把风扇加速清零（G15 实测），之后重新写入正在用的加速；睡眠醒来后也重新核对一次
+//! （读出每个风扇的加速，不一样才写）。
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 
 use poise_core::prefs::Mode;
@@ -18,6 +21,8 @@ enum Command {
         on_battery: bool,
     },
     FanBoost(u8),
+    /// 核对散热模式和风扇加速还是不是 Poise 写的（睡眠醒来后 BIOS 可能改了）。
+    Recheck,
     /// 回到 Poise 接管之前的散热模式，收回风扇加速。
     Restore,
     /// 之前发出的命令都执行完后回复。
@@ -26,15 +31,23 @@ enum Command {
 
 pub(super) struct Bios {
     tx: Sender<Command>,
+    /// 切换散热模式失败了（还没被取走）：调度那边据此过一阵再切一次（见 `Hardware::apply_mode`）。
+    failed: Arc<AtomicBool>,
 }
 
 impl Bios {
     pub fn start(profile: Box<dyn MachineProfile>) -> Self {
         let (tx, rx) = mpsc::channel();
+        let failed = Arc::new(AtomicBool::new(false));
+        let report = failed.clone();
         std::thread::Builder::new()
             .name("bios".into())
             .spawn(move || {
-                let mut worker = Worker { profile, boost: 0 };
+                let mut worker = Worker {
+                    profile,
+                    boost: 0,
+                    failed: report,
+                };
                 while let Ok(first) = rx.recv() {
                     let mut pending = Pending::default();
                     pending.add(first);
@@ -45,7 +58,12 @@ impl Bios {
                 }
             })
             .expect("创建 BIOS 执行线程失败");
-        Self { tx }
+        Self { tx, failed }
+    }
+
+    /// 取走"切换散热模式失败了"。
+    pub fn take_failure(&self) -> bool {
+        self.failed.swap(false, Ordering::AcqRel)
     }
 
     pub fn thermal(&self, mode: Mode, on_battery: bool) {
@@ -54,6 +72,10 @@ impl Bios {
 
     pub fn fan_boost(&self, percent: u8) {
         let _ = self.tx.send(Command::FanBoost(percent));
+    }
+
+    pub fn recheck(&self) {
+        let _ = self.tx.send(Command::Recheck);
     }
 
     pub fn restore(&self) {
@@ -74,6 +96,7 @@ struct Pending {
     restore: bool,
     thermal: Option<(Mode, bool)>,
     boost: Option<u8>,
+    recheck: bool,
     synced: Vec<Sender<()>>,
 }
 
@@ -82,10 +105,12 @@ impl Pending {
         match command {
             Command::Thermal { mode, on_battery } => self.thermal = Some((mode, on_battery)),
             Command::FanBoost(p) => self.boost = Some(p),
+            Command::Recheck => self.recheck = true,
             // 要还原了：之前排着的模式和风扇加速不必再执行；之后来的照常执行。
             Command::Restore => {
                 self.thermal = None;
                 self.boost = None;
+                self.recheck = false;
                 self.restore = true;
             }
             Command::Sync(done) => self.synced.push(done),
@@ -97,6 +122,7 @@ struct Worker {
     profile: Box<dyn MachineProfile>,
     /// Poise 写入、此刻在用的风扇加速；0 表示没有加速（不管）。
     boost: u8,
+    failed: Arc<AtomicBool>,
 }
 
 impl Worker {
@@ -105,11 +131,20 @@ impl Worker {
             self.profile.restore_thermal_mode();
             self.set_boost(0, false);
         }
-        let mut cleared = false;
+        // 核对时风扇加速也重新核对一遍（读出每个风扇的加速，不一样才写）。
+        let mut cleared = pending.recheck;
+        if pending.recheck
+            && let Err(e) = self.profile.recheck_thermal_mode()
+        {
+            log::warn!("核对散热模式失败：{e}");
+        }
         if let Some((mode, on_battery)) = pending.thermal {
             match self.profile.apply_thermal_mode(mode, on_battery) {
-                Ok(switched) => cleared = switched,
-                Err(e) => log::warn!("切换散热模式失败：{e}"),
+                Ok(switched) => cleared |= switched,
+                Err(e) => {
+                    log::warn!("切换散热模式失败：{e}");
+                    self.failed.store(true, Ordering::Release);
+                }
             }
         }
         let boost = pending.boost.unwrap_or(self.boost);
@@ -170,6 +205,7 @@ mod tests {
             Worker {
                 profile: Box::new(profile),
                 boost: 0,
+                failed: Arc::default(),
             },
             boosts,
         )
@@ -226,5 +262,15 @@ mod tests {
         quiet.run(batch(vec![thermal(), Command::FanBoost(60)]));
         assert_eq!(*boosts.lock().unwrap(), [60, 60]);
         assert_eq!(*untouched.lock().unwrap(), [60]);
+    }
+
+    #[test]
+    fn a_recheck_rewrites_the_boost_in_use_only() {
+        let (mut w, boosts) = worker(false);
+        // 没加速过：核对什么也不写。
+        w.run(batch(vec![Command::Recheck]));
+        w.run(batch(vec![Command::FanBoost(60)]));
+        w.run(batch(vec![Command::Recheck]));
+        assert_eq!(*boosts.lock().unwrap(), [60, 60]);
     }
 }

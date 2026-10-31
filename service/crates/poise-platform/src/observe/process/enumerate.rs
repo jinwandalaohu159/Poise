@@ -121,7 +121,7 @@ fn to_raw(info: &SystemProcessInformation) -> RawProcess {
                 info.image_name.Length as usize / 2,
             )
         };
-        String::from_utf16_lossy(s).to_lowercase()
+        lowercase_name(s)
     };
     RawProcess {
         key: ProcessKey {
@@ -158,9 +158,29 @@ fn priority_from_base(base: i32) -> PriorityClass {
     }
 }
 
+/// 进程名（UTF-16）转成小写的字符串。几乎都是 ASCII：直接逐个字符转，一次分配（每轮几百个进程，
+/// 通用的转换要先转字符串再转小写，多两次分配）。
+fn lowercase_name(utf16: &[u16]) -> String {
+    if utf16.iter().all(|&c| c < 0x80) {
+        utf16
+            .iter()
+            .map(|&c| char::from(c as u8).to_ascii_lowercase())
+            .collect()
+    } else {
+        String::from_utf16_lossy(utf16).to_lowercase()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn names_are_lowercased_with_or_without_non_ascii() {
+        let utf16 = |t: &str| t.encode_utf16().collect::<Vec<u16>>();
+        assert_eq!(lowercase_name(&utf16("Chrome.EXE")), "chrome.exe");
+        assert_eq!(lowercase_name(&utf16("微信.EXE")), "微信.exe");
+    }
 
     #[test]
     fn reads_own_process() {

@@ -17,7 +17,7 @@
 //!   [`power_guard`]：守住 Poise 写入的电源设置（被别处改掉、换了计划；读取在单独的线程里）；
 //!   [`game_prefs`]：程序类别与游戏对应的系统设置
 //! - [`changes`]：持久修改的唯一出口（设置存储 + 变更日志）
-//! - [`session`]：用户会话、界面是否显示；[`user_settings`]：用户在界面上改的设置（模式、风扇、开关）
+//! - [`session`]：用户会话、界面是否显示；[`current_user`]：按会话找登录的用户；[`user_settings`]：用户在界面上改的设置（模式、风扇、开关）
 //! - [`status`]：给界面的状态、诊断；[`apps`]：程序列表；[`remembered`]：运行过的程序（保存在本机）
 //! - [`requests`]：把 IPC 请求分派到上面各部分，[`answers`] 留着只读请求的回复（两轮采样之间不变），
 //!   [`error`] 是请求失败的原因
@@ -33,6 +33,7 @@ mod cleanup;
 mod clients;
 mod convert;
 mod cores;
+mod current_user;
 mod cycle;
 mod decision_events;
 mod error;
@@ -58,7 +59,7 @@ mod user_settings;
 pub use cadence::TICK;
 pub use sampler::Sampler;
 
-use std::collections::HashMap;
+use poise_core::fast_hash::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -164,6 +165,8 @@ pub struct Engine {
     last_change_at: Millis,
     /// 上一轮采样的时刻（发现睡眠唤醒用，见 `cycle`）。
     last_tick_at: Option<Millis>,
+    /// 暂停期间上一次重试撤销没撤销成的电源设置的时刻（见 `presence`）。
+    withdraw_retried_at: Millis,
     /// 切换模式的尝试：等预读、失败后隔一阵再试（见 `mode`）。
     mode_attempts: mode_attempts::ModeAttempts,
     /// 上一轮交给记录系统的摘要里有重点程序（见 `round_summary`）。
@@ -178,7 +181,8 @@ pub struct Engine {
 
 impl Engine {
     pub fn new(cfg: RunConfig, logbook: Logbook) -> anyhow::Result<Self> {
-        paths::ensure_dir(&cfg.data_dir, cfg.mode == RunMode::Service)?;
+        // 服务方式下数据目录在打开任何文件之前已经收紧过（见 `host`）。
+        paths::ensure_dir(&cfg.data_dir, false)?;
         let topology = CpuTopology::detect();
         self_tune::apply(&topology);
         let launcher: Box<dyn Launcher> = match cfg.mode {
@@ -191,6 +195,12 @@ impl Engine {
             RunMode::Console => UserContext::current_process_user(),
             RunMode::Service => UserContext::for_session(system::active_console_session()),
         };
+        if cfg.mode == RunMode::Service {
+            log::info!(
+                "启动时的登录用户：{:?}",
+                user.as_ref().and_then(|u| u.sid.clone())
+            );
+        }
         let settings_file = JsonFile::new(cfg.data_dir.join("settings.json"));
         let settings = settings_file.load().unwrap_or_default();
         let baseline_file = JsonFile::new(cfg.data_dir.join(growth::BASELINE_FILE));
@@ -262,6 +272,7 @@ impl Engine {
             files,
             last_change_at: 0,
             last_tick_at: None,
+            withdraw_retried_at: 0,
             mode_attempts: mode_attempts::ModeAttempts::default(),
             round_focused: false,
             logbook,
@@ -286,13 +297,15 @@ impl Engine {
     /// 界面或托盘连上了：视为 Poise 自己的进程（只接受安装目录里的程序连接，见 `ipc_server`）。
     pub fn client_connected(&mut self, pid: Pid) {
         self.clients.connected(pid);
+        self.adopt_client_session(pid);
     }
 
     /// 一条连接断开。这个进程的连接都断开后不再视为 Poise 自己的进程；是托盘代理时暂停。
-    pub fn client_disconnected(&mut self, pid: Pid) {
+    /// `exited`：这个进程已经退出了（调用方在锁外等过一会儿）。
+    pub fn client_disconnected(&mut self, pid: Pid, exited: bool) {
         self.answers.invalidate();
         if self.clients.disconnected(pid) {
-            self.on_client_gone(pid);
+            self.on_client_gone(pid, exited);
         }
     }
 

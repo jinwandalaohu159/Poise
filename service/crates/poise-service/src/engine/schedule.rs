@@ -1,9 +1,8 @@
 //! 进程调度：每个周期按调度计划调整进程并记录决定的变化，临时全速，服务停止时撤销全部调整。
 
-use std::collections::HashMap;
-
 use poise_core::action::{ExecError, ExecOutcome};
 use poise_core::classify::Classification;
+use poise_core::fast_hash::HashMap;
 use poise_core::model::{Pid, ProcessKey, Snapshot};
 use poise_core::prefs::Mode;
 use poise_core::safety::{GuardedExecutor, Trigger};

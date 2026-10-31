@@ -39,7 +39,8 @@ impl Tray {
     }
 
     /// 添加图标；资源管理器重启（任务栏重建）后需要重新添加。返回是否加上了：登录时任务栏可能还没准备好，
-    /// 加不上时调用方过一会儿再试。
+    /// 加不上时调用方过一会儿再试。换到新的消息协议也要成功才算：没换成的话点击图标发来的是旧协议的消息，
+    /// 左右键都没有反应。
     pub fn register(&self) -> bool {
         let mut data = self.data();
         data.Anonymous.uVersion = NOTIFYICON_VERSION_4;
@@ -48,8 +49,7 @@ impl Tray {
             let added = Shell_NotifyIconW(NIM_ADD, &data).as_bool()
                 // 已经有了（重复添加）也算加上了。
                 || Shell_NotifyIconW(NIM_MODIFY, &data).as_bool();
-            let _ = Shell_NotifyIconW(NIM_SETVERSION, &data);
-            added
+            added && Shell_NotifyIconW(NIM_SETVERSION, &data).as_bool()
         }
     }
 

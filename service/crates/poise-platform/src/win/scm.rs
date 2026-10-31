@@ -1,9 +1,10 @@
-//! 服务管理器的薄封装：句柄自动关闭，打开管理器与服务，数正在运行的依赖服务。
-//! 观测（服务表）和动作（重启服务）共用。
+//! 服务管理器的薄封装：句柄自动关闭，打开管理器与服务，查询状态，数正在运行的依赖服务。
+//! 观测（服务表）、动作（重启服务）和托盘代理（确认管道另一头是服务）共用。
 
 use windows::Win32::System::Services::{
-    CloseServiceHandle, EnumDependentServicesW, OpenSCManagerW, OpenServiceW, SC_HANDLE,
-    SERVICE_ACTIVE, SERVICE_ENUMERATE_DEPENDENTS,
+    CloseServiceHandle, EnumDependentServicesW, OpenSCManagerW, OpenServiceW, QueryServiceStatusEx,
+    SC_HANDLE, SC_MANAGER_CONNECT, SC_STATUS_PROCESS_INFO, SERVICE_ACTIVE,
+    SERVICE_ENUMERATE_DEPENDENTS, SERVICE_QUERY_STATUS, SERVICE_RUNNING, SERVICE_STATUS_PROCESS,
 };
 use windows::core::PCWSTR;
 
@@ -29,6 +30,33 @@ pub fn open_service(scm: &ScHandle, name: &str, access: u32) -> windows::core::R
     let w = WideString::new(name);
     // SAFETY: 名称以 NUL 结尾。
     unsafe { OpenServiceW(scm.0, w.as_pcwstr(), access) }.map(ScHandle)
+}
+
+pub fn status(svc: &ScHandle) -> windows::core::Result<SERVICE_STATUS_PROCESS> {
+    let mut s = SERVICE_STATUS_PROCESS::default();
+    let mut needed = 0u32;
+    // SAFETY: 缓冲区即本地结构体。
+    unsafe {
+        QueryServiceStatusEx(
+            svc.0,
+            SC_STATUS_PROCESS_INFO,
+            Some(std::slice::from_raw_parts_mut(
+                &mut s as *mut _ as *mut u8,
+                size_of::<SERVICE_STATUS_PROCESS>(),
+            )),
+            &mut needed,
+        )
+    }?;
+    Ok(s)
+}
+
+/// 正在运行的服务的进程号；没有这个服务、没在运行或无权查询时为 None。
+/// 查询状态普通用户也有权限（打开服务进程本身则没有）。
+pub fn running_pid(name: &str) -> Option<u32> {
+    let scm = open_manager(SC_MANAGER_CONNECT).ok()?;
+    let svc = open_service(&scm, name, SERVICE_QUERY_STATUS).ok()?;
+    let s = status(&svc).ok()?;
+    (s.dwCurrentState == SERVICE_RUNNING && s.dwProcessId != 0).then_some(s.dwProcessId)
 }
 
 /// 依赖这个服务、正在运行的服务有几个（重启它会连带停掉它们）。

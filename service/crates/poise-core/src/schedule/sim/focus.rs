@@ -1,9 +1,8 @@
 //! 重点程序：不只是游戏——正被直接使用、持续需要处理器的任何程序，都按需要占用大核，
 //! 其余没在用的程序让到小核（不是游戏的要持续一分钟），同一个程序固定在同一组小核里。
 
-use std::collections::HashSet;
-
 use super::*;
+use crate::fast_hash::HashSet;
 
 const EDITOR: Pid = 1;
 const BUILD: Pid = 2;
@@ -115,7 +114,7 @@ fn every_process_of_a_program_shares_one_cache_group() {
     let mut sim = Sim::new(procs);
     sim.foreground = Some(GAME);
     sim.run_for(30_000);
-    let mut used = HashSet::new();
+    let mut used = HashSet::default();
     for root in [10, 20, 30, 40] {
         let group = sim.cores_of(root);
         assert!(group.is_efficiency());

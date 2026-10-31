@@ -15,6 +15,8 @@ use poise_core::model::{Pid, SessionState};
 use poise_core::prefs::{AppPreference, GameMode, Mode};
 
 pub const PIPE_NAME: &str = r"\\.\pipe\Poise";
+/// 服务在服务管理器里的名称（托盘代理据此确认管道的另一头是不是 Poise 服务）。
+pub const SERVICE_NAME: &str = "Poise";
 pub const PROTOCOL_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -27,7 +27,7 @@ public sealed class TrendFeed : IDisposable
         _presence = presence;
         _timer = dispatcher.CreateTimer();
         _timer.Interval = Interval;
-        _timer.Tick += async (_, _) => await RefreshAsync();
+        _timer.Tick += async (_, _) => await Guard.RunAsync(RefreshAsync, "刷新走势");
         _presence.MainVisibilityChanged += UpdateTimer;
     }
 

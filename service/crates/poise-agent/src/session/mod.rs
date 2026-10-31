@@ -1,6 +1,7 @@
 //! 采集用户会话的状态（只读），上报给服务。服务在会话 0，看不到用户桌面，全靠这里提供。
 
 pub mod audio;
+pub mod audio_watch;
 pub mod desktop;
 
 use poise_core::model::{Pid, SessionState};
@@ -68,16 +69,20 @@ fn sorted(mut pids: Vec<Pid>) -> Vec<Pid> {
     pids
 }
 
+/// 本进程所在的会话（进程运行期间不会变，只查一次）。
 fn current_session() -> u32 {
-    let mut session = 0;
-    // SAFETY: 输出到本地变量。
-    let _ = unsafe {
-        windows::Win32::System::RemoteDesktop::ProcessIdToSessionId(
-            std::process::id(),
-            &mut session,
-        )
-    };
-    session
+    static SESSION: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
+    *SESSION.get_or_init(|| {
+        let mut session = 0;
+        // SAFETY: 输出到本地变量。
+        let _ = unsafe {
+            windows::Win32::System::RemoteDesktop::ProcessIdToSessionId(
+                std::process::id(),
+                &mut session,
+            )
+        };
+        session
+    })
 }
 
 #[cfg(test)]

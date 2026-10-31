@@ -1,8 +1,7 @@
 //! 清理页的明细：像任务管理器一样按程序列出占用，并标出每一项"怎么了、会怎么处理"。
 //! 同一程序树的进程合并为一行；需要处理的排在前面，其余按内存占用从高到低。
 
-use std::collections::HashMap;
-
+use crate::fast_hash::HashMap;
 use serde::{Deserialize, Serialize};
 
 use super::growth::{Change, Grown};
@@ -87,7 +86,7 @@ pub const MAX_NORMAL_ROWS: usize = 20;
 
 pub fn overview(input: &OverviewInput) -> Vec<ProcessGroup> {
     let by_pid = input.snapshot.by_pid();
-    let mut groups: HashMap<Pid, ProcessGroup> = HashMap::new();
+    let mut groups: HashMap<Pid, ProcessGroup> = HashMap::default();
     for p in &input.snapshot.processes {
         let pid = p.facts.key.pid;
         let Some(class) = input.classes.get(&pid) else {
@@ -341,7 +340,7 @@ mod tests {
                 ],
                 ..Default::default()
             },
-            classes: HashMap::from([
+            classes: HashMap::from_iter([
                 (
                     1,
                     class(
@@ -377,7 +376,7 @@ mod tests {
             },
             suspects: vec![],
             grown: vec![],
-            cpu: HashMap::from([(10, 1.0), (11, 2.5), (1, 3.0)]),
+            cpu: HashMap::from_iter([(10, 1.0), (11, 2.5), (1, 3.0)]),
         }
     }
 

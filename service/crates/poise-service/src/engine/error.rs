@@ -23,7 +23,7 @@ impl From<ChangeError> for RequestError {
     fn from(e: ChangeError) -> Self {
         let code = match e {
             ChangeError::DryRun => ErrorCode::ObserveOnly,
-            ChangeError::Journal(_) => ErrorCode::Failed,
+            ChangeError::Journal(_) | ChangeError::Unsaved(_) => ErrorCode::Failed,
         };
         Self::new(code, e.to_string())
     }

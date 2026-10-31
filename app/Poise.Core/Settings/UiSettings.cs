@@ -33,9 +33,10 @@ public sealed class UiSettings
     {
         try
         {
-            return File.Exists(FilePath)
+            var settings = File.Exists(FilePath)
                 ? JsonSerializer.Deserialize(File.ReadAllText(FilePath), LocalJson.Default.UiSettings) ?? new UiSettings()
                 : new UiSettings();
+            return settings.Valid();
         }
         catch (Exception e) when (e is IOException or JsonException or UnauthorizedAccessException)
         {
@@ -43,12 +44,33 @@ public sealed class UiSettings
         }
     }
 
+    /// <summary>枚举按数字保存：降级、手改后读回的取值可能不在范围里（设置页的下拉框会越界），换成默认值。</summary>
+    private UiSettings Valid()
+    {
+        if (!Enum.IsDefined(Theme))
+        {
+            Theme = ThemeChoice.System;
+        }
+        if (!Enum.IsDefined(AppsSort))
+        {
+            AppsSort = AppSort.Name;
+        }
+        return this;
+    }
+
     public void Save()
     {
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(FilePath)!);
-            File.WriteAllText(FilePath, JsonSerializer.Serialize(this, LocalJson.Default.UiSettings));
+            // 先写临时文件再替换：托盘代理收到通知去读时，不会读到写了一半的文件。
+            var temp = FilePath + ".tmp";
+            using (var file = new FileStream(temp, FileMode.Create, FileAccess.Write))
+            {
+                JsonSerializer.Serialize(file, this, LocalJson.Default.UiSettings);
+                file.Flush(flushToDisk: true);
+            }
+            File.Move(temp, FilePath, overwrite: true);
             Lifecycle.Agent.PrefsChanged();
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)

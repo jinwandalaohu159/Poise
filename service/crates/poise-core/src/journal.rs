@@ -31,8 +31,11 @@ pub enum JournalError {
 
 /// 平台层实现的日志持久化。
 pub trait JournalStorage {
-    fn load(&self) -> Vec<JournalEntry>;
-    fn save(&self, entries: &[JournalEntry]);
+    /// 读回日志。文件不存在时是空的；存在但读不到（被别的程序独占、没有权限）时返回错误——
+    /// 不能当成空的，否则下一次保存就把里面的原值覆盖掉了。
+    fn load(&self) -> Result<Vec<JournalEntry>, String>;
+    /// 落盘；失败时返回原因（调用方据此不去改设置：没记下原值的修改不能做）。
+    fn save(&self, entries: &[JournalEntry]) -> Result<(), String>;
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -236,8 +239,8 @@ fn restore(store: &dyn SettingStore, e: &JournalEntry) -> Result<(), StoreError>
 
 #[cfg(test)]
 pub(crate) mod tests {
+    use crate::fast_hash::HashMap;
     use std::cell::RefCell;
-    use std::collections::HashMap;
 
     use super::*;
     use crate::setting::Hive;

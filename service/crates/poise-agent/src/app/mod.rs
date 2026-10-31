@@ -74,21 +74,17 @@ impl App {
         let link = Link::start(move || post(WM_STATUS));
         let updates = UpdateChecker::start(move || post(WM_UPDATE));
         prefs::watch(move || post(WM_PREFS));
-        // SAFETY: 注册全局广播消息名；设置一次性检查定时器；订阅本会话的切换通知（锁屏、切换用户、远程连接）。
+        // SAFETY: 注册全局广播消息名；订阅本会话的切换通知（锁屏、切换用户、远程连接）。
         let taskbar_created = unsafe { RegisterWindowMessageW(w!("TaskbarCreated")) };
-        unsafe {
-            SetTimer(Some(hwnd), TIMER_PROMOTE, PROMOTE_EVERY_MS, None);
-            let _ = WTSRegisterSessionNotification(hwnd, NOTIFY_FOR_THIS_SESSION);
+        if let Err(e) = unsafe { WTSRegisterSessionNotification(hwnd, NOTIFY_FOR_THIS_SESSION) } {
+            // 收不到解锁、切回这个用户的通知：只是晚一次心跳（3 秒）再报。
+            log::warn!("订阅会话切换通知失败：{e}");
         }
         let tray = Tray::new(
             hwnd,
             WM_TRAY,
             &prefs.format("tray.tooltip", &prefs.get("status.disconnected")),
         );
-        if !tray.register() {
-            // SAFETY: 设置自己的定时器。
-            unsafe { SetTimer(Some(hwnd), TIMER_TRAY, TRAY_RETRY_MS, None) };
-        }
         let mut app = Self {
             hwnd,
             tray,
@@ -100,7 +96,23 @@ impl App {
             notified: None,
         };
         app.foreground.observe();
+        app.register_tray();
         app
+    }
+
+    /// 添加托盘图标；加不上（登录时任务栏还没准备好、资源管理器正在重启）时隔一会儿再试。加上之后才开始
+    /// 把它放到任务栏上（见 [`App::promote`]）：图标晚于检查的时限才加上时，否则永远留在"隐藏的图标"里。
+    fn register_tray(&mut self) {
+        if self.tray.register() {
+            self.stop_timer(TIMER_TRAY);
+            if self.promote_tries == 0 {
+                // SAFETY: 设置自己的定时器。
+                unsafe { SetTimer(Some(self.hwnd), TIMER_PROMOTE, PROMOTE_EVERY_MS, None) };
+            }
+        } else {
+            // SAFETY: 同上。
+            unsafe { SetTimer(Some(self.hwnd), TIMER_TRAY, TRAY_RETRY_MS, None) };
+        }
     }
 
     pub(super) fn on_message(&mut self, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Reply {
@@ -118,6 +130,7 @@ impl App {
             WM_STATUS | WM_PREFS => self.refresh_icon(),
             WM_UPDATE => self.announce_update(),
             WM_FOREGROUND => {
+                window::foreground_taken();
                 self.foreground.observe();
                 self.link.send(Job::ForegroundChanged);
             }
@@ -128,18 +141,12 @@ impl App {
             }
             WM_WTSSESSION_CHANGE => self.link.send(Job::Refresh),
             WM_TIMER if wparam.0 == TIMER_PROMOTE => self.promote(),
-            WM_TIMER if wparam.0 == TIMER_TRAY => {
-                if self.tray.register() {
-                    self.stop_timer(TIMER_TRAY);
-                }
-            }
+            WM_TIMER if wparam.0 == TIMER_TRAY => self.register_tray(),
             WM_TIMER if wparam.0 == TIMER_ANNOUNCE => {
                 self.stop_timer(TIMER_ANNOUNCE);
                 self.announce_update();
             }
-            m if m == self.taskbar_created && m != 0 => {
-                self.tray.register();
-            }
+            m if m == self.taskbar_created && m != 0 => self.register_tray(),
             _ => return Reply::Unhandled,
         }
         Reply::Handled

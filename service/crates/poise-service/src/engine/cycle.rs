@@ -3,10 +3,9 @@
 //! 托盘代理不在时（Poise 已退出）只采样，不调度、不切换模式、不清理（见 `presence`）。
 //! 多久采一轮见 `cadence`；前台切换、全屏切换不等采样，立即重新调度（[`Engine::reschedule_now`]）。
 
-use std::collections::HashMap;
-
 use poise_core::classify::{Classification, ClassifyInput};
 use poise_core::diagnose::{self, DiagnoseConfig, Health, HealthInput, Sample};
+use poise_core::fast_hash::HashMap;
 use poise_core::model::{Millis, Pid, Snapshot};
 use poise_hardware::{HardwareReading, SensorLevel};
 use poise_protocol::Event;
@@ -18,6 +17,9 @@ use super::{Engine, View};
 
 /// 两轮采样之间隔了这么久：电脑睡眠过（平时最长 6 秒一轮）。
 const SLEPT_AFTER_MS: Millis = 15_000;
+
+/// 用户多久不操作算离开（传感器读得很少，见 `read_sensors`）。
+const USER_AWAY_MS: u64 = 2 * 60_000;
 
 impl Engine {
     /// 处理一轮采样（快照已在引擎锁外采集，见 [`super::Sampler`]），返回各步的耗时（见 [`TickCost`]）。
@@ -40,12 +42,11 @@ impl Engine {
             return phases.finish();
         }
         let now = self.now();
-        if self
-            .last_tick_at
-            .replace(now)
-            .is_some_and(|last| now.saturating_sub(last) >= SLEPT_AFTER_MS)
+        if let Some(last) = self.last_tick_at.replace(now)
+            && now.saturating_sub(last) >= SLEPT_AFTER_MS
         {
-            self.session.resumed(now);
+            self.session.resumed(last, now);
+            self.hardware.resumed();
         }
         self.observe(&snapshot, now);
         phases.done("观察趋势");
@@ -110,6 +111,8 @@ impl Engine {
         self.answers.invalidate();
         let now = self.now();
         self.last_change_at = now;
+        // 暂停期间采得很慢（见 `cadence`）：恢复时上一轮的快照可能已经是十秒前的，重新采一次。
+        let resuming = self.paused;
         if !self.ensure_presence(now) {
             return;
         }
@@ -118,7 +121,11 @@ impl Engine {
         };
         let foreground = self.session.current(now).foreground_pid;
         let known = foreground.is_none_or(|pid| view.snapshot.find(pid).is_some());
-        let fresh = if known { None } else { self.sampler.take(now) };
+        let fresh = if known && !resuming {
+            None
+        } else {
+            self.sampler.take(now)
+        };
         let (snapshot, previous) = match fresh {
             Some(fresh) => (fresh, Some(view.snapshot)),
             None => (view.snapshot, None),
@@ -186,11 +193,15 @@ impl Engine {
     /// 玩游戏、有重点程序时少调用或不调用机型接口（可能让所有核心短暂停顿），界面显示着也一样；
     /// 没有要紧的事时界面显示着才全读，其余时候不访问显卡（在 Optimus 笔记本上会唤醒休眠中的独显）。
     fn read_sensors(&mut self, outcome: &ScheduleOutcome, now: Millis) -> HardwareReading {
+        let ui = self.session.ui_visible(now);
         self.sensors.set_level(SensorLevel::choose(
-            self.session.ui_visible(now),
+            ui,
             outcome.game.is_some(),
             outcome.focused,
         ));
+        // 没人在用（暂停着、用户离开了，也没在玩游戏、界面没显示）：传感器读得很少。
+        let away = self.paused || self.session.current(now).idle_ms >= USER_AWAY_MS;
+        self.sensors.set_idle(away && !ui && outcome.game.is_none());
         self.sensors.latest()
     }
 

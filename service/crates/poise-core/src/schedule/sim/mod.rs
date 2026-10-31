@@ -2,8 +2,6 @@
 //! 检查调度器"轻"和"稳"——闲着的程序从不被碰、正在用的程序从不被降级、同一个程序不会被来回调整；
 //! 正在玩、正在发声的程序只被保护一次（不让系统自动节能限速），之后不再动。
 
-use std::collections::HashMap;
-
 mod audio;
 mod background;
 mod focus;
@@ -13,6 +11,7 @@ mod restore;
 use super::*;
 use crate::action::{Action, CoreSet, EcoQos, ResourcePriority};
 use crate::classify::{Role, ScheduleScope};
+use crate::fast_hash::HashMap;
 use crate::model::{PriorityClass, ProcessFacts, ProcessMetrics, SystemMetrics};
 use crate::prefs::AppPreference;
 
@@ -95,8 +94,8 @@ impl Sim {
             scheduler: Scheduler::new(cfg),
             activity: ActivityTracker::default(),
             procs,
-            cpu_time: HashMap::new(),
-            disk_bytes: HashMap::new(),
+            cpu_time: HashMap::default(),
+            disk_bytes: HashMap::default(),
             now: 0,
             foreground: None,
             log: Vec::new(),
@@ -256,7 +255,7 @@ impl Sim {
 
     /// 每个进程被调整过的轮数（同一轮里的几个动作算一次）。
     fn adjustments_per_process(&self) -> HashMap<Pid, usize> {
-        let mut rounds: HashMap<Pid, Vec<Millis>> = HashMap::new();
+        let mut rounds: HashMap<Pid, Vec<Millis>> = HashMap::default();
         for (at, a) in &self.log {
             let r = rounds.entry(a.key.pid).or_default();
             if r.last() != Some(at) {

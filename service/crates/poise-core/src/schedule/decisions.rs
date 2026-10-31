@@ -1,8 +1,7 @@
 //! 程序级的调度决定及其变化。只在变化时报告，供日志记录：事后能看出每个程序什么时候、
 //! 为什么被调整，以及当时有多少人在等处理器。
 
-use std::collections::HashMap;
-
+use crate::fast_hash::HashMap;
 use serde::{Deserialize, Serialize};
 
 use super::trackers::{DemandReason, Pressure};
@@ -118,7 +117,8 @@ impl DecisionLog {
         }
         self.gone
             .retain(|_, (_, _, since)| now.saturating_sub(*since) < Self::FORGET_AFTER_MS);
-        let mut current = HashMap::with_capacity(self.programs.len());
+        let mut current =
+            HashMap::with_capacity_and_hasher(self.programs.len(), Default::default());
         let mut aside = 0;
         for (root, state) in programs {
             let (from, cores) = self

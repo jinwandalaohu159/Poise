@@ -17,10 +17,15 @@ const SLOW_READ: Duration = Duration::from_millis(500);
 /// 为它花掉不少处理器时间；没人看的时候少读：温度只用于健康状态和走势（是否被限速由处理器自己报告），
 /// 30 秒一次足够。界面显示时按 `every` 读。
 const QUIET_EVERY: Duration = Duration::from_secs(30);
+/// 没人在用（用户离开、Poise 暂停，也没在玩游戏、界面没显示）时的读取间隔：温度只用于健康状态，
+/// 过热提示晚几分钟无妨，不为它一夜调用几千次机型接口。
+const IDLE_EVERY: Duration = Duration::from_secs(5 * 60);
 
 enum Signal {
     /// 需要的详细程度变了（界面打开、开始玩游戏）：按新的要求立即读一次。
     Level(SensorLevel),
+    /// 有没有人在用变了：没人用时读得很少（见 [`IDLE_EVERY`]）；有人回来时立即读一次。
+    Idle(bool),
     Stop,
 }
 
@@ -29,6 +34,7 @@ pub struct SensorFeed {
     latest: Arc<Mutex<HardwareReading>>,
     tx: Sender<Signal>,
     level: SensorLevel,
+    idle: bool,
 }
 
 impl SensorFeed {
@@ -42,21 +48,38 @@ impl SensorFeed {
             .name("sensors".into())
             .spawn(move || {
                 let mut level = SensorLevel::Basic;
+                let mut idle = false;
+                let mut read_now = true;
                 loop {
-                    let t = Instant::now();
-                    let reading = sensors.read(level, started.elapsed().as_millis() as Millis);
-                    if t.elapsed() > SLOW_READ {
-                        log::info!("读取硬件传感器耗时 {} ms", t.elapsed().as_millis());
+                    if read_now {
+                        let t = Instant::now();
+                        let reading = sensors.read(level, started.elapsed().as_millis() as Millis);
+                        if t.elapsed() > SLOW_READ {
+                            log::info!("读取硬件传感器耗时 {} ms", t.elapsed().as_millis());
+                        }
+                        if let Ok(mut l) = shared.lock() {
+                            *l = reading;
+                        }
                     }
-                    if let Ok(mut l) = shared.lock() {
-                        *l = reading;
-                    }
-                    let wait = if level.shown() { every } else { QUIET_EVERY };
-                    match rx.recv_timeout(wait) {
-                        Ok(Signal::Level(l)) => level = l,
-                        Err(RecvTimeoutError::Timeout) => {}
+                    let wait = if level.shown() {
+                        every
+                    } else if idle {
+                        IDLE_EVERY
+                    } else {
+                        QUIET_EVERY
+                    };
+                    read_now = match rx.recv_timeout(wait) {
+                        Ok(Signal::Level(l)) => {
+                            level = l;
+                            true
+                        }
+                        Ok(Signal::Idle(now_idle)) => {
+                            idle = now_idle;
+                            !idle
+                        }
+                        Err(RecvTimeoutError::Timeout) => true,
                         Ok(Signal::Stop) | Err(RecvTimeoutError::Disconnected) => return,
-                    }
+                    };
                 }
             })
             .expect("创建采集线程失败");
@@ -64,6 +87,7 @@ impl SensorFeed {
             latest,
             tx,
             level: SensorLevel::Basic,
+            idle: false,
         }
     }
 
@@ -77,6 +101,14 @@ impl SensorFeed {
         if level != self.level {
             self.level = level;
             let _ = self.tx.send(Signal::Level(level));
+        }
+    }
+
+    /// 有没有人在用（见 [`IDLE_EVERY`]）。
+    pub fn set_idle(&mut self, idle: bool) {
+        if idle != self.idle {
+            self.idle = idle;
+            let _ = self.tx.send(Signal::Idle(idle));
         }
     }
 }

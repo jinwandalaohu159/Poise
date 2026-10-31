@@ -2,8 +2,7 @@
 //! 各一条，托盘的一键清理单独一条），最后一条断开才算它走了——否则托盘的清理连接一关，服务就当托盘代理
 //! 退出了而暂停。
 
-use std::collections::HashMap;
-
+use poise_core::fast_hash::HashMap;
 use poise_core::model::Pid;
 
 #[derive(Default)]

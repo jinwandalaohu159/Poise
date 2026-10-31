@@ -1,8 +1,7 @@
 //! 临时全速。
 
-use std::collections::{HashMap, HashSet};
-
 use crate::classify::Classification;
+use crate::fast_hash::{HashMap, HashSet};
 use crate::model::{Millis, Pid, ProcessKey};
 
 /// 用户在托盘里选择的"临时全速"，到期自动失效。作用于所选进程所在的整个程序（进程树）。
@@ -47,8 +46,8 @@ mod tests {
             1000,
         );
         let classes = test_classes(None);
-        assert_eq!(b.roots(&classes), HashSet::from([10]));
-        let alive = HashSet::from([ProcessKey {
+        assert_eq!(b.roots(&classes), HashSet::from_iter([10]));
+        let alive = HashSet::from_iter([ProcessKey {
             pid: 10,
             created: 1,
         }]);
@@ -70,7 +69,7 @@ mod tests {
         );
         // 同一个进程号，换了一个进程。
         b.retain(
-            &HashSet::from([ProcessKey {
+            &HashSet::from_iter([ProcessKey {
                 pid: 10,
                 created: 2,
             }]),

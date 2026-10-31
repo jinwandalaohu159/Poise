@@ -136,8 +136,19 @@ impl MachineProfile for Dell {
             return Ok(false);
         }
         let same_source = self.on_battery.is_none_or(|b| b == on_battery);
-        self.on_battery = Some(on_battery);
-        self.switch(|d| d.target(mode, on_battery), same_source)
+        let switched = self.switch(|d| d.target(mode, on_battery), same_source);
+        // 切换成功后才记下供电：失败后再试时，BIOS 因换电源自己改的模式不会被当成用户换的。
+        if switched.is_ok() {
+            self.on_battery = Some(on_battery);
+        }
+        switched
+    }
+
+    fn recheck_thermal_mode(&mut self) -> Result<bool, String> {
+        if !self.thermal_control() {
+            return Ok(false);
+        }
+        self.recheck()
     }
 
     fn restore_thermal_mode(&mut self) {
@@ -150,6 +161,7 @@ impl MachineProfile for Dell {
             Ok(_) => {
                 self.wrote = None;
                 self.on_battery = None;
+                self.original = None;
                 self.takeover.release();
             }
             Err(e) => log::warn!("还原散热模式失败：{e}"),

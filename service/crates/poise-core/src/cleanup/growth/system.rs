@@ -70,8 +70,9 @@ impl BootWatch {
         boot_unix_s: u64,
         settle_ms: u64,
     ) -> Option<BootBaseline> {
-        let current = self.baseline.is_some_and(|b| b.is_same_boot(boot_unix_s));
-        if current || system.uptime_ms < settle_ms {
+        // 是不是本次开机的只在读回保存的基线时核对（`new`）：同一个进程里开机不会变，而"开机时刻"是
+        // 墙钟减开机时长，系统时钟被调整、对时修正后会差出去——那时不能当成重新开机、覆盖基线。
+        if self.baseline.is_some() || system.uptime_ms < settle_ms {
             return None;
         }
         let baseline = BootBaseline {

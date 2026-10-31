@@ -5,31 +5,13 @@ use std::time::{Duration, Instant};
 use poise_core::action::ExecError;
 use poise_core::model::Pid;
 use windows::Win32::System::Services::{
-    ControlService, QueryServiceStatusEx, SC_MANAGER_CONNECT, SC_STATUS_PROCESS_INFO,
-    SERVICE_CONTROL_STOP, SERVICE_QUERY_STATUS, SERVICE_RUNNING, SERVICE_START, SERVICE_STATUS,
-    SERVICE_STATUS_PROCESS, SERVICE_STOP, SERVICE_STOPPED, StartServiceW,
+    ControlService, SC_MANAGER_CONNECT, SERVICE_CONTROL_STOP, SERVICE_QUERY_STATUS,
+    SERVICE_RUNNING, SERVICE_START, SERVICE_STATUS, SERVICE_STATUS_PROCESS, SERVICE_STOP,
+    SERVICE_STOPPED, StartServiceW,
 };
 
 use crate::win::handle::map_error;
-use crate::win::scm::{ScHandle, open_manager, open_service, running_dependents};
-
-fn query_status(svc: &ScHandle) -> windows::core::Result<SERVICE_STATUS_PROCESS> {
-    let mut s = SERVICE_STATUS_PROCESS::default();
-    let mut needed = 0u32;
-    // SAFETY: 缓冲区即本地结构体。
-    unsafe {
-        QueryServiceStatusEx(
-            svc.0,
-            SC_STATUS_PROCESS_INFO,
-            Some(std::slice::from_raw_parts_mut(
-                &mut s as *mut _ as *mut u8,
-                size_of::<SERVICE_STATUS_PROCESS>(),
-            )),
-            &mut needed,
-        )
-    }?;
-    Ok(s)
-}
+use crate::win::scm::{ScHandle, open_manager, open_service, running_dependents, status};
 
 fn wait_for(
     svc: &ScHandle,
@@ -38,7 +20,7 @@ fn wait_for(
 ) -> Result<SERVICE_STATUS_PROCESS, ExecError> {
     let start = Instant::now();
     loop {
-        let s = query_status(svc).map_err(|e| map_error(&e))?;
+        let s = status(svc).map_err(|e| map_error(&e))?;
         if s.dwCurrentState.0 == state {
             return Ok(s);
         }

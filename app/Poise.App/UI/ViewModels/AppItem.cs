@@ -154,7 +154,7 @@ public sealed partial class AppItem : ObservableObject
         {
             return;
         }
-        var existing = Processes.ToDictionary(p => p.Key);
+        var existing = Processes.FirstByKey(p => p.Key);
         var rows = _processes.Select(p =>
         {
             if (existing.TryGetValue(ProcessItem.KeyOf(p), out var row))

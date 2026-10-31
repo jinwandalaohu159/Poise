@@ -1,8 +1,7 @@
 //! 角色：进程是什么（关键进程、受保护、反作弊、服务……），只靠系统属性判断；以及服务能否安全重启。
 
-use std::collections::{HashMap, HashSet};
-
 use super::{ClassifyInput, Role};
+use crate::fast_hash::{HashMap, HashSet};
 use crate::known;
 use crate::model::{Pid, ProcessFacts, ProcessSample, Protection, Snapshot};
 

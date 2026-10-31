@@ -54,6 +54,11 @@ public sealed partial class MainWindow : Window
         ThemeManager.TrackCaptionButtons(this);
         _host.Theme.Changed += OnThemeChanged;
         Loc.Changed += OnLanguageChanged;
+        // 复查定时器先建好：下面订阅的事件随时会调用 UpdateVisible。
+        _coverCheck = DispatcherQueue.CreateTimer();
+        _coverCheck.Interval = CoverRecheck;
+        _coverCheck.Tick += (_, _) => UpdateVisible();
+        _coverCheck.Start();
         Activated += (_, _) => UpdateVisible();
         AppWindow.Changed += (_, args) =>
         {
@@ -64,10 +69,6 @@ public sealed partial class MainWindow : Window
         };
         _foreground.Changed += _ => UpdateVisible();
         _foreground.Start();
-        _coverCheck = DispatcherQueue.CreateTimer();
-        _coverCheck.Interval = CoverRecheck;
-        _coverCheck.Tick += (_, _) => UpdateVisible();
-        _coverCheck.Start();
         Closed += OnClosed;
 
         ContentFrame.Navigate(typeof(HomePage), null, new SuppressNavigationTransitionInfo());
@@ -147,9 +148,25 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    /// <summary>最小化、在别的虚拟桌面上，或被前台的全屏程序挡住时按"不显示"处理：停止刷新和动画，不打扰游戏。</summary>
-    private void UpdateVisible() =>
-        SetVisible(!IsMinimized && !WindowCloak.IsCloaked(_hwnd) && !FullscreenCover.Covers(_hwnd));
+    /// <summary>
+    /// 最小化、在别的虚拟桌面上、用户不在（锁屏、很久没操作）、被前台的全屏程序挡住，或被最大化的窗口整个盖住时
+    /// 按"不显示"处理：停止刷新和动画，不打扰游戏。用户回来、遮挡消失由复查发现（最多 5 秒）；最小化时连复查也
+    /// 停下（还原时会激活窗口，那时再看）。
+    /// </summary>
+    private void UpdateVisible()
+    {
+        var minimized = IsMinimized;
+        if (minimized)
+        {
+            _coverCheck.Stop();
+        }
+        else
+        {
+            _coverCheck.Start();
+        }
+        SetVisible(!minimized && !WindowCloak.IsCloaked(_hwnd) && !UserAway.Now()
+            && !FullscreenCover.Covers(_hwnd) && !MaximizedCover.Covers(_hwnd));
+    }
 
     private void SetVisible(bool visible) => _host.Presence.SetMainVisible(visible);
 

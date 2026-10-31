@@ -156,8 +156,17 @@ public partial class App : Application
     {
         if (_flyout is null)
         {
-            _flyout = new TrayFlyoutWindow(_host!);
-            _flyout.OpenMainRequested += ShowMain;
+            var flyout = new TrayFlyoutWindow(_host!);
+            flyout.OpenMainRequested += ShowMain;
+            // 被关掉了（Alt+F4）：下次重新建，不去碰已经关闭的窗口。
+            flyout.Closed += (_, _) =>
+            {
+                if (_flyout == flyout)
+                {
+                    _flyout = null;
+                }
+            };
+            _flyout = flyout;
         }
         _flyout.Toggle();
     }

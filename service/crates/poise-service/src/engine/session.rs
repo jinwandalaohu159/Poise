@@ -1,19 +1,17 @@
-//! 用户会话：托盘代理上报的会话状态，以及它是否还"新鲜"；界面窗口是否正显示着；
-//! 交互用户变化时更新"当前用户"的注册表位置。
+//! 用户会话：托盘代理上报的会话状态，以及它是否还"新鲜"；界面窗口是否正显示着、有没有人在看。
+//! 当前用户是谁见 `current_user`。
 
 use std::borrow::Cow;
 
 use poise_core::model::{Millis, Pid, SessionState};
-use poise_platform::settings::user::UserContext;
-
-use super::Engine;
-use crate::config::RunMode;
 
 /// 超过这个时间没有上报，就认为看不到用户桌面了。托盘代理最迟每 6 秒上报一次，留出它被卡住、
 /// 服务正忙排队的余量，不会因为一次晚到就当成"前台没有程序"。托盘代理真的退出时，连接断开立即可知。
 const FRESH_FOR_MS: Millis = 20_000;
 /// 界面显示期间会定期重复上报"可见"；超过这个时间没有上报，视为已经不显示（例如界面意外退出）。
 const UI_VISIBLE_FOR_MS: Millis = 30_000;
+/// 用户这么久没操作（离开了、锁着屏）时，开着的界面不算有人在看（不为它多读传感器、加快采样）。
+const UI_UNWATCHED_AFTER_MS: u64 = 2 * 60_000;
 
 #[derive(Default)]
 pub struct SessionTracker {
@@ -22,6 +20,8 @@ pub struct SessionTracker {
     /// 上报会话状态的进程（托盘代理）。
     reporter: Option<Pid>,
     ui_visible_until: Option<Millis>,
+    /// 显示着的界面在哪个会话里（快速切换用户后，另一个用户的界面开着不算有人在看）。
+    ui_session: Option<u32>,
 }
 
 impl SessionTracker {
@@ -35,6 +35,7 @@ impl SessionTracker {
             reported_at: None,
             reporter: None,
             ui_visible_until: None,
+            ui_session: None,
         }
     }
 
@@ -48,20 +49,30 @@ impl SessionTracker {
         changed
     }
 
-    /// 某个客户端断开。是上报者（托盘代理）时立即视为过期，返回 true。
-    pub fn forget_reporter(&mut self, pid: Pid) -> bool {
+    /// 这个进程是上报会话状态的托盘代理。
+    pub fn is_reporter(&self, pid: Pid) -> bool {
+        self.reporter == Some(pid)
+    }
+
+    /// 某个客户端断开。是上报者（托盘代理）且它已经退出时立即视为过期，返回 true。进程还在时（一次调用
+    /// 超时后断开重连）上报照常按时间过期：重连后接着报就不会暂停，不为一次断线撤销一切又重来。
+    pub fn forget_reporter(&mut self, pid: Pid, exited: bool) -> bool {
         if self.reporter != Some(pid) {
             return false;
         }
         self.reporter = None;
+        if !exited {
+            return false;
+        }
         self.reported_at = None;
         true
     }
 
     /// 电脑刚从睡眠里醒来：托盘代理还连着的话，上报当作刚收到（醒来后它要过一会儿才再上报），
     /// 不因为睡着的那段时间暂停、撤销一切又马上重来。
-    pub fn resumed(&mut self, now: Millis) {
-        if self.reporter.is_some() {
+    /// 只顺延睡前那一刻（`slept_at`）还新鲜的上报：托盘代理连着但早就不报了（会话切走、它卡住了）时不算。
+    pub fn resumed(&mut self, slept_at: Millis, now: Millis) {
+        if self.reporter.is_some() && self.is_fresh(slept_at) {
             self.reported_at = Some(now);
         }
     }
@@ -87,35 +98,18 @@ impl SessionTracker {
         self.state.session_id
     }
 
-    pub fn set_ui_visible(&mut self, visible: bool, now: Millis) {
+    /// `session`：界面所在的会话（查不到时为 None，不限制）。
+    pub fn set_ui_visible(&mut self, visible: bool, session: Option<u32>, now: Millis) {
         self.ui_visible_until = visible.then_some(now + UI_VISIBLE_FOR_MS);
+        self.ui_session = session;
     }
 
-    /// 界面窗口是否正显示着。
+    /// 界面窗口正显示着、有人在看：在用户正在用的会话里，用户也没离开。
     pub fn ui_visible(&self, now: Millis) -> bool {
-        self.ui_visible_until.is_some_and(|until| now <= until)
-    }
-}
-
-impl Engine {
-    /// 交互用户变化（登录、切换用户）时，更新"当前用户"的注册表位置。
-    /// 没有它，"资源管理器"等按用户保存的优化项无法读写。
-    pub(super) fn on_session_changed(&mut self, session_id: u32) {
-        if self.cfg.mode == RunMode::Service {
-            let user = UserContext::for_session(session_id);
-            if user == self.changes.store.user() {
-                return;
-            }
-            log::info!(
-                "交互会话 {session_id}，用户：{:?}",
-                user.as_ref().and_then(|u| u.sid.clone())
-            );
-            self.changes.store.set_user(user);
-            // 服务开机就启动，那时还没人登录，按用户保存的设置（游戏的显卡偏好等）读写不了：现在补上。
-            self.resync_game_settings();
-            let now = self.now();
-            self.power_guard.check_soon(now);
-        }
+        let shown = self.ui_visible_until.is_some_and(|until| now <= until);
+        let here = self.ui_session.is_none_or(|s| s == self.state.session_id);
+        let present = !self.is_fresh(now) || self.state.idle_ms < UI_UNWATCHED_AFTER_MS;
+        shown && here && present
     }
 }
 
@@ -138,23 +132,77 @@ mod tests {
     }
 
     #[test]
-    fn the_reporter_disconnecting_makes_the_session_stale_at_once() {
+    fn the_reporter_exiting_makes_the_session_stale_at_once() {
         let mut t = SessionTracker::default();
         t.report(SessionState::default(), 7, 0);
-        assert!(!t.forget_reporter(8));
+        assert!(!t.forget_reporter(8, true));
         assert!(t.is_fresh(1_000));
-        assert!(t.forget_reporter(7));
+        assert!(t.forget_reporter(7, true));
         assert!(!t.is_fresh(1_000));
+    }
+
+    #[test]
+    fn a_reporter_that_only_dropped_the_connection_expires_on_time() {
+        let mut t = SessionTracker::default();
+        t.report(SessionState::default(), 7, 0);
+        assert!(!t.forget_reporter(7, false));
+        assert!(t.is_fresh(FRESH_FOR_MS));
+        assert!(!t.is_fresh(FRESH_FOR_MS + 1));
+        // 重连后接着报：一直新鲜。
+        t.report(SessionState::default(), 7, 5_000);
+        assert!(t.is_fresh(FRESH_FOR_MS + 1));
+    }
+
+    #[test]
+    fn waking_up_only_extends_a_report_that_was_fresh_before_sleeping() {
+        let mut t = SessionTracker::default();
+        t.report(SessionState::default(), 7, 0);
+        t.resumed(10_000, 3_600_000);
+        assert!(t.is_fresh(3_600_000 + 1_000));
+        // 睡前就已经很久没报了（会话切走了）：醒来不当成新鲜。
+        let mut stale = SessionTracker::default();
+        stale.report(SessionState::default(), 7, 0);
+        stale.resumed(60_000, 3_600_000);
+        assert!(!stale.is_fresh(3_600_000));
     }
 
     #[test]
     fn ui_visibility_expires_without_repeats() {
         let mut t = SessionTracker::default();
-        t.set_ui_visible(true, 0);
+        t.set_ui_visible(true, None, 0);
         assert!(t.ui_visible(10_000));
         assert!(!t.ui_visible(40_000));
-        t.set_ui_visible(true, 40_000);
-        t.set_ui_visible(false, 41_000);
+        t.set_ui_visible(true, None, 40_000);
+        t.set_ui_visible(false, None, 41_000);
         assert!(!t.ui_visible(42_000));
+    }
+
+    #[test]
+    fn a_window_nobody_is_looking_at_is_not_watched() {
+        let mut t = SessionTracker::new(1);
+        // 另一个用户会话里开着的界面。
+        t.report(
+            SessionState {
+                session_id: 1,
+                ..Default::default()
+            },
+            7,
+            0,
+        );
+        t.set_ui_visible(true, Some(2), 0);
+        assert!(!t.ui_visible(1_000));
+        t.set_ui_visible(true, Some(1), 0);
+        assert!(t.ui_visible(1_000));
+        // 用户离开了（锁着屏）。
+        t.report(
+            SessionState {
+                session_id: 1,
+                idle_ms: UI_UNWATCHED_AFTER_MS,
+                ..Default::default()
+            },
+            7,
+            1_000,
+        );
+        assert!(!t.ui_visible(2_000));
     }
 }

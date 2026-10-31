@@ -1,8 +1,8 @@
 //! 命名管道客户端：一问一答，每条消息一行 JSON。每次调用都有时限（见 [`Watchdog`]）：服务卡住时
 //! 不一直等下去——否则托盘会一直显示旧的状态，前台切换也不再上报。
 //!
-//! 只连真的服务：管道的另一头必须是和托盘代理装在同一目录的程序（别的程序抢先建了同名管道时不连），
-//! 而且只允许对方确认身份、不允许以用户的身份做事（`SECURITY_IDENTIFICATION`）。
+//! 只连真的服务（别的程序抢先建了同名管道时不连，见 [`genuine_server`]），而且只允许对方确认身份、
+//! 不允许以用户的身份做事（`SECURITY_IDENTIFICATION`）。
 
 use std::fs::{File, OpenOptions};
 use std::io::BufReader;
@@ -12,10 +12,11 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 use poise_platform::win::handle::{OwnedHandle, image_path};
+use poise_platform::win::scm;
 use poise_platform::win::wide::WideString;
 use poise_protocol::{
-    PIPE_NAME, PROTOCOL_VERSION, Request, RequestEnvelope, ResponseEnvelope, read_message,
-    write_message,
+    PIPE_NAME, PROTOCOL_VERSION, Request, RequestEnvelope, ResponseEnvelope, SERVICE_NAME,
+    read_message, write_message,
 };
 use serde::de::DeserializeOwned;
 use windows::Win32::Foundation::{DUPLICATE_SAME_ACCESS, DuplicateHandle, ERROR_PIPE_BUSY, HANDLE};
@@ -24,8 +25,9 @@ use windows::Win32::System::IO::CancelSynchronousIo;
 use windows::Win32::System::Pipes::{GetNamedPipeServerProcessId, WaitNamedPipeW};
 use windows::Win32::System::Threading::{GetCurrentProcess, GetCurrentThread};
 
-/// 一般请求最多等这么久。
-const CALL_TIMEOUT: Duration = Duration::from_secs(5);
+/// 一般请求最多等这么久：只兜底服务彻底卡死的情况。不能短——服务忙（应用一批优化项、电源服务慢）时
+/// 等几秒是常事，超时就断开重连，白白多一轮握手；不短于服务认定"托盘代理不在了"的 20 秒。
+const CALL_TIMEOUT: Duration = Duration::from_secs(30);
 /// 一键清理要等清理执行完（重启服务最多要等十几秒）。
 const CLEAN_TIMEOUT: Duration = Duration::from_secs(60);
 /// 管道的实例都在用时（服务正在接受上一个连接），最多等这么久再连一次。
@@ -132,24 +134,26 @@ fn open_pipe() -> std::io::Result<File> {
     }
 }
 
-/// 管道的另一头是不是和托盘代理装在同一目录的程序（服务）。
+/// 管道的另一头是不是 Poise 服务：服务管理器里正在运行的 Poise 服务就是这个进程。
+///
+/// 不能靠读服务进程的路径确认：服务以 SYSTEM 运行，普通用户打不开它的进程（托盘代理就是普通用户），
+/// 服务管理器的状态则谁都能查。以控制台方式运行（调试）时没有注册服务，那时服务以当前用户运行，
+/// 路径读得到：和托盘代理装在同一目录才算。
 fn genuine_server(pipe: &File) -> bool {
     let mut pid = 0u32;
     // SAFETY: 句柄是刚打开的管道，输出到本地变量。
-    let ok = unsafe { GetNamedPipeServerProcessId(HANDLE(pipe.as_raw_handle()), &mut pid) }.is_ok();
-    let server_dir = ok
-        .then(|| image_path(pid))
-        .flatten()
-        .and_then(|p| std::path::Path::new(&p).parent().map(|d| d.to_path_buf()));
-    let own_dir = std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(|d| d.to_path_buf()));
-    match (server_dir, own_dir) {
-        (Some(server), Some(own)) => server
-            .to_string_lossy()
-            .eq_ignore_ascii_case(&own.to_string_lossy()),
-        _ => false,
+    if unsafe { GetNamedPipeServerProcessId(HANDLE(pipe.as_raw_handle()), &mut pid) }.is_err() {
+        return false;
     }
+    scm::running_pid(SERVICE_NAME) == Some(pid) || installed_beside_us(pid)
+}
+
+/// 这个进程的程序和托盘代理在同一目录。
+fn installed_beside_us(pid: u32) -> bool {
+    let dir = |p: &std::path::Path| p.parent().map(|d| d.to_string_lossy().into_owned());
+    let server = image_path(pid).and_then(|p| dir(std::path::Path::new(&p)));
+    let own = std::env::current_exe().ok().and_then(|p| dir(&p));
+    matches!((server, own), (Some(s), Some(o)) if s.eq_ignore_ascii_case(&o))
 }
 
 /// 调用的时限：超时时取消发请求那个线程上正在进行的管道读写，调用随即以"断开"失败，之后重新连接。
@@ -166,6 +170,9 @@ struct Watchdog {
 struct Deadline {
     at: Option<Instant>,
     closed: bool,
+    /// 检查线程在无限期地等（没有时限时）：新的时限要叫醒它；它在等某个时限时不用叫醒——醒来后看到
+    /// 新的时限会接着等（时限都是同样长，新的总比它正在等的晚）。
+    parked: bool,
 }
 
 impl Watchdog {
@@ -180,26 +187,38 @@ impl Watchdog {
         Some(Self { shared })
     }
 
-    fn set(&self, update: impl FnOnce(&mut Deadline)) {
+    /// 改时限；`update` 返回是否要叫醒检查线程。每次调用都叫醒的话，每次请求它都要白醒两次。
+    fn set(&self, update: impl FnOnce(&mut Deadline) -> bool) {
         let (lock, wake) = &*self.shared;
-        if let Ok(mut d) = lock.lock() {
-            update(&mut d);
+        if let Ok(mut d) = lock.lock()
+            && update(&mut d)
+        {
             wake.notify_one();
         }
     }
 
     fn arm(&self, timeout: Duration) {
-        self.set(|d| d.at = Some(Instant::now() + timeout));
+        self.set(|d| {
+            d.at = Some(Instant::now() + timeout);
+            d.parked
+        });
     }
 
+    /// 调用结束：只清掉时限，不叫醒（它醒来看到没有时限就接着睡）。
     fn disarm(&self) {
-        self.set(|d| d.at = None);
+        self.set(|d| {
+            d.at = None;
+            false
+        });
     }
 }
 
 impl Drop for Watchdog {
     fn drop(&mut self) {
-        self.set(|d| d.closed = true);
+        self.set(|d| {
+            d.closed = true;
+            true
+        });
     }
 }
 
@@ -210,10 +229,16 @@ fn watch((lock, wake): &(Mutex<Deadline>, Condvar), thread: &OwnedHandle) {
     };
     while !d.closed {
         d = match d.at {
-            None => match wake.wait(d) {
-                Ok(d) => d,
-                Err(_) => return,
-            },
+            None => {
+                d.parked = true;
+                match wake.wait(d) {
+                    Ok(mut d) => {
+                        d.parked = false;
+                        d
+                    }
+                    Err(_) => return,
+                }
+            }
             Some(at) if Instant::now() >= at => {
                 d.at = Some(Instant::now() + CANCEL_RETRY);
                 log::info!("服务没有及时回复，断开重连");
@@ -246,4 +271,17 @@ fn current_thread() -> Option<OwnedHandle> {
     }
     .ok()?;
     Some(OwnedHandle::from_raw(handle))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 连本机正在运行的服务：普通用户也能确认它是 Poise 服务。需要服务在运行，默认不跑。
+    #[test]
+    #[ignore]
+    fn live_service_is_genuine() {
+        let pipe = open_pipe().expect("服务没在运行");
+        assert!(genuine_server(&pipe));
+    }
 }

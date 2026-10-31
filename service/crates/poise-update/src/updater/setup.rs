@@ -33,7 +33,12 @@ const INSTALL_TIMEOUT_MS: u32 = 10 * 60_000;
 /// 以管理员身份运行安装程序（系统会弹出权限提示）并等它结束。
 pub fn run_installer(installer: &Path, owner: isize) -> Result<(), Failure> {
     let file = WideString::new(&installer.to_string_lossy());
-    let params = WideString::new(INSTALLER_ARGS);
+    // 安装日志写在安装包旁边（用户自己的目录里）：静默安装失败时只有退出码，原因要看它。
+    let log = installer.with_extension("log");
+    let params = WideString::new(&format!(
+        "{INSTALLER_ARGS} \"/LOG={}\"",
+        log.to_string_lossy()
+    ));
     let mut info = SHELLEXECUTEINFOW {
         cbSize: size_of::<SHELLEXECUTEINFOW>() as u32,
         fMask: SEE_MASK_NOCLOSEPROCESS | SEE_MASK_NOASYNC,
@@ -68,6 +73,7 @@ pub fn run_installer(installer: &Path, owner: isize) -> Result<(), Failure> {
     if code == 0 {
         Ok(())
     } else {
+        log::warn!("安装没有完成，安装日志：{}", log.display());
         Err(Failure::Install(code))
     }
 }

@@ -62,6 +62,25 @@ impl BiosState {
 }
 
 impl Dell {
+    /// 核对 BIOS 此刻的散热模式还是不是上次写的：不是（睡眠醒来后 BIOS 改了）就重写，不当成用户换的。
+    pub(super) fn recheck(&mut self) -> Result<bool, String> {
+        let Some(wrote) = self.wrote else {
+            return Ok(false);
+        };
+        let awcc = self.awcc.as_ref().ok_or("AWCC 接口不可用")?;
+        let now = BiosState::read(awcc).thermal();
+        if now.is_none_or(|t| t == wrote) {
+            return Ok(false);
+        }
+        log::info!(
+            "醒来后散热模式变成了 {:#x}，改回 {:#x}",
+            now.map_or(0, Thermal::raw),
+            wrote.raw()
+        );
+        self.wrote = None;
+        self.switch(|_| wrote, false)
+    }
+
     /// Poise 的模式对应的散热目标。
     pub(super) fn target(&self, mode: Mode, on_battery: bool) -> Thermal {
         match mode {

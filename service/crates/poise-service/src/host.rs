@@ -16,7 +16,7 @@ use crate::config::RunConfig;
 use crate::runtime::StopReason;
 use crate::{logging, runtime};
 
-pub const SERVICE_NAME: &str = "Poise";
+pub use poise_protocol::SERVICE_NAME;
 
 define_windows_service!(ffi_service_main, service_main);
 
@@ -27,9 +27,19 @@ pub fn run_as_service() -> windows_service::Result<()> {
 
 fn service_main(_args: Vec<OsString>) {
     let cfg = RunConfig::service();
-    // 先建好数据目录（只有管理员可写），首次启动的日志才有地方写。失败时由 Engine 报告。
-    let _ = paths::ensure_dir(&cfg.data_dir, true);
+    // 先建好数据目录、收紧权限，再打开里面的任何文件（日志也在里面）：收紧之前打开的话，别人事先放的
+    // 链接、伪造的文件已经以 SYSTEM 打开了。处理了什么等日志打开后再记。
+    let secured = paths::ensure_dir(&cfg.data_dir, true);
     logging::init(&cfg.data_dir, false);
+    match secured {
+        Ok(notes) => notes.iter().for_each(|n| log::warn!("{n}")),
+        Err(e) => {
+            // 收紧不了就不能信里面的记录（变更日志会以 SYSTEM 写回注册表）：不启动。
+            log::error!("收紧数据目录权限失败，不按里面的记录做事，服务不启动：{e}");
+            logging::flush();
+            return;
+        }
+    }
     if let Err(e) = run(cfg) {
         log::error!("服务异常退出：{e:#}");
     }
@@ -48,7 +58,13 @@ fn status(state: ServiceState) -> ServiceStatus {
         },
         exit_code: ServiceExitCode::Win32(0),
         checkpoint: 0,
-        wait_hint: Duration::from_secs(10),
+        // 停止时要撤销调整、还原硬件模式（电源最多等 10 秒、散热 5 秒、一键清理 10 秒……）：预计时间给足，
+        // 控制程序（net stop、安装程序）不会等不及就当成停止失败。
+        wait_hint: Duration::from_secs(if state == ServiceState::StopPending {
+            60
+        } else {
+            10
+        }),
         process_id: None,
     }
 }
@@ -72,9 +88,15 @@ fn run(cfg: RunConfig) -> anyhow::Result<()> {
     let result = runtime::run(cfg, rx, || {
         let _ = handle.set_service_status(status(ServiceState::StopPending));
     });
-    // 异常退出时报告非零的退出码，服务管理器据此按"失败"处理（自动重启，见 `install`）。
+    // 异常退出时报告非零的退出码，服务管理器据此按"失败"处理（自动重启，见 `install`）。正常停止必须报告
+    // 0：`ServiceSpecific(0)` 也算失败（Win32 退出码是"服务特定错误"），停止后 5 秒又会被拉起来。
+    let exit_code = if result.is_err() {
+        ServiceExitCode::ServiceSpecific(1)
+    } else {
+        ServiceExitCode::Win32(0)
+    };
     handle.set_service_status(ServiceStatus {
-        exit_code: ServiceExitCode::ServiceSpecific(u32::from(result.is_err())),
+        exit_code,
         ..status(ServiceState::Stopped)
     })?;
     result

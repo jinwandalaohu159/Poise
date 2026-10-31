@@ -127,10 +127,13 @@ fn read_ui_file() -> UiFile {
     {
         return file.clone();
     }
-    let file: UiFile = std::fs::read_to_string(&path)
+    let read: Option<UiFile> = std::fs::read_to_string(&path)
         .ok()
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_default();
+        .and_then(|s| serde_json::from_str(&s).ok());
+    // 读不出（界面正在写、文件刚被换掉）时这次用默认值，但不记住：下次再读。
+    let Some(file) = read else {
+        return UiFile::default();
+    };
     *cache = modified.map(|at| (at, file.clone()));
     file
 }

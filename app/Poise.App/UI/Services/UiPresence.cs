@@ -20,6 +20,7 @@ public sealed class UiPresence : IDisposable
     private readonly DispatcherQueueTimer _heartbeat;
     private bool _main;
     private bool _flyout;
+    private bool _reporting;
 
     public UiPresence(StatusMonitor status, PoiseApi api, DispatcherQueue dispatcher)
     {
@@ -60,8 +61,8 @@ public sealed class UiPresence : IDisposable
         {
             _heartbeat.Stop();
         }
-        ReportMain();
         Update(wasVisible);
+        ReportMain();
         MainVisibilityChanged?.Invoke();
     }
 
@@ -78,6 +79,11 @@ public sealed class UiPresence : IDisposable
 
     private void Update(bool wasVisible)
     {
+        // 先通知显示出来了（连接立即重试，不等重连间隔），再查状态、上报。
+        if (!wasVisible && AnyVisible)
+        {
+            AnyShown?.Invoke();
+        }
         if (wasVisible != AnyVisible)
         {
             // 变成显示时立即查一次：面板一弹出就是最新的。
@@ -87,14 +93,16 @@ public sealed class UiPresence : IDisposable
         {
             AllHidden?.Invoke();
         }
-        else if (!wasVisible && AnyVisible)
-        {
-            AnyShown?.Invoke();
-        }
     }
 
     private async void ReportMain()
     {
+        // 上一次还没回来（服务忙）：不再排一次，下次心跳再报。
+        if (_reporting)
+        {
+            return;
+        }
+        _reporting = true;
         try
         {
             await _api.SetUiVisibleAsync(_main);
@@ -102,6 +110,10 @@ public sealed class UiPresence : IDisposable
         catch (Exception e) when (e is ServiceUnavailableException or ServiceErrorException)
         {
             // 服务没在运行：状态区会显示"未连接"。
+        }
+        finally
+        {
+            _reporting = false;
         }
     }
 

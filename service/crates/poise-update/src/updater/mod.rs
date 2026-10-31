@@ -13,7 +13,7 @@ mod window;
 use std::sync::Arc;
 
 use poise_platform::win::wide::WideString;
-use windows::Win32::Foundation::{ERROR_ALREADY_EXISTS, GetLastError};
+use windows::Win32::Foundation::{ERROR_ACCESS_DENIED, ERROR_ALREADY_EXISTS, GetLastError};
 use windows::Win32::System::Threading::CreateMutexW;
 
 use args::Args;
@@ -29,9 +29,17 @@ pub fn run() {
     // 同一时间只有一个更新助手（两处点了"更新"、另一个用户也在更新）：两个同时下载、同时运行安装程序
     // 会互相打断。互斥体在进程整个生命周期内持有（不关闭句柄）。
     let name = WideString::new(r"Global\Poise.Updater");
-    // SAFETY: 名称以 NUL 结尾；随后立即读取它的错误码。
-    let _instance = unsafe { CreateMutexW(None, true, name.as_pcwstr()) };
-    if unsafe { GetLastError() } == ERROR_ALREADY_EXISTS {
+    // SAFETY: 名称以 NUL 结尾；成功时随后立即读取它的错误码。
+    let instance = unsafe { CreateMutexW(None, true, name.as_pcwstr()) };
+    // 已经有了（ERROR_ALREADY_EXISTS），或者是另一个用户的更新助手建的、这个用户打不开（拒绝访问）：
+    // 都是已经有一个在运行。
+    let running = match &instance {
+        // SAFETY: 读取上一个调用的错误码。
+        Ok(_) => (unsafe { GetLastError() }) == ERROR_ALREADY_EXISTS,
+        Err(e) => e.code() == ERROR_ACCESS_DENIED.to_hresult(),
+    };
+    let _instance = instance;
+    if running {
         log::info!("已经有一个更新助手在运行，这个退出");
         return;
     }

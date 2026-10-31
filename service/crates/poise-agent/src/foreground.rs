@@ -20,8 +20,8 @@ const REMEMBER: usize = 4;
 #[derive(Default)]
 pub struct LastForeground {
     recent: VecDeque<Pid>,
-    /// 最近几个程序的名字（只留 `recent` 里的）。
-    names: RefCell<HashMap<Pid, String>>,
+    /// 最近几个程序的路径和名字（只留 `recent` 里的）。
+    names: RefCell<HashMap<Pid, (String, String)>>,
 }
 
 impl LastForeground {
@@ -52,12 +52,16 @@ impl LastForeground {
             .find_map(|&pid| Some((pid, self.name_of(pid)?)))
     }
 
+    /// 每次都核对进程现在的路径：它退出后进程号可能已经给了别的程序，不能把"全速"给错了程序。
     fn name_of(&self, pid: Pid) -> Option<String> {
-        if let Some(name) = self.names.borrow().get(&pid) {
+        let path = image_path(pid)?;
+        if let Some((known, name)) = self.names.borrow().get(&pid)
+            && *known == path
+        {
             return Some(name.clone());
         }
-        let name = friendly_name(&image_path(pid)?);
-        self.names.borrow_mut().insert(pid, name.clone());
+        let name = friendly_name(&path);
+        self.names.borrow_mut().insert(pid, (path, name.clone()));
         Some(name)
     }
 }

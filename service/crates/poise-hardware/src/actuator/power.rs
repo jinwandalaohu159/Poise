@@ -80,6 +80,11 @@ impl PowerWriter {
         self.queue.is_empty()
     }
 
+    /// 取走写失败了的位置（见 `Changes::settle`）。
+    pub fn take_failed(&self) -> Vec<Target> {
+        self.queue.take_failed()
+    }
+
     /// 别的线程读电源设置时用：还排着的写入当作已经写下（见 [`PendingWrites`]）。
     pub fn pending(&self) -> PendingWrites {
         PendingWrites::new(self.queue.clone())
@@ -159,13 +164,15 @@ fn write_power(store: &dyn SettingStore, queue: &PowerQueue) -> bool {
     }
     let started = Instant::now();
     store.begin_batch();
+    let mut failed = Vec::new();
     for (target, value) in &writes {
         if let Err(e) = store.write(target, value) {
             log::warn!("写入电源设置 {target:?} 失败：{e}");
+            failed.push(target.clone());
         }
     }
     let activate = store.end_batch_deferred();
-    queue.done(writes.len());
+    queue.done(writes.len(), failed);
     if started.elapsed() >= SLOW_WRITE {
         log::info!(
             "写入 {} 项电源设置用了 {} ms（电源服务忙）",

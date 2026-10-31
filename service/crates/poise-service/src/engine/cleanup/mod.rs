@@ -3,12 +3,11 @@
 
 mod job;
 
-use std::collections::HashMap;
-
 use poise_core::classify::Classification;
 use poise_core::cleanup::{
     self, CleanupConfig, CleanupPlan, CleanupStep, Grown, LeakSuspect, OverviewInput, PlanInput,
 };
+use poise_core::fast_hash::HashMap;
 use poise_core::model::{Millis, Pid, Snapshot};
 use poise_core::safety::Trigger;
 use poise_protocol::{

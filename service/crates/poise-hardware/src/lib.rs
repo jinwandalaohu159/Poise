@@ -18,7 +18,7 @@ pub mod sensors;
 pub mod storage;
 
 use std::path::Path;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use poise_core::journal::{Journal, JournalError};
 use poise_core::model::Millis;
@@ -42,6 +42,8 @@ const BIOS_TIMEOUT: Duration = Duration::from_secs(5);
 const POWER_TIMEOUT: Duration = Duration::from_secs(10);
 /// 预读交给执行线程这么久还没读完时记一条日志（电源服务卡住了）。
 const PREFETCH_OVERDUE: Duration = Duration::from_secs(15);
+/// 切换散热模式失败后过这么久再切一次。
+const THERMAL_RETRY: Duration = Duration::from_secs(30);
 
 /// 应用模式的结果。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -72,6 +74,8 @@ pub struct Hardware {
     applied: Option<(Mode, bool)>,
     /// 上次要求的风扇加速（百分比，0 = 不管；BIOS 执行线程记着真正写入的，见 `actuator::bios`）。
     requested_boost: u8,
+    /// 切换散热模式失败后，什么时候再切一次。
+    thermal_retry_at: Option<Instant>,
     /// 处理器的组成，电源计划按它区分大小核。
     cpu: power::CpuShape,
     /// Windows 平衡计划在这台电脑上的出厂值（均衡模式与所有模式的底线按它设置）。
@@ -97,6 +101,7 @@ impl Hardware {
             memory: memory::read_memory(),
             applied: None,
             requested_boost: 0,
+            thermal_retry_at: None,
             cpu,
             baseline: power::Baseline::read(),
         }
@@ -126,6 +131,27 @@ impl Hardware {
         }
         self.actuator.fan_boost(percent);
         self.requested_boost = percent;
+    }
+
+    /// 电脑睡眠醒来：核对散热模式和风扇加速还是不是 Poise 写的（BIOS 可能改了），不是就重新写入。
+    pub fn resumed(&self) {
+        if self.applied.is_some() || self.requested_boost > 0 {
+            self.actuator.recheck_bios();
+        }
+    }
+
+    /// 切换散热模式失败了（WMI 一时不可用）：过 [`THERMAL_RETRY`] 再切一次，不等到下次换模式。
+    fn retry_failed_thermal(&mut self) {
+        if self.actuator.take_thermal_failure() {
+            self.thermal_retry_at
+                .get_or_insert_with(|| Instant::now() + THERMAL_RETRY);
+        }
+        if let (Some(at), Some((mode, on_battery))) = (self.thermal_retry_at, self.applied)
+            && Instant::now() >= at
+        {
+            self.thermal_retry_at = None;
+            self.actuator.thermal(mode, on_battery);
+        }
     }
 
     pub fn memory(&self) -> Option<&MemoryInfo> {
@@ -173,6 +199,7 @@ impl Hardware {
         journal: &mut Journal,
         now: Millis,
     ) -> Result<Applied, JournalError> {
+        self.retry_failed_thermal();
         if !self.needs_apply(mode, on_battery) {
             return Ok(Applied::Unchanged);
         }
@@ -214,6 +241,9 @@ impl Hardware {
         self.actuator.restore_bios();
         self.actuator.power().prefetched().clear();
         self.applied = None;
+        // 已经还原了：之前失败的切换不再重试。
+        self.thermal_retry_at = None;
+        let _ = self.actuator.take_thermal_failure();
         self.requested_boost = 0;
     }
 

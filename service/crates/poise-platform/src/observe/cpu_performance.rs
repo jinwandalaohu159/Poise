@@ -61,12 +61,19 @@ impl CpuPerformanceMeter {
                 crate::act::self_tune::responsive_thread();
                 let mut query = None;
                 let mut opened_at: Option<std::time::Instant> = None;
+                let mut misses = 0u32;
                 for () in requests {
                     if query.is_none() && opened_at.is_none_or(|t| t.elapsed() >= REOPEN_EVERY) {
                         opened_at = Some(std::time::Instant::now());
                         query = Query::open();
                     }
                     let reading = query.as_mut().and_then(Query::read);
+                    // 打开了却一直读不出（计数器被重建过）：关掉，按上面的节奏重开。
+                    misses = if reading.is_some() { 0 } else { misses + 1 };
+                    if misses >= REOPEN_AFTER_MISSES {
+                        query = None;
+                        misses = 0;
+                    }
                     if let Ok(mut l) = shared.lock() {
                         *l = reading;
                     }
@@ -112,6 +119,8 @@ struct Query {
 const MIN_INTERVAL: std::time::Duration = std::time::Duration::from_millis(200);
 /// 打不开计数器时，多久再试一次。
 const REOPEN_EVERY: std::time::Duration = std::time::Duration::from_secs(60);
+/// 连续这么多次读不出就关掉重开。
+const REOPEN_AFTER_MISSES: u32 = 10;
 
 impl Query {
     fn open() -> Option<Self> {

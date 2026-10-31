@@ -1,7 +1,6 @@
 //! 进程：每个进程运行稳定后的基线，以及明显超出基线的增长。
 
-use std::collections::{HashMap, HashSet};
-
+use crate::fast_hash::{HashMap, HashSet};
 use serde::{Deserialize, Serialize};
 
 use super::GrowthConfig;

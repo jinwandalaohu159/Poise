@@ -24,11 +24,10 @@ mod program;
 mod reconcile;
 mod trackers;
 
-use std::collections::{HashMap, HashSet};
-
 use crate::action::{ActionKind, ExecError, ExecOutcome};
 use crate::activity::ActivityTracker;
 use crate::classify::Classification;
+use crate::fast_hash::{HashMap, HashSet};
 use crate::model::{Millis, Pid, PriorityClass, ProcessKey, ProcessSample, Snapshot};
 use crate::prefs::Mode;
 
@@ -132,7 +131,7 @@ impl Scheduler {
         let programs = if input.enabled {
             self.judge_programs(input)
         } else {
-            HashMap::new()
+            HashMap::default()
         };
         let focused = programs.values().any(|p| p.focusing);
         let actions = self.diff(input, &programs);

@@ -1,10 +1,8 @@
 //! 后台忙碌：哪些程序（进程树）该让路。
 
-use std::collections::HashMap;
-use std::collections::HashSet;
-
 use super::demand::Pressure;
 use super::load::TreeUsage;
+use crate::fast_hash::{HashMap, HashSet};
 use crate::model::{Millis, ProcessKey};
 
 /// 后台忙碌的判断规则。负载是整棵进程树平滑后的负载（见 `TreeLoad`），短暂的活动本来就不会让它升高。

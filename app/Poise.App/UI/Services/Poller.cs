@@ -34,7 +34,7 @@ public sealed class Poller(AppHost host, TimeSpan interval)
         {
             _timer = DispatcherQueue.GetForCurrentThread().CreateTimer();
             _timer.Interval = interval;
-            _timer.Tick += async (_, _) => await RunAsync();
+            _timer.Tick += async (_, _) => await Guard.RunAsync(RunAsync, "定时刷新");
         }
         if (!_running)
         {

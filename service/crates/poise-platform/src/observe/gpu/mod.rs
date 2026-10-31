@@ -16,7 +16,8 @@ pub use awake::DiscreteActivity;
 use std::time::Instant;
 
 use poise_core::model::Pid;
-use windows::Win32::System::Threading::PROCESS_QUERY_INFORMATION;
+use windows::Win32::Foundation::STILL_ACTIVE;
+use windows::Win32::System::Threading::{GetExitCodeProcess, PROCESS_QUERY_INFORMATION};
 
 use crate::win::handle::{OwnedHandle, open_process};
 use kmt::KernelStats;
@@ -33,8 +34,16 @@ impl GpuMeter {
     /// 进程在上次调用以来的 3D 引擎占用（0～100，多个显卡引擎相加）。
     /// 刚开始测某个进程时还没有可比较的两次采样，返回 None；进程没用显卡时返回 0。
     pub fn usage_3d(&mut self, pid: Pid) -> Option<f32> {
+        // 测着的进程退出了、进程号给了新进程：不能接着用旧进程的句柄（一直读到 0%），重新开始测。
+        if self
+            .current
+            .as_ref()
+            .is_some_and(|p| p.pid == pid && p.exited())
+        {
+            self.current = None;
+        }
         if self.current.as_ref().map(|p| p.pid) != Some(pid) {
-            let reused = self.previous.take().filter(|p| p.pid == pid);
+            let reused = self.previous.take().filter(|p| p.pid == pid && !p.exited());
             self.previous = self.current.take();
             self.current = match reused {
                 // 留着的测量上次读数已经是很久以前：重新起算，下次读到的才是此刻的占用。
@@ -98,6 +107,17 @@ enum Source {
 }
 
 impl Probe {
+    /// 测着的进程已经退出（只有直接问显卡内核时拿着它的句柄；按性能计数器测时按进程号找，不会错）。
+    fn exited(&self) -> bool {
+        let Source::Kernel { handle, .. } = &self.source else {
+            return false;
+        };
+        let mut code = 0u32;
+        // SAFETY: 句柄有查询权限，输出到本地变量。
+        unsafe { GetExitCodeProcess(handle.raw(), &mut code) }.is_ok()
+            && code != STILL_ACTIVE.0 as u32
+    }
+
     fn read(&mut self, kernel: Option<&KernelStats>) -> Option<f32> {
         match &mut self.source {
             Source::Kernel { handle, last } => {

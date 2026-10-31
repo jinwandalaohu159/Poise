@@ -1,10 +1,9 @@
 //! 把用户选择的模式换算成具体模式："自动"按负载、空闲、供电决定；
 //! 机型不支持极限模式时按全力处理。游戏时的目标模式也在这里换算。
 
-use std::collections::HashMap;
-
 use poise_core::auto_mode::AutoInput;
 use poise_core::classify::Classification;
+use poise_core::fast_hash::HashMap;
 use poise_core::model::{Millis, Pid, Snapshot};
 use poise_core::prefs::Mode;
 

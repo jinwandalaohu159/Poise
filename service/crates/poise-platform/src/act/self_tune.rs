@@ -17,7 +17,7 @@ use windows::Win32::System::Threading::{
     SetPriorityClass, SetProcessDefaultCpuSets, SetThreadInformation, SetThreadPriority,
     SetThreadSelectedCpuSets, THREAD_POWER_THROTTLING_CURRENT_VERSION,
     THREAD_POWER_THROTTLING_EXECUTION_SPEED, THREAD_POWER_THROTTLING_STATE,
-    THREAD_PRIORITY_HIGHEST, THREAD_PRIORITY_NORMAL, ThreadPowerThrottling,
+    THREAD_PRIORITY_HIGHEST, ThreadPowerThrottling,
 };
 
 use crate::observe::topology::CpuTopology;
@@ -65,28 +65,6 @@ pub fn responsive_thread() {
     }
 }
 
-/// 撤销 [`responsive_thread`]：当前线程回到和进程一样（低优先级、降频、只在小核）。
-/// 只在少数时候需要及时的线程（托盘代理处理前台切换）用完后调用。
-pub fn relaxed_thread() {
-    // SAFETY: 只作用于当前线程，参数为本地结构体；空的核心列表表示跟随进程的设置。
-    unsafe {
-        let me = GetCurrentThread();
-        let _ = SetThreadPriority(me, THREAD_PRIORITY_NORMAL);
-        let _ = SetThreadSelectedCpuSets(me, &[]);
-        let state = THREAD_POWER_THROTTLING_STATE {
-            Version: THREAD_POWER_THROTTLING_CURRENT_VERSION,
-            ControlMask: 0,
-            StateMask: 0,
-        };
-        let _ = SetThreadInformation(
-            me,
-            ThreadPowerThrottling,
-            &state as *const _ as *const c_void,
-            size_of::<THREAD_POWER_THROTTLING_STATE>() as u32,
-        );
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use windows::Win32::System::Threading::GetThreadPriority;
@@ -103,15 +81,6 @@ mod tests {
         .join()
         .unwrap();
         assert_eq!(raised, THREAD_PRIORITY_HIGHEST.0);
-        let relaxed = std::thread::spawn(|| {
-            responsive_thread();
-            relaxed_thread();
-            // SAFETY: 读取当前线程的优先级。
-            unsafe { GetThreadPriority(GetCurrentThread()) }
-        })
-        .join()
-        .unwrap();
-        assert_eq!(relaxed, 0);
         // SAFETY: 同上。
         assert_eq!(unsafe { GetThreadPriority(GetCurrentThread()) }, 0);
     }

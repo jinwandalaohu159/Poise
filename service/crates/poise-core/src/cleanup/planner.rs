@@ -1,9 +1,8 @@
 //! 清理计划：把"发现的问题"变成"可以执行的步骤"，按进程类型选动作。
 
-use std::collections::{HashMap, HashSet};
-
 use crate::action::Action;
 use crate::classify::{Classification, Role};
+use crate::fast_hash::{HashMap, HashSet};
 use crate::model::{Pid, ProcessKey, ProcessSample, Snapshot};
 use crate::safety::{SafetyGuard, Trigger};
 
@@ -115,7 +114,7 @@ pub fn plan(cfg: &CleanupConfig, input: &PlanInput) -> CleanupPlan {
                 .map(|s| (s.key, CleanupReason::Leak(s.metric))),
         )
         .collect();
-    let mut seen_services = HashSet::new();
+    let mut seen_services = HashSet::default();
     let mut manual_pending = 0;
 
     for p in &input.snapshot.processes {
@@ -340,7 +339,7 @@ mod tests {
         };
         let mut windowed = class(Role::UserApp);
         windowed.has_visible_window = true;
-        let classes = HashMap::from([
+        let classes = HashMap::from_iter([
             (
                 1,
                 class(Role::ServiceChild {
@@ -423,7 +422,7 @@ mod tests {
             processes: vec![sample(1, "audiodg.exe", 20)],
             ..Default::default()
         };
-        let classes = HashMap::from([(
+        let classes = HashMap::from_iter([(
             1,
             class(Role::ServiceChild {
                 service: "Audiosrv".into(),
@@ -447,7 +446,7 @@ mod tests {
                 service: "Audiosrv".into(),
             })
         };
-        let classes = HashMap::from([(1, svc()), (2, svc())]);
+        let classes = HashMap::from_iter([(1, svc()), (2, svc())]);
         let p = plan(
             &CleanupConfig::default(),
             &input(&snap, &classes, &[], Trigger::Manual, false),
@@ -462,7 +461,7 @@ mod tests {
             processes: vec![sample(3, "helper.exe", 50)],
             ..Default::default()
         };
-        let classes = HashMap::from([(3, class(Role::UserApp))]);
+        let classes = HashMap::from_iter([(3, class(Role::UserApp))]);
         let grown = [Grown {
             key: ProcessKey { pid: 3, created: 1 },
             change: Change {

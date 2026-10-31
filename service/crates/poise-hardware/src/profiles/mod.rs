@@ -45,6 +45,12 @@ pub trait MachineProfile: Send {
     /// 回到 Poise 接管之前的散热模式（Poise 退出、服务停止时调用）。没有接管时不做任何事。
     fn restore_thermal_mode(&mut self) {}
 
+    /// 核对 BIOS 此刻的散热模式还是不是 Poise 写的（睡眠醒来后 BIOS 可能改了）：不是就重写，不当成用户
+    /// 换的。返回是否写了 BIOS。没有接管时不做任何事。
+    fn recheck_thermal_mode(&mut self) -> Result<bool, String> {
+        Ok(false)
+    }
+
     /// 机型极限模式（[`Mode::Vendor`]）的标识，例如 "dell_g_mode"；界面按它显示名称。
     /// 不支持时为 None，界面不显示这一档。
     fn vendor_mode(&self) -> Option<&'static str> {

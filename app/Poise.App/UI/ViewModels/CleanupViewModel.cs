@@ -104,7 +104,7 @@ public sealed partial class CleanupViewModel : ObservableObject, IDisposable
     /// </summary>
     private static void Reconcile(ObservableCollection<ProcessRowItem> target, IReadOnlyList<ProcessRowView> rows)
     {
-        var existing = target.ToDictionary(i => i.Pid);
+        var existing = target.FirstByKey(i => i.Pid);
         var items = rows.Select(r =>
         {
             if (existing.TryGetValue(r.Pid, out var item))

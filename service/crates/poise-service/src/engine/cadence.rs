@@ -4,7 +4,9 @@
 //! - 刚有变化（前台切换、全屏切换、调整了程序、决定变了）后的一会儿、界面显示着：每 [`TICK`]；
 //! - 平静时，包括游戏玩得正稳、重点程序稳定地干活、全屏看视频：每 [`CALM_TICK`]——需要判断的都已判断完，
 //!   负载按半分钟平滑，采得勤也不会更早做出决定；
-//! - 用户离开、没在玩游戏、界面也没显示：每 [`IDLE_TICK`]。
+//! - 用户离开、没在玩游戏、界面也没显示：每 [`IDLE_TICK`]；
+//! - Poise 暂停着（托盘代理不在）、界面也没显示：每 [`PAUSED_TICK`]——不调度，只看着增长趋势；托盘代理一上报
+//!   就立即恢复（见 `requests`，那时重新采一次），之后最多一个间隔回到平常的节奏。
 //!
 //! 前台切换、全屏切换不等采样，立即重新调度（见 `cycle`）。所有判断都按时间而不是轮数，间隔变了结果不变。
 
@@ -26,6 +28,9 @@ const CALM_AFTER_MS: Millis = 20_000;
 /// 没人在用电脑时的采样间隔。
 const IDLE_TICK: Duration = Duration::from_secs(6);
 
+/// 暂停着、界面也没显示时的采样间隔（不能太长：恢复后要等这一轮过去才回到平常的节奏）。
+const PAUSED_TICK: Duration = Duration::from_secs(10);
+
 /// 用户多久不操作算离开。
 const AWAY_AFTER_MS: Millis = 2 * 60_000;
 
@@ -35,14 +40,15 @@ const WAITING_TICK: Duration = Duration::from_millis(500);
 impl Engine {
     /// 下一轮采样前等多久。
     pub fn next_tick_in(&self) -> Duration {
-        if self.mode_attempts.waiting() {
+        let now = self.now();
+        if self.mode_attempts.waiting(now) {
             return WAITING_TICK;
         }
-        let now = self.now();
         let gaming = self.view.as_ref().is_some_and(|v| v.game.is_some());
         let away = self.session.current(now).idle_ms >= AWAY_AFTER_MS || self.paused;
         interval(Moment {
             ui: self.session.ui_visible(now),
+            paused: self.paused,
             away,
             gaming,
             changing: now.saturating_sub(self.last_change_at) < CALM_AFTER_MS,
@@ -57,13 +63,17 @@ struct Moment {
     ui: bool,
     /// 用户离开了（或 Poise 暂停）。
     away: bool,
+    /// Poise 暂停着。
+    paused: bool,
     gaming: bool,
     /// 刚有变化。
     changing: bool,
 }
 
 fn interval(m: Moment) -> Duration {
-    if m.away && !m.gaming && !m.ui {
+    if m.paused && !m.ui {
+        PAUSED_TICK
+    } else if m.away && !m.gaming && !m.ui {
         IDLE_TICK
     } else if m.ui || m.changing {
         TICK
@@ -105,5 +115,13 @@ mod tests {
             }),
             CALM_TICK
         );
+        // 暂停着：很慢；界面开着时照常给界面数据。
+        let paused = Moment {
+            paused: true,
+            away: true,
+            ..calm
+        };
+        assert_eq!(interval(paused), PAUSED_TICK);
+        assert_eq!(interval(Moment { ui: true, ..paused }), TICK);
     }
 }

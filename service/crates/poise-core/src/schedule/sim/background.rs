@@ -60,13 +60,19 @@ fn replay_background_work_yields_only_when_someone_needs_the_processor() {
         sim.run_for(10_000);
     }
     assert!(sim.is_lowered(UPDATER));
-    assert_eq!(sim.adjustments_per_process(), HashMap::from([(UPDATER, 1)]));
+    assert_eq!(
+        sim.adjustments_per_process(),
+        HashMap::from_iter([(UPDATER, 1)])
+    );
 
     // 用户离开电脑：持续没有需求。它还在忙：不来回调整（"低于正常"在没人抢处理器时不影响它的速度）。
     sim.proc_mut(USER_APP).cpu_pct = 0.0;
     sim.run_for(2 * 60_000);
     assert!(sim.is_lowered(UPDATER));
-    assert_eq!(sim.adjustments_per_process(), HashMap::from([(UPDATER, 1)]));
+    assert_eq!(
+        sim.adjustments_per_process(),
+        HashMap::from_iter([(UPDATER, 1)])
+    );
     // 它的活干完了：恢复。
     sim.proc_mut(UPDATER).cpu_pct = 0.0;
     sim.run_for(2 * 60_000);
@@ -177,7 +183,7 @@ fn marked_programs_are_protected_in_the_background() {
     }));
     assert_eq!(
         sim.adjustments_per_process(),
-        HashMap::from([(2, 1), (3, 1)])
+        HashMap::from_iter([(2, 1), (3, 1)])
     );
     assert!(sim.actions_on(1).is_empty());
 }

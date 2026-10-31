@@ -3,6 +3,7 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Navigation;
 using Poise.App.UI.Controls;
+using Poise.App.UI.Services;
 using Poise.Core.Ipc;
 using Poise.Core.Localization;
 using Poise.Core.Presentation;
@@ -59,7 +60,9 @@ public sealed partial class AppsPage : Page
         }
     }
 
-    private async void OnAdd(object sender, RoutedEventArgs e)
+    private async void OnAdd(object sender, RoutedEventArgs e) => await Guard.RunAsync(AddAsync, "添加程序");
+
+    private async Task AddAsync()
     {
         var picker = new FileOpenPicker { SuggestedStartLocation = PickerLocationId.ComputerFolder };
         picker.FileTypeFilter.Add(".exe");

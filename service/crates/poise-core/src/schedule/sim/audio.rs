@@ -18,7 +18,7 @@ fn programs_playing_audio_are_never_touched_even_when_busy() {
     sim.foreground = Some(1);
     sim.run_for(10 * 60_000);
     // 发声的程序忙也不让路；只有真正输出声音的进程被保护（一次），其余进程不动。
-    let expected: HashMap<Pid, usize> = [(3, 1)].into();
+    let expected: HashMap<Pid, usize> = HashMap::from_iter([(3, 1)]);
     assert_eq!(sim.adjustments_per_process(), expected);
     assert!(sim.only_protected(3));
 }
@@ -43,7 +43,7 @@ fn short_audio_pauses_do_not_flip_the_state() {
         sim.run_for(30_000);
     }
     assert!(sim.is_protected(2));
-    assert_eq!(sim.adjustments_per_process(), HashMap::from([(2, 1)]));
+    assert_eq!(sim.adjustments_per_process(), HashMap::from_iter([(2, 1)]));
     // 停了很久，又一直在后台占处理器，而用户正在干活：按普通程序的规则让路。
     sim.proc_mut(2).audio = false;
     sim.proc_mut(1).cpu_pct = 50.0;

@@ -31,11 +31,12 @@ pub fn dev_data_dir() -> PathBuf {
 
 /// 创建数据目录。`restrict` 为真时把权限收紧为"只有管理员可写"，并清掉别人放进去的东西
 /// （见 [`super::secure_dir`]），防止普通用户篡改配置、诱导以 SYSTEM 运行的服务做事。
-pub fn ensure_dir(dir: &PathBuf, restrict: bool) -> std::io::Result<()> {
+/// 建好目录；`restrict` 时收紧权限（见 [`super::secure_dir`]），返回处理了什么（要记进日志的话）。
+pub fn ensure_dir(dir: &PathBuf, restrict: bool) -> std::io::Result<Vec<String>> {
     if restrict {
         super::secure_dir::secure(dir)
     } else {
-        std::fs::create_dir_all(dir)
+        std::fs::create_dir_all(dir).map(|()| Vec::new())
     }
 }
 

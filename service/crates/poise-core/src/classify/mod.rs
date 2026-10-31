@@ -3,9 +3,8 @@
 //! 角色只靠系统属性判断；游戏只靠行为判断（全屏、正在用显卡渲染）。用到的名单（反作弊、虚拟机、
 //! 不参与调度）都在 [`crate::known`]，只用于安全。系统进程一律交给系统，调度只管用户程序。
 
-use std::collections::{HashMap, HashSet};
-
 use crate::activity::ActivityTracker;
+use crate::fast_hash::{HashMap, HashSet};
 use crate::model::{Millis, Pid, SessionState, Snapshot};
 use crate::prefs::{AppPreference, Preferences};
 

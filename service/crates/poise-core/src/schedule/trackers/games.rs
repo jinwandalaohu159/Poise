@@ -1,9 +1,8 @@
 //! 正在玩的游戏。
 
-use std::collections::{HashMap, HashSet};
-
 use crate::activity::ActivityTracker;
 use crate::classify::Classification;
+use crate::fast_hash::{HashMap, HashSet};
 use crate::model::{Millis, Pid, ProcessKey, Snapshot};
 use crate::prefs::AppPreference;
 
@@ -53,7 +52,7 @@ impl GameTracker {
         now: Millis,
         confirm_ms: Millis,
     ) {
-        let mut seen = HashSet::new();
+        let mut seen = HashSet::default();
         for p in &snap.processes {
             let key = p.facts.key;
             let Some(c) = classes.get(&key.pid) else {
@@ -74,6 +73,10 @@ impl GameTracker {
             let inherited = c.preference == AppPreference::Game && c.root_pid != key.pid;
             if c.is_game && !marked && !inherited {
                 let (since, last) = self.candidates.entry(key).or_insert((now, now));
+                // 中间断开太久（电脑睡着了）：重新起算，睡着的那段不算"持续像游戏"。
+                if now.saturating_sub(*last) > Self::GAP_MS {
+                    *since = now;
+                }
                 *last = now;
                 if now.saturating_sub(*since) >= confirm_ms
                     && activity.usage(&key).core_pct >= Self::CONFIRM_MIN_PCT

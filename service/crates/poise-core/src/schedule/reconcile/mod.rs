@@ -8,9 +8,8 @@
 
 mod retry;
 
-use std::collections::{HashMap, HashSet};
-
 use crate::action::{Action, ExecError, ExecOutcome};
+use crate::fast_hash::{HashMap, HashSet};
 use crate::model::{Millis, PriorityClass, ProcessKey};
 
 use super::desired::Desired;

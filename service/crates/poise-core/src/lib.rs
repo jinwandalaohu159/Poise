@@ -7,6 +7,7 @@ pub mod auto_mode;
 pub mod classify;
 pub mod cleanup;
 pub mod diagnose;
+pub mod fast_hash;
 pub mod journal;
 pub mod known;
 pub mod model;

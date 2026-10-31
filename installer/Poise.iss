@@ -68,6 +68,8 @@ english.UserFolder=Please don't install Poise inside a user folder (such as Desk
 chinesesimp.ServiceFailed=Poise 服务没有安装成功（代码 %1）。%n%n可以重新运行安装程序再试一次。
 english.ServiceFailed=The Poise service couldn't be installed (code %1).%n%nYou can run Setup again to retry.
 chinesesimp.RevertFailed=有系统修改没能还原，修改记录已保留在 %1。%n%n重启电脑后重新安装 Poise，再卸载一次即可重试还原。
+chinesesimp.ServiceStuck=Poise 服务停不下来，安装没有进行，原来的版本保持不变。%n%n请稍后再试，或者重启电脑后再安装。
+english.ServiceStuck=The Poise service didn't stop, so nothing was installed and the current version is unchanged.%n%nPlease try again later, or restart your PC and install again.
 english.RevertFailed=Some system changes couldn't be reverted. The record of them is kept in %1.%n%nRestart your PC, reinstall Poise and uninstall it again to retry.
 
 [Tasks]
@@ -95,6 +97,22 @@ const
   LegacyUninstallKey = 'SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Poise';
   { 服务没有安装成功时安装程序的退出码（更新助手据此报告失败）。 }
   ServiceFailedExitCode = 10;
+  { 等服务停下最多这么久（秒）：停止时要撤销调整、还原硬件模式，电源服务慢时要十几秒。 }
+  StopWaitSeconds = 60;
+  SC_MANAGER_CONNECT = $0001;
+  SERVICE_QUERY_STATUS = $0004;
+  SERVICE_STOPPED = 1;
+
+type
+  TServiceStatus = record
+    dwServiceType: Longword;
+    dwCurrentState: Longword;
+    dwControlsAccepted: Longword;
+    dwWin32ExitCode: Longword;
+    dwServiceSpecificExitCode: Longword;
+    dwCheckPoint: Longword;
+    dwWaitHint: Longword;
+  end;
 
 var
   { 安装前停止了正在运行的服务：安装没有完成时重新启动它。 }
@@ -102,6 +120,15 @@ var
   Installed: Boolean;
   ServiceExitCode: Integer;
   Reverted: Boolean;
+
+function OpenSCManager(MachineName, DatabaseName: String; Access: Longword): THandle;
+  external 'OpenSCManagerW@advapi32.dll stdcall';
+function OpenService(Manager: THandle; ServiceName: String; Access: Longword): THandle;
+  external 'OpenServiceW@advapi32.dll stdcall';
+function QueryServiceStatus(Service: THandle; var Status: TServiceStatus): BOOL;
+  external 'QueryServiceStatus@advapi32.dll stdcall';
+function CloseServiceHandle(Handle: THandle): BOOL;
+  external 'CloseServiceHandle@advapi32.dll stdcall';
 
 { 隐藏运行命令行程序并等它结束，返回退出码；没能启动时返回 -1。 }
 function RunHidden(const FileName, Params: String): Integer;
@@ -127,10 +154,51 @@ begin
   RunHidden(System32('taskkill.exe'), '/F /IM poise-agent.exe /IM Poise.exe');
 end;
 
-{ net stop 会等服务真正停止；服务不存在或没在运行时返回非 0。 }
+{ 服务已经停下（或者没有这个服务、查不到）。 }
+function ServiceStopped: Boolean;
+var
+  Manager, Service: THandle;
+  Status: TServiceStatus;
+begin
+  Result := True;
+  Manager := OpenSCManager('', 'ServicesActive', SC_MANAGER_CONNECT);
+  if Manager = 0 then
+    Exit;
+  Service := OpenService(Manager, ServiceName, SERVICE_QUERY_STATUS);
+  if Service <> 0 then begin
+    if QueryServiceStatus(Service, Status) then
+      Result := Status.dwCurrentState = SERVICE_STOPPED;
+    CloseServiceHandle(Service);
+  end;
+  CloseServiceHandle(Manager);
+end;
+
+{ 等服务停下，最多 StopWaitSeconds 秒；返回停下了没有。 }
+function WaitStopped: Boolean;
+var
+  I: Integer;
+begin
+  Result := ServiceStopped;
+  I := 0;
+  while not Result and (I < StopWaitSeconds * 2) do begin
+    Sleep(500);
+    Result := ServiceStopped;
+    I := I + 1;
+  end;
+  Log('服务已停下：' + IntToStr(Ord(Result)));
+end;
+
+{ 停止服务，返回停之前它是否在运行（安装没有完成时据此重新启动它）。net stop 的退出码不作数：
+  服务停得慢时它等不及就报失败，其实服务还在停止中——按服务的状态等它真正停下。
+  先关掉"正常退出也按失败处理"：0.8.0 正常停止时报告的是失败的退出码，不关的话服务管理器 5 秒后
+  又把它拉起来，文件替换不了。新版本 install 时会重新设好。 }
 function StopService: Boolean;
 begin
-  Result := RunHidden(System32('net.exe'), 'stop ' + ServiceName) = 0;
+  Result := not ServiceStopped;
+  if not Result then
+    Exit;
+  RunHidden(System32('sc.exe'), 'failureflag ' + ServiceName + ' 0');
+  RunHidden(System32('net.exe'), 'stop ' + ServiceName);
 end;
 
 { 安装目录只有管理员和系统可写，其他用户只读：所有者（含子项）改为 Administrators，
@@ -178,6 +246,11 @@ begin
   Result := '';
   CloseApps;
   ServiceWasRunning := StopService;
+  if ServiceWasRunning and not WaitStopped then begin
+    { 停不下来：不安装（文件被占着，装到一半会回滚），原来的版本保持不变。 }
+    Result := CustomMessage('ServiceStuck');
+    Exit;
+  end;
   Failure := ProtectDir(ExpandConstant('{app}'));
   if Failure <> '' then
     Result := FmtMessage(CustomMessage('ProtectFailed'), [Failure]);
@@ -206,8 +279,12 @@ end;
 procedure DeinitializeSetup;
 begin
   { 安装失败或被取消（文件已回滚）：让原来的版本继续工作。 }
-  if ServiceWasRunning and not Installed then
+  if ServiceWasRunning and not Installed then begin
+    RunHidden(System32('sc.exe'), 'failureflag ' + ServiceName + ' 1');
+    { 还在停止中时等它停下，否则启动不了。 }
+    WaitStopped;
     RunHidden(System32('net.exe'), 'start ' + ServiceName);
+  end;
 end;
 
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);

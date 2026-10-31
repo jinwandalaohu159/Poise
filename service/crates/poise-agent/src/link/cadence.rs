@@ -12,6 +12,9 @@ pub const KEEPALIVE: Duration = Duration::from_secs(6);
 /// 用户这么久没操作（离开了、锁着屏）时，心跳放慢到保活间隔：人不在时不必每 3 秒采集一次桌面。
 /// 和服务认定"离开"的时间一致。
 pub const AWAY_AFTER_MS: u64 = 2 * 60_000;
+/// 这个会话不是正在用的那个（快速切换用户后切走了、远程连接断开了）时多久看一次：不报也不采集，
+/// 切回来时有会话通知立即上报，这里只是兜底。
+pub const INACTIVE_HEARTBEAT: Duration = Duration::from_secs(30);
 /// 托盘图标的状态每几次心跳刷新一次（和心跳一起醒来，不另外醒）。
 pub const STATUS_EVERY_BEATS: u32 = 3;
 
@@ -30,40 +33,30 @@ pub fn keepalive_due(since_last: Duration, heartbeat: Duration) -> bool {
     since_last + heartbeat / 2 >= KEEPALIVE
 }
 
-/// 连不上服务时的重连间隔：从 3 秒起，每失败一次加倍，最长 30 秒；连上后清零。
-/// 服务没在运行时不必每 3 秒都试一次（每次还要先采集桌面）。
+/// 连不上服务时每 3 秒重连一次（和 0.7.0 一样，不越拉越长）：服务重启、更新后尽快接上——连不上的这段时间
+/// 服务一直暂停着。一次失败的重连只是打开一次管道（先连上才采集桌面），代价很小。
+/// 醒来、解锁、切回这个用户时立即再试（[`Reconnect::now`]）。
 #[derive(Debug, Default)]
 pub struct Reconnect {
-    failures: u32,
     last: Option<Instant>,
 }
 
 impl Reconnect {
-    const FIRST: Duration = Duration::from_secs(3);
-    const MAX: Duration = Duration::from_secs(30);
+    const EVERY: Duration = Duration::from_secs(3);
 
     /// 现在可以再试一次。
     pub fn due(&self, now: Instant) -> bool {
         self.last
-            .is_none_or(|at| now.saturating_duration_since(at) >= self.wait())
+            .is_none_or(|at| now.saturating_duration_since(at) >= Self::EVERY)
     }
 
     pub fn attempted(&mut self, now: Instant) {
         self.last = Some(now);
     }
 
-    pub fn failed(&mut self) {
-        self.failures = self.failures.saturating_add(1);
-    }
-
-    pub fn connected(&mut self) {
-        self.failures = 0;
-    }
-
-    fn wait(&self) -> Duration {
-        Self::FIRST
-            .saturating_mul(1 << self.failures.saturating_sub(1).min(4))
-            .min(Self::MAX)
+    /// 下次不用等，立即再试。
+    pub fn now(&mut self) {
+        self.last = None;
     }
 }
 
@@ -84,23 +77,18 @@ mod tests {
     }
 
     #[test]
-    fn reconnects_back_off_while_the_service_is_down() {
+    fn reconnects_every_few_seconds_and_at_once_when_asked() {
         let start = Instant::now();
         let mut r = Reconnect::default();
         assert!(r.due(start));
-        let mut at = start;
-        let mut waits = Vec::new();
-        for _ in 0..6 {
+        for i in 0..10 {
+            let at = start + Reconnect::EVERY * i;
             r.attempted(at);
-            r.failed();
-            let wait = r.wait();
-            assert!(!r.due(at + wait - Duration::from_millis(1)));
-            assert!(r.due(at + wait));
-            waits.push(wait.as_secs());
-            at += wait;
+            assert!(!r.due(at + Reconnect::EVERY - Duration::from_millis(1)));
+            assert!(r.due(at + Reconnect::EVERY));
         }
-        assert_eq!(waits, [3, 6, 12, 24, 30, 30]);
-        r.connected();
-        assert_eq!(r.wait(), Reconnect::FIRST);
+        r.attempted(start);
+        r.now();
+        assert!(r.due(start));
     }
 }

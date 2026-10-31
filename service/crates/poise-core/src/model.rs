@@ -1,7 +1,6 @@
 //! 进程与系统的观测数据模型。由平台层采集，业务逻辑只读不写。
 
-use std::collections::HashMap;
-
+use crate::fast_hash::HashMap;
 use serde::{Deserialize, Serialize};
 
 pub type Pid = u32;

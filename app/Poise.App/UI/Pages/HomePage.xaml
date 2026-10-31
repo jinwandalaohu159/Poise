@@ -5,7 +5,7 @@
     xmlns:c="using:Poise.App.UI.Controls"
     xmlns:l="using:Poise.App.UI.Localization"
     Background="Transparent"
-    NavigationCacheMode="Required">
+    NavigationCacheMode="Enabled">
 
     <Grid>
         <ScrollViewer x:Name="Scroller" VerticalScrollBarVisibility="Auto">

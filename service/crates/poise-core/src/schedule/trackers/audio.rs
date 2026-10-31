@@ -1,8 +1,7 @@
 //! 发声保持。
 
-use std::collections::HashMap;
-
 use crate::classify::Classification;
+use crate::fast_hash::HashMap;
 use crate::model::{Millis, Pid, ProcessKey, Snapshot};
 
 /// 最近一次发声的时间：按程序（进程树）记，也按真正输出声音的进程记。停声后保持一会儿仍算

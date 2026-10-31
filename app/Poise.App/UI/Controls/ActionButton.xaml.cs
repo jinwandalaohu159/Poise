@@ -1,6 +1,8 @@
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Poise.App.UI.Services;
 using Poise.App.UI.Theme;
+using Poise.Core.Diagnostics;
 
 namespace Poise.App.UI.Controls;
 
@@ -65,6 +67,11 @@ public sealed partial class ActionButton : UserControl
             Show(DoneIcon);
             await Motion.PopAsync(DoneIcon);
             await Task.Delay(900);
+        }
+        catch (Exception ex) when (Guard.Recoverable(ex))
+        {
+            // 按钮的点击是 async void：异常漏出去会直接结束进程。
+            AppLog.Error("操作失败", ex);
         }
         finally
         {

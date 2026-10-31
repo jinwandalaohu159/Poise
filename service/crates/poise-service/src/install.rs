@@ -12,6 +12,7 @@ use std::time::{Duration, Instant};
 
 use poise_platform::persist::paths;
 use poise_platform::settings::user::UserContext;
+use poise_platform::win::handle::image_path;
 use poise_platform::win::task_scheduler;
 use windows_service::service::{
     Service, ServiceAccess, ServiceAction, ServiceActionType, ServiceErrorControl,
@@ -47,7 +48,7 @@ pub fn install() -> anyhow::Result<()> {
     if let Err(e) = restart_on_failure(&service) {
         eprintln!("设置失败后自动重启没有成功：{e}");
     }
-    start(&service)?;
+    start(&service, &exe)?;
     if fresh && let Err(e) = enable_autostart(&exe) {
         // 开机启动没开成不影响使用，用户可以在设置页里再开。
         eprintln!("开机启动没有开启：{e}");
@@ -64,22 +65,22 @@ pub fn install() -> anyhow::Result<()> {
 pub fn uninstall() -> anyhow::Result<()> {
     remove_service()?;
     // 按变更日志还原之前先确认日志是可信的（见 `paths::ensure_dir`）。
-    if let Err(e) = paths::ensure_dir(&paths::service_data_dir(), true) {
-        eprintln!("收紧数据目录权限失败：{e}");
+    match paths::ensure_dir(&paths::service_data_dir(), true) {
+        Ok(notes) => notes.iter().for_each(|n| eprintln!("{n}")),
+        Err(e) => anyhow::bail!("收紧数据目录权限失败，不按里面的记录还原：{e}"),
     }
-    let mut changes = Changes::new(
-        &paths::service_data_dir(),
-        UserContext::current_process_user(),
-        false,
-    );
+    // 程序都要删掉了：开机启动任务先删（还原失败也删，不留下指向已删除程序的任务）。
+    if let Err(e) = task_scheduler::delete_folder(TASK_FOLDER) {
+        eprintln!("删除开机启动任务失败：{e}");
+    }
+    // 按用户保存的修改还原到正在用电脑的用户那里（普通用户输入管理员密码卸载时，本进程是管理员）。
+    let user = UserContext::session_user().or_else(UserContext::current_process_user);
+    let mut changes = Changes::new(&paths::service_data_dir(), user, false);
     let failed = changes.revert_everything();
     anyhow::ensure!(
         failed.is_empty(),
         "以下修改未能还原（记录已保留，可稍后再次运行 uninstall 重试）：{failed:?}"
     );
-    if let Err(e) = task_scheduler::delete_folder(TASK_FOLDER) {
-        eprintln!("删除开机启动任务失败：{e}");
-    }
     println!("Poise 服务已卸载，所有修改都已还原。");
     Ok(())
 }
@@ -117,20 +118,47 @@ fn restart_on_failure(service: &Service) -> windows_service::Result<()> {
     service.set_failure_actions_on_non_crash_failures(true)
 }
 
-fn start(service: &Service) -> anyhow::Result<()> {
-    if service.query_status()?.current_state == ServiceState::Stopped {
-        service.start::<&str>(&[])?;
+/// 启动服务。安装程序刚停过它时可能还在停止中：等它真正停下再启动。已经在运行时看运行的是不是这个
+/// 程序（服务管理器可能已经按新的路径把它拉起来了）：是就算成功，是旧的程序就报错——不报告"已更新并启动"。
+fn start(service: &Service, exe: &Path) -> anyhow::Result<()> {
+    let began = Instant::now();
+    loop {
+        let status = service.query_status()?;
+        match status.current_state {
+            ServiceState::Stopped => break,
+            ServiceState::StopPending | ServiceState::StartPending
+                if began.elapsed() < STOP_WAIT =>
+            {
+                std::thread::sleep(Duration::from_millis(300));
+            }
+            ServiceState::Running if status.process_id.is_some_and(|pid| runs(pid, exe)) => {
+                return Ok(());
+            }
+            state => anyhow::bail!("服务没有停下（{state:?}），无法启动新的版本"),
+        }
     }
+    service.start::<&str>(&[])?;
     Ok(())
 }
+
+/// 这个进程运行的是 `exe`。
+fn runs(pid: u32, exe: &Path) -> bool {
+    image_path(pid).is_some_and(|p| p.eq_ignore_ascii_case(&exe.to_string_lossy()))
+}
+
+/// 等服务停下最多这么久。
+const STOP_WAIT: Duration = Duration::from_secs(30);
 
 /// 当前用户登录时启动托盘代理。安装程序以登录用户的身份（经管理员确认）运行，通常就是要开启的用户。
 fn enable_autostart(exe: &Path) -> anyhow::Result<()> {
     let dir = exe
         .parent()
         .ok_or_else(|| anyhow::anyhow!("找不到安装目录"))?;
-    let sid =
-        UserContext::current_process_sid().ok_or_else(|| anyhow::anyhow!("读不到当前用户"))?;
+    // 正在用电脑的用户（普通用户输入管理员密码安装时，本进程是管理员，不能开给管理员）。
+    let sid = UserContext::session_user()
+        .and_then(|u| u.sid)
+        .or_else(UserContext::current_process_sid)
+        .ok_or_else(|| anyhow::anyhow!("读不到当前用户"))?;
     let template = std::fs::read_to_string(dir.join(TASK_TEMPLATE))?;
     let agent = dir.join("poise-agent.exe");
     let xml = template
@@ -158,15 +186,23 @@ fn remove_service() -> anyhow::Result<()> {
         return Ok(());
     };
     if service.query_status()?.current_state != ServiceState::Stopped {
-        service.stop()?;
+        // 已经在停止中时会报"无法接受控制"：照样等它停下。
+        if let Err(e) = service.stop() {
+            eprintln!("停止服务：{e}");
+        }
         let start = Instant::now();
         while service.query_status()?.current_state != ServiceState::Stopped
-            && start.elapsed() < Duration::from_secs(20)
+            && start.elapsed() < STOP_WAIT
         {
             std::thread::sleep(Duration::from_millis(300));
         }
     }
     service.delete()?;
+    // 还没停下就不还原：服务进程还在写变更日志，两边会互相覆盖。记录留着，之后再运行 uninstall 重试。
+    anyhow::ensure!(
+        service.query_status()?.current_state == ServiceState::Stopped,
+        "服务没有及时停下，没有还原（记录已保留，可稍后再次运行 uninstall 重试）"
+    );
     Ok(())
 }
 

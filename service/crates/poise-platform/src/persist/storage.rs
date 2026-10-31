@@ -1,13 +1,12 @@
 //! JSON 文件持久化：先写临时文件再替换，避免写到一半断电导致文件损坏。
 
-use std::io::Write;
 use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
 
-use poise_core::journal::{JournalEntry, JournalStorage};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
+use super::atomic::{read_retrying, set_aside, write_atomic};
 use super::writer::FileWriter;
 
 pub struct JsonFile<T> {
@@ -27,14 +26,20 @@ impl<T: Serialize + DeserializeOwned> JsonFile<T> {
         &self.path
     }
 
-    /// 文件不存在或损坏时返回 None（损坏的文件会被改名保留，便于排查）。
+    /// 文件不存在、读不到或损坏时返回 None（损坏的文件会被改名保留，便于排查）。
     pub fn load(&self) -> Option<T> {
-        let bytes = std::fs::read(&self.path).ok()?;
+        let bytes = match read_retrying(&self.path) {
+            Ok(Some(bytes)) => bytes,
+            Ok(None) => return None,
+            Err(e) => {
+                log::warn!("读不到 {}：{e}", self.path.display());
+                return None;
+            }
+        };
         match serde_json::from_slice(&bytes) {
             Ok(v) => Some(v),
             Err(e) => {
-                log::warn!("{} 无法解析（{e}），已改名保留", self.path.display());
-                let _ = std::fs::rename(&self.path, self.path.with_extension("corrupt"));
+                set_aside(&self.path, &e.to_string());
                 None
             }
         }
@@ -55,41 +60,6 @@ impl<T: Serialize + DeserializeOwned> JsonFile<T> {
     }
 }
 
-/// 先写到临时文件并落到磁盘，再替换原文件：断电时要么是旧的、要么是新的，不会是空文件
-/// （变更日志里存着修改前的原值，丢了就再也还原不了）。
-pub(super) fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    let tmp = path.with_extension("tmp");
-    let mut file = std::fs::File::create(&tmp)?;
-    file.write_all(bytes)?;
-    file.sync_all()?;
-    drop(file);
-    std::fs::rename(&tmp, path)
-}
-
-/// 变更日志存放在数据目录的 journal.json。
-pub struct FileJournal(JsonFile<Vec<JournalEntry>>);
-
-impl FileJournal {
-    pub fn new(dir: &Path) -> Self {
-        Self(JsonFile::new(dir.join("journal.json")))
-    }
-}
-
-impl JournalStorage for FileJournal {
-    fn load(&self) -> Vec<JournalEntry> {
-        self.0.load().unwrap_or_default()
-    }
-
-    fn save(&self, entries: &[JournalEntry]) {
-        let saved = serde_json::to_vec_pretty(entries)
-            .map_err(std::io::Error::other)
-            .and_then(|bytes| write_atomic(self.0.path(), &bytes));
-        if let Err(e) = saved {
-            log::error!("保存变更日志失败：{e}");
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -104,7 +74,11 @@ mod tests {
         assert_eq!(f.load(), Some(vec![1, 2, 3]));
         std::fs::write(f.path(), b"{broken").unwrap();
         assert!(f.load().is_none());
-        assert!(dir.join("x.corrupt").exists());
+        let set_aside = std::fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .any(|e| e.file_name().to_string_lossy().ends_with(".corrupt"));
+        assert!(set_aside);
         let _ = std::fs::remove_dir_all(dir);
     }
 }

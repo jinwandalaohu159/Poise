@@ -1,8 +1,7 @@
 //! 前台保持。
 
-use std::collections::HashMap;
-
 use crate::classify::Classification;
+use crate::fast_hash::HashMap;
 use crate::model::{Millis, Pid};
 
 /// 前台保持：切走后一段时间内（默认 5 分钟）仍算"正在用"，期间不会让路。

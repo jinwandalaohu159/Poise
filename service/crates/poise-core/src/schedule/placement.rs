@@ -5,10 +5,9 @@
 //!   （见 `Footprint`）；那个域已经超负荷、而别的域还很空——每轮最多挪一个，逐步摊开，不来回挪；
 //! - 一个程序的负载比一个域能承担的还大时不限制在一个域里，用全部可用的副域：不为了缓存把它挤在几个核心上。
 
-use std::collections::{HashMap, HashSet};
-
 use super::CoreLayout;
 use crate::action::CoreSet;
+use crate::fast_hash::{HashMap, HashSet};
 use crate::model::ProcessKey;
 
 #[derive(Debug, Default)]
@@ -64,7 +63,7 @@ impl GroupPlacer {
         let capacity = |d: u8| layout.capacity(d);
         let all_usable = usable.iter().fold(0u16, |m, d| m | (1 << d));
         let mut load = vec![0.0_f32; usize::from(layout.domains())];
-        let mut out = HashMap::with_capacity(wants.len());
+        let mut out = HashMap::with_capacity_and_hasher(wants.len(), Default::default());
         let mut sticky = Vec::new();
         let mut fresh = Vec::new();
         for &(root, pct) in wants {

@@ -3,8 +3,7 @@
 //! 只看趋势，不看绝对值：游戏、浏览器占用高但会上下波动，不算泄漏；
 //! 持续数小时单调上涨、没有平台期的才算。
 
-use std::collections::HashMap;
-
+use crate::fast_hash::HashMap;
 use crate::model::{Millis, ProcessKey, Snapshot};
 
 use super::trend::{GrowthRule, sustained_growth};

@@ -3,7 +3,8 @@
 //! 分组沿用分类时的进程树（[`Classification::root_pid`]）：辅助进程归到主程序，独立程序单独成组。
 //! 同一路径的多棵进程树（同一程序开了两次）合并为一组。
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use crate::fast_hash::{HashMap, HashSet};
+use std::collections::BTreeMap;
 
 use crate::classify::{Classification, Role};
 use crate::model::{Pid, ProcessSample, Snapshot};
@@ -112,7 +113,7 @@ impl AppGroup<'_> {
     /// 组里可以单独设置类别的进程：有自己窗口（或在玩）的另一个程序文件，例如客户端里的游戏本体。
     /// 主程序跟随这一组的类别；同一个程序文件只取第一个进程。
     pub fn separable_members(&self) -> HashSet<Pid> {
-        let mut seen: HashSet<&str> = HashSet::from([self.path]);
+        let mut seen: HashSet<&str> = HashSet::from_iter([self.path]);
         self.members
             .iter()
             .filter(|(p, c)| {
@@ -191,7 +192,7 @@ mod tests {
         fn new() -> Self {
             Self {
                 snapshot: Snapshot::default(),
-                classes: HashMap::new(),
+                classes: HashMap::default(),
             }
         }
 
@@ -235,7 +236,7 @@ mod tests {
         );
         let groups = w.groups();
         let g = &groups[r"c:\riot\client.exe"];
-        assert_eq!(g.separable_members(), HashSet::from([12]));
+        assert_eq!(g.separable_members(), HashSet::from_iter([12]));
     }
 
     #[test]

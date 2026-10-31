@@ -15,6 +15,9 @@ pub(super) struct RotatingFile {
     at_line_start: bool,
 }
 
+/// 改不了名时，写到上限的这么多倍就清空重写。
+const OVERGROWN: u64 = 4;
+
 impl RotatingFile {
     pub fn open(path: PathBuf, max_bytes: u64) -> Option<Self> {
         let file = OpenOptions::new()
@@ -36,11 +39,12 @@ impl RotatingFile {
         Some(f)
     }
 
-    /// 换文件；失败时继续写原来的文件（日志不能因为改名失败就丢）。
+    /// 换文件：改名直接替换掉更旧的（不先删，改名失败时旧的历史还在）。改名失败（文件被别的程序占着）
+    /// 时继续写原来的文件，下次再试；一直改不了、已经写到上限的几倍时清空重写，不让它无限变大。
     fn rotate(&mut self) {
         let old = self.path.with_extension("1.log");
-        let _ = std::fs::remove_file(&old);
-        if std::fs::rename(&self.path, &old).is_err() {
+        let renamed = std::fs::rename(&self.path, &old).is_ok();
+        if !renamed && self.written < self.max_bytes.saturating_mul(OVERGROWN) {
             return;
         }
         if let Ok(file) = File::create(&self.path) {

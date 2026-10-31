@@ -19,7 +19,7 @@ use std::cell::{Cell, RefCell};
 use poise_core::setting::{SettingStore, StoreError, Target, Value};
 
 use super::prefetch::Prefetched;
-use super::queue::{PowerQueue, latest};
+use super::queue::{PowerQueue, latest, queued_place};
 
 /// 一次修改里记下、还没发布的电源设置写入（见 `PowerWriter::commit`）。
 #[derive(Default)]
@@ -73,11 +73,17 @@ impl<'a> WriteBehind<'a> {
 
 impl SettingStore for WriteBehind<'_> {
     fn read(&self, target: &Target) -> Result<Option<Value>, StoreError> {
-        if let Some(v) = latest(&self.staged.borrow(), target) {
-            return Ok(Some(v));
-        }
-        if let Some(v) = self.queue.latest(target) {
-            return Ok(Some(v));
+        if !self.staged.borrow().is_empty() || !self.queue.is_empty() {
+            // 只用预读到的当前计划解析（不在调度线程上问电源服务）；没有预读时按原样查。
+            let place = queued_place(target, |t| {
+                self.prefetched.resolve(t).ok_or(StoreError::Unsupported)
+            });
+            if let Some(v) = latest(&self.staged.borrow(), &place) {
+                return Ok(Some(v));
+            }
+            if let Some(v) = self.queue.latest(&place) {
+                return Ok(Some(v));
+            }
         }
         match self.prefetched.value(target) {
             Some(v) => Ok(v),
@@ -196,7 +202,7 @@ mod tests {
         for (t, v) in &writes {
             store.write(t, v).unwrap();
         }
-        queue.done(writes.len());
+        queue.done(writes.len(), Vec::new());
     }
 
     #[test]
@@ -233,6 +239,43 @@ mod tests {
         );
     }
 
+    /// 当前计划是 A 的存储：优化项的位置不写明计划，按当前计划解析。
+    struct OnPlanA(Mem);
+    impl SettingStore for OnPlanA {
+        fn read(&self, t: &Target) -> Result<Option<Value>, StoreError> {
+            self.0.read(t)
+        }
+        fn write(&self, t: &Target, v: &Value) -> Result<(), StoreError> {
+            self.0.write(t, v)
+        }
+        fn delete(&self, t: &Target) -> Result<(), StoreError> {
+            self.0.delete(t)
+        }
+        fn resolve(&self, t: &Target) -> Result<Target, StoreError> {
+            Ok(match t {
+                Target::PowerSetting { scheme: None, .. } => power(Some("A")),
+                other => other.clone(),
+            })
+        }
+    }
+
+    #[test]
+    fn places_without_a_plan_see_what_is_queued_for_the_current_plan() {
+        let store = OnPlanA(Mem::default());
+        let queue = PowerQueue::default();
+        queue.extend(vec![(power(Some("A")), Value::Dword(100))]);
+        // 电源守护、优化项列表读优化项（不写明计划）：以队里当前计划的值为准，不读到还没写的旧值。
+        let pending = PendingWrites::new(queue.clone());
+        assert_eq!(
+            pending.view(&store).read(&power(None)).unwrap(),
+            Some(Value::Dword(100))
+        );
+        // 调度线程上（WriteBehind）只用预读到的当前计划解析，不为此去问电源服务：没有预读时按原样读。
+        let prefetched = Prefetched::default();
+        let behind = WriteBehind::new(&store, &queue, &prefetched);
+        assert_eq!(behind.read(&power(None)).unwrap(), None);
+    }
+
     #[test]
     fn until_written_the_queued_value_is_the_current_value() {
         let store = Mem::default();
@@ -252,12 +295,12 @@ mod tests {
             Some(Value::Dword(50))
         );
         // 执行线程写完第一项：第二项还在队里，仍以它为准；都写完后读真正的存储。
-        queue.done(1);
+        queue.done(1, Vec::new());
         assert_eq!(
             view.read(&power(Some("A"))).unwrap(),
             Some(Value::Dword(50))
         );
-        queue.done(1);
+        queue.done(1, Vec::new());
         assert!(queue.is_empty());
         assert_eq!(view.read(&power(Some("A"))).unwrap(), Some(Value::Dword(7)));
     }
@@ -353,7 +396,7 @@ mod tests {
         behind.write(&power(None), &Value::Dword(1)).unwrap();
         let _ = publish(&queue, &prefetched, behind.into_staged());
         assert_eq!(queue.pending(), [(power(Some("A")), Value::Dword(1))]);
-        queue.done(1);
+        queue.done(1, Vec::new());
         assert!(prefetched.value(&power(Some("A"))).is_none());
     }
 

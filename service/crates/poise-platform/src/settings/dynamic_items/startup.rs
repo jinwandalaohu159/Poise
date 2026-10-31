@@ -96,9 +96,9 @@ fn exe_from_command(command: &str) -> Option<String> {
     let path = if let Some(rest) = c.strip_prefix('"') {
         rest.split('"').next()?.to_string()
     } else {
-        let lower = c.to_lowercase();
-        let end = lower.find(".exe")? + 4;
-        c[..end].to_string()
+        // 只按 ASCII 转小写：字节位置和原串一致（`to_lowercase` 会把 "İ" 变长，切原串就越界）。
+        let end = c.to_ascii_lowercase().find(".exe")? + 4;
+        c.get(..end)?.to_string()
     };
     Some(expand_env(&path))
 }
@@ -106,6 +106,14 @@ fn exe_from_command(command: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unquoted_commands_with_non_ascii_names_are_cut_at_the_exe() {
+        assert_eq!(
+            exe_from_command(r"C:\Users\İsmail\Tools\app.exe --tray").as_deref(),
+            Some(r"C:\Users\İsmail\Tools\app.exe")
+        );
+    }
 
     #[test]
     fn parses_exe_from_startup_commands() {

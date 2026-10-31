@@ -1,7 +1,6 @@
 //! 卡顿归因：刚才为什么卡。
 
-use std::collections::HashMap;
-
+use crate::fast_hash::HashMap;
 use serde::{Deserialize, Serialize};
 
 use crate::activity::ActivityTracker;

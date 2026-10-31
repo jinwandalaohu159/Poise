@@ -102,7 +102,7 @@ public sealed partial class SettingsViewModel : ObservableObject, IDisposable
     {
         var rows = _host.Status.Latest is { } s ? HardwareText.Rows(s) : [];
         // 已有的行只更新数值；多出、少了的行（显卡温度、风扇时有时无）单独增删，不重建整个列表。
-        var existing = Hardware.ToDictionary(r => r.Label);
+        var existing = Hardware.FirstByKey(r => r.Label);
         var desired = rows.Select(r =>
         {
             if (existing.TryGetValue(r.Label, out var item))

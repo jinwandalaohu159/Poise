@@ -1,12 +1,12 @@
 //! 在后台线程里写文件：调用方只把要写的内容交过来、不等磁盘（每次都要落盘，磁盘忙的时候——
 //! 游戏启动、大量读写——一次要几十到几百毫秒）。同一个文件只写最新的一份。
-//! 每个文件都先写临时文件、落盘、再替换（见 [`super::storage::write_atomic`]）。
+//! 每个文件都先写临时文件、落盘、再替换（见 [`super::atomic::write_atomic`]）。
 
 use std::path::PathBuf;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
-use super::storage::write_atomic;
+use super::atomic::write_atomic;
 
 #[derive(Default)]
 struct State {
@@ -87,7 +87,13 @@ impl FileWriter {
     }
 }
 
+/// 写失败（磁盘满、被独占）后隔这么久再写，同一个文件连续失败最多重试 [`RETRIES`] 次。
+const RETRY_AFTER: Duration = Duration::from_secs(2);
+const RETRIES: u32 = 3;
+
 fn run(shared: &Shared) {
+    // 各文件连续写失败的次数。
+    let mut failures: std::collections::HashMap<PathBuf, u32> = Default::default();
     loop {
         let batch = {
             let mut state = shared.lock();
@@ -103,12 +109,36 @@ fn run(shared: &Shared) {
             state.writing = true;
             std::mem::take(&mut state.pending)
         };
+        let mut failed = Vec::new();
         for (path, bytes) in batch {
-            if let Err(e) = write_atomic(&path, &bytes) {
-                log::warn!("保存 {} 失败：{e}", path.display());
+            match write_atomic(&path, &bytes) {
+                Ok(()) => {
+                    failures.remove(&path);
+                }
+                Err(e) => {
+                    let count = failures.entry(path.clone()).or_insert(0);
+                    *count += 1;
+                    log::warn!("保存 {} 失败（第 {count} 次）：{e}", path.display());
+                    if *count <= RETRIES {
+                        failed.push((path, bytes));
+                    } else {
+                        failures.remove(&path);
+                    }
+                }
             }
         }
-        shared.lock().writing = false;
+        if !failed.is_empty() && !shared.lock().closed {
+            std::thread::sleep(RETRY_AFTER);
+        }
+        let mut state = shared.lock();
+        // 写失败的放回去再写，除非这期间又交来了更新的内容。
+        for (path, bytes) in failed {
+            if !state.pending.iter().any(|(p, _)| *p == path) {
+                state.pending.push((path, bytes));
+            }
+        }
+        state.writing = false;
+        drop(state);
         shared.changed.notify_all();
     }
 }

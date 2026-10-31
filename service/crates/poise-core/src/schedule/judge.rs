@@ -4,8 +4,6 @@
 //! 每轮按顺序：每个程序自己的情况、谁是重点程序 → 正在用的程序需要多少处理器（需求）→
 //! 后台谁在忙、该让路 → 让到副域的程序分到哪个核心域。最后由 [`Scheduler::desired`] 得出每个进程应有的状态。
 
-use std::collections::{HashMap, HashSet};
-
 use super::decisions::Verdict;
 use super::desired::Desired;
 use super::policy;
@@ -14,6 +12,7 @@ use super::trackers::{Demand, DemandSignals, FocusEnd, FocusLoad, FocusState, Pr
 use super::{ScheduleInput, Scheduler};
 use crate::action::CoreSet;
 use crate::classify::Classification;
+use crate::fast_hash::{HashMap, HashSet};
 use crate::model::{Millis, Pid, PriorityClass, ProcessKey, Snapshot};
 use crate::prefs::AppPreference;
 
@@ -43,7 +42,7 @@ impl Scheduler {
             .map(|c| c.root_pid)
             .collect();
         let representatives = representatives(classes);
-        let mut programs = HashMap::with_capacity(roots.len());
+        let mut programs = HashMap::with_capacity_and_hasher(roots.len(), Default::default());
         // 第一遍：每个程序自己的情况，以及谁是重点程序。
         for root_pid in roots {
             let class_pid = representatives.get(&root_pid).copied().unwrap_or(root_pid);
@@ -304,7 +303,7 @@ impl Scheduler {
 
 /// 主进程不参与调度、树里却有参与调度的进程的程序：主进程 → 树里参与调度的一个（进程号最小的，每轮一样）。
 fn representatives(classes: &HashMap<Pid, Classification>) -> HashMap<Pid, Pid> {
-    let mut out: HashMap<Pid, Pid> = HashMap::new();
+    let mut out: HashMap<Pid, Pid> = HashMap::default();
     for (pid, c) in classes {
         if c.is_schedulable()
             && classes

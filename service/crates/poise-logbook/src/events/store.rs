@@ -82,8 +82,12 @@ impl EventFile {
                 .append(true)
                 .open(&self.path)
             {
-                Ok(f) => {
-                    let len = f.metadata().map_or(0, |m| m.len());
+                Ok(mut f) => {
+                    let mut len = f.metadata().map_or(0, |m| m.len());
+                    // 上次写到一半（断电）留下了不完整的一行：先补上换行，不让下一条接在它后面一起坏掉。
+                    if len > 0 && !ends_with_newline(&self.path) && f.write_all(b"\n").is_ok() {
+                        len += 1;
+                    }
                     self.file = Some((f, len));
                 }
                 Err(e) => log::warn!("打开 events.jsonl 失败：{e}"),
@@ -100,4 +104,15 @@ impl EventFile {
         }
         self.pending.clear();
     }
+}
+/// 文件最后一个字节是换行。
+fn ends_with_newline(path: &std::path::Path) -> bool {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut last = [0u8; 1];
+    std::fs::File::open(path)
+        .and_then(|mut f| {
+            f.seek(SeekFrom::End(-1))?;
+            f.read_exact(&mut last)
+        })
+        .is_ok_and(|()| last[0] == b'\n')
 }

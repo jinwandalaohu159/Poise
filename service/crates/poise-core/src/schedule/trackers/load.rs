@@ -4,10 +4,9 @@
 //! 按单个进程看会漏掉；按整棵树加起来才是这个程序真正的负载。
 //! 平滑后，时忙时闲的工作（编译、下载）按平均负载判断，几秒钟的尖峰影响很小。
 
-use std::collections::HashMap;
-
 use crate::activity::ActivityTracker;
 use crate::classify::Classification;
+use crate::fast_hash::HashMap;
 use crate::model::{Millis, Pid, ProcessKey, Snapshot};
 
 /// 一个程序的负载。
@@ -66,7 +65,7 @@ impl TreeLoad {
             .iter()
             .map(|p| (p.facts.key.pid, p.facts.key))
             .collect();
-        let mut current: HashMap<ProcessKey, TreeUsage> = HashMap::new();
+        let mut current: HashMap<ProcessKey, TreeUsage> = HashMap::default();
         for p in &snap.processes {
             let Some(c) = classes.get(&p.facts.key.pid) else {
                 continue;

@@ -164,9 +164,15 @@ pub fn is_transient(hwnd: HWND) -> bool {
     )
 }
 
-/// 用户不在桌面前：锁屏、屏幕保护、切换了用户。
 /// 本会话是不是正在使用的那个（控制台上没切走、远程连接没断开）。查不到时按是。
 pub fn session_active() -> bool {
+    // 本机最常见的情况：本会话就是控制台的活动会话（只读共享内存，不跨进程）。远程会话再去问会话服务。
+    // SAFETY: 无参数。
+    if unsafe { windows::Win32::System::RemoteDesktop::WTSGetActiveConsoleSessionId() }
+        == super::current_session()
+    {
+        return true;
+    }
     let mut buf = windows::core::PWSTR::null();
     let mut len = 0u32;
     // SAFETY: 输出由系统分配，用完用 WTSFreeMemory 释放；连接状态是一个 4 字节的枚举值。

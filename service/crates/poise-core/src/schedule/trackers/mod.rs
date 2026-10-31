@@ -25,11 +25,11 @@ pub use load::{LoadSmoothing, TreeLoad};
 #[cfg(test)]
 pub(crate) fn test_classes(
     fg_root: Option<crate::model::Pid>,
-) -> std::collections::HashMap<crate::model::Pid, crate::classify::Classification> {
+) -> crate::fast_hash::HashMap<crate::model::Pid, crate::classify::Classification> {
     use crate::classify::{Classification, Role, ScheduleScope};
     use crate::prefs::AppPreference;
 
-    let mut m = std::collections::HashMap::new();
+    let mut m = crate::fast_hash::HashMap::default();
     for root in [10, 20] {
         m.insert(
             root,

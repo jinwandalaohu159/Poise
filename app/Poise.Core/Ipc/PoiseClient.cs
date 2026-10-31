@@ -18,8 +18,11 @@ public sealed class ServiceErrorException(ErrorCode code, string message) : Exce
 /// </summary>
 public sealed class PoiseClient : IDisposable
 {
-    /// <summary>一般请求最多等这么久。</summary>
-    private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(10);
+    /// <summary>
+    /// 一般请求最多等这么久：只兜底服务彻底卡死的情况。服务忙（应用一批优化项、电源服务慢）时等十几秒是常事，
+    /// 超时就会显示"未连接"、断开重连，白白多一轮握手。
+    /// </summary>
+    private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(30);
     /// <summary>慢的操作最多等这么久（重启服务最多要等十几秒，电源服务忙时读写设置也要好几秒）。</summary>
     private static readonly TimeSpan SlowTimeout = TimeSpan.FromSeconds(90);
 

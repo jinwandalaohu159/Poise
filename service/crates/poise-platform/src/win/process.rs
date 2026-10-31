@@ -5,28 +5,47 @@ use std::ffi::c_void;
 
 use poise_core::action::ExecError;
 use poise_core::model::ProcessKey;
-use windows::Win32::Foundation::{FILETIME, HANDLE, STILL_ACTIVE};
+use windows::Win32::Foundation::{FILETIME, HANDLE, STILL_ACTIVE, WAIT_OBJECT_0};
 use windows::Win32::System::Threading::{
     GetExitCodeProcess, GetProcessDefaultCpuSets, GetProcessInformation, GetProcessTimes,
     MEMORY_PRIORITY, MEMORY_PRIORITY_INFORMATION, PROCESS_ACCESS_RIGHTS,
     PROCESS_POWER_THROTTLING_CURRENT_VERSION, PROCESS_POWER_THROTTLING_IGNORE_TIMER_RESOLUTION,
-    PROCESS_POWER_THROTTLING_STATE, PROCESS_QUERY_LIMITED_INFORMATION, ProcessMemoryPriority,
-    ProcessPowerThrottling, SetProcessDefaultCpuSets, SetProcessInformation,
+    PROCESS_POWER_THROTTLING_STATE, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE,
+    ProcessMemoryPriority, ProcessPowerThrottling, SetProcessDefaultCpuSets, SetProcessInformation,
+    WaitForSingleObject,
 };
 
 use super::handle::{OwnedHandle, map_error, open_process};
+
+/// 进程在 `within` 之内退出了（已经不在也算）。打不开（没有权限等）时按没退出。
+pub fn exits_within(pid: u32, within: std::time::Duration) -> bool {
+    match open_process(pid, PROCESS_SYNCHRONIZE) {
+        Ok(h) => {
+            let ms = u32::try_from(within.as_millis()).unwrap_or(u32::MAX);
+            // SAFETY: 句柄有等待权限。
+            let waited = unsafe { WaitForSingleObject(h.raw(), ms) };
+            waited == WAIT_OBJECT_0
+        }
+        Err(ExecError::Gone) => true,
+        Err(_) => false,
+    }
+}
 
 /// 打开的目标进程。
 pub struct Target(OwnedHandle);
 
 impl Target {
     /// 以 `access`（另加查询权限，用来核对身份）打开进程。`key.created` 为 0 时不核对。
-    /// 创建时间对不上说明进程号已被新进程复用；读不到创建时间就核对不了：都按"已退出"处理，
-    /// 绝不动到别的程序。
+    /// 创建时间对不上说明进程号已被新进程复用，按"已退出"处理；读不到创建时间就核对不了，按"拒绝访问"
+    /// 处理（不当成已退出——那样会丢掉记下的原值、每轮再试）。都绝不动到别的程序。
     pub fn open(key: ProcessKey, access: PROCESS_ACCESS_RIGHTS) -> Result<Self, ExecError> {
         let h = open_process(key.pid, access | PROCESS_QUERY_LIMITED_INFORMATION)?;
-        if key.created != 0 && creation_time(&h) != Some(key.created) {
-            return Err(ExecError::Gone);
+        if key.created != 0 {
+            match creation_time(&h) {
+                Some(created) if created == key.created => {}
+                Some(_) => return Err(ExecError::Gone),
+                None => return Err(ExecError::AccessDenied),
+            }
         }
         Ok(Self(h))
     }

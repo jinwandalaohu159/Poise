@@ -1,7 +1,6 @@
 //! 把累计计数（CPU 时间、IO 字节）换算成速率，并记住每个进程最近一次"在干活"的时间。
 
-use std::collections::HashMap;
-
+use crate::fast_hash::HashMap;
 use crate::model::{Millis, ProcessKey, ProcessorTime, Snapshot};
 
 /// 一个进程最近的资源使用情况。
@@ -103,7 +102,7 @@ impl ActivityTracker {
     pub fn update(&mut self, snap: &Snapshot) {
         self.update_system(snap);
 
-        let mut next = HashMap::with_capacity(snap.processes.len());
+        let mut next = HashMap::with_capacity_and_hasher(snap.processes.len(), Default::default());
         for p in &snap.processes {
             let key = p.facts.key;
             let now = Counters {

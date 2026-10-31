@@ -1,13 +1,12 @@
 //! 解释决定：每个程序按主进程算的决定、负载、核心范围，以及没有让路时的原因，交给 [`super::decisions`]
 //! 和上一轮比较、只报告变化；这一轮的全部结果留着，供界面查看（核心与缓存面板）。
 
-use std::collections::HashMap;
-
 use super::Scheduler;
 use super::decisions::{Cause, Decision, ProgramState, Verdict};
 use super::program::Program;
 use super::trackers::{FocusEnd, Pressure};
 use crate::classify::Classification;
+use crate::fast_hash::HashMap;
 use crate::model::{Millis, Pid};
 use crate::prefs::AppPreference;
 

@@ -33,6 +33,9 @@ const WATCHFUL_EVERY_MS: Millis = 10_000;
 const WATCHFUL_FOR_MS: Millis = 3 * 60_000;
 /// 两次完整检查之间，多久看一眼当前电源计划（每次都要问电源服务；换了计划晚几秒发现没关系）。
 const SCHEME_EVERY_MS: Millis = 10_000;
+/// Poise 暂停着（勤查期过后）时放慢：只守着用户选的优化项，被改掉晚几分钟改回无妨，不为它一夜问几千次电源服务。
+const PAUSED_CHECK_EVERY_MS: Millis = 5 * 60_000;
+const PAUSED_SCHEME_EVERY_MS: Millis = 60_000;
 
 pub(super) struct PowerGuard {
     reader: PowerReader<PowerRead>,
@@ -74,9 +77,16 @@ impl Cadence {
         self.watchful_until = Some(now + WATCHFUL_FOR_MS);
     }
 
-    fn due(&self, now: Millis) -> bool {
-        let every = if now < self.watchful_until.unwrap_or(WATCHFUL_FOR_MS) {
+    fn watchful(&self, now: Millis) -> bool {
+        now < self.watchful_until.unwrap_or(WATCHFUL_FOR_MS)
+    }
+
+    /// `paused`：Poise 暂停着（勤查期内照样勤查：开机、登录时厂商工具正在改设置）。
+    fn due(&self, now: Millis, paused: bool) -> bool {
+        let every = if self.watchful(now) {
             WATCHFUL_EVERY_MS
+        } else if paused {
+            PAUSED_CHECK_EVERY_MS
         } else {
             CHECK_EVERY_MS
         };
@@ -84,9 +94,14 @@ impl Cadence {
             .is_none_or(|t| now.saturating_sub(t) >= every)
     }
 
-    fn scheme_due(&self, now: Millis) -> bool {
+    fn scheme_due(&self, now: Millis, paused: bool) -> bool {
+        let every = if paused && !self.watchful(now) {
+            PAUSED_SCHEME_EVERY_MS
+        } else {
+            SCHEME_EVERY_MS
+        };
         self.scheme_at
-            .is_none_or(|t| now.saturating_sub(t) >= SCHEME_EVERY_MS)
+            .is_none_or(|t| now.saturating_sub(t) >= every)
     }
 }
 
@@ -107,14 +122,15 @@ impl Engine {
         if !guard.reader.idle() {
             return;
         }
-        let job = if guard.cadence.due(now) {
+        let paused = self.paused;
+        let job = if guard.cadence.due(now, paused) {
             guard.cadence.checked_at = Some(now);
             guard.cadence.scheme_at = Some(now);
             check::check_job(
                 self.changes.journal().clone(),
                 self.changes.pending_writes(),
             )
-        } else if guard.cadence.scheme_due(now) {
+        } else if guard.cadence.scheme_due(now, paused) {
             guard.cadence.scheme_at = Some(now);
             check::scheme_job()
         } else {
@@ -157,9 +173,15 @@ impl Engine {
         now: Millis,
     ) {
         let journal = self.changes.journal();
+        // 暂停着时不守硬件模式写的设置（没撤销成、等着再撤销的那些）：Poise 退出了，不能再把它们改回去。
+        let paused = self.paused;
         let drifted: Vec<_> = drifted
             .into_iter()
-            .filter(|(e, _)| guarded(e, scheme) && journal.is_current(e))
+            .filter(|(e, _)| {
+                guarded(e, scheme)
+                    && journal.is_current(e)
+                    && !(paused && e.owner == poise_hardware::power::OWNER)
+            })
             .collect();
         if drifted.is_empty() {
             return;
@@ -238,19 +260,25 @@ mod tests {
     #[test]
     fn checks_often_after_start_and_login_then_every_minute() {
         let mut g = Cadence::default();
-        assert!(g.due(0));
+        assert!(g.due(0, false));
         g.checked_at = Some(0);
-        assert!(!g.due(5_000));
-        assert!(g.due(WATCHFUL_EVERY_MS));
+        assert!(!g.due(5_000, false));
+        assert!(g.due(WATCHFUL_EVERY_MS, false));
         g.checked_at = Some(WATCHFUL_FOR_MS);
-        assert!(!g.due(WATCHFUL_FOR_MS + WATCHFUL_EVERY_MS));
-        assert!(g.due(WATCHFUL_FOR_MS + CHECK_EVERY_MS));
+        assert!(!g.due(WATCHFUL_FOR_MS + WATCHFUL_EVERY_MS, false));
+        assert!(g.due(WATCHFUL_FOR_MS + CHECK_EVERY_MS, false));
         // 登录：立即查，之后又勤查一段时间。
         let login = 10 * 60_000;
         g.check_soon(login);
-        assert!(g.due(login));
+        assert!(g.due(login, false));
         g.checked_at = Some(login);
-        assert!(g.due(login + WATCHFUL_EVERY_MS));
+        assert!(g.due(login + WATCHFUL_EVERY_MS, false));
+        // 暂停着：勤查期内照样勤查，之后放慢。
+        assert!(g.due(login + WATCHFUL_EVERY_MS, true));
+        let later = login + WATCHFUL_FOR_MS;
+        g.checked_at = Some(later);
+        assert!(!g.due(later + CHECK_EVERY_MS, true));
+        assert!(g.due(later + PAUSED_CHECK_EVERY_MS, true));
     }
 
     #[test]

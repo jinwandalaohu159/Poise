@@ -4,6 +4,9 @@
 //! 写入只有三种：切换散热模式（目标必须在 BIOS 报告的模式列表里，G 模式除外）、风扇加速（风扇必须在
 //! BIOS 报告的风扇列表里，强度 0～255，0 即不加速）、G 模式开关。
 
+use std::cell::{Cell, RefCell};
+use std::time::{Duration, Instant};
+
 use poise_platform::win::wmi::{WmiError, WmiNamespace, WmiResult};
 
 const NAMESPACE: &str = r"root\WMI";
@@ -79,8 +82,13 @@ impl Layout {
     }
 }
 
+/// 调用失败（不是 BIOS 说不支持，而是 WMI 本身出错）后，最多这么久重连一次。
+const RECONNECT_EVERY: Duration = Duration::from_secs(30);
+
 pub struct Awcc {
-    ns: WmiNamespace,
+    /// WMI 服务重启（系统更新、修复 WMI 库）后旧连接就失效了：调用出错时重连（见 [`Awcc::call_raw`]）。
+    ns: RefCell<WmiNamespace>,
+    reconnected_at: Cell<Option<Instant>>,
     path: String,
     layout: Layout,
 }
@@ -95,7 +103,8 @@ impl Awcc {
             .find_map(|o| o.string("__PATH"))
             .ok_or_else(|| WmiError("没有 AWCC 接口".into()))?;
         let mut awcc = Self {
-            ns,
+            ns: RefCell::new(ns),
+            reconnected_at: Cell::new(None),
             path,
             layout: Layout::default(),
         };
@@ -108,7 +117,8 @@ impl Awcc {
     /// 同一接口的另一条连接（沿用已读出的布局），给采集线程只读使用。
     pub fn reconnect(&self) -> WmiResult<Self> {
         Ok(Self {
-            ns: WmiNamespace::connect(NAMESPACE)?,
+            ns: RefCell::new(WmiNamespace::connect(NAMESPACE)?),
+            reconnected_at: Cell::new(None),
             path: self.path.clone(),
             layout: self.layout.clone(),
         })
@@ -122,10 +132,31 @@ impl Awcc {
         self.call_raw(method, arg(function, value))
     }
 
+    /// 调用一次；WMI 出错（连接失效）时重连再试一次。重连最多每 [`RECONNECT_EVERY`] 一次：
+    /// 一直出错时不每次都重连。
     fn call_raw(&self, method: &str, argument: u32) -> WmiResult<u32> {
-        let r = self
-            .ns
-            .call_u32(CLASS, &self.path, method, "arg2", argument, "argr")?;
+        let call = || {
+            self.ns
+                .borrow()
+                .call_u32(CLASS, &self.path, method, "arg2", argument, "argr")
+        };
+        let r = match call() {
+            Ok(r) => r,
+            Err(e) => {
+                let due = self
+                    .reconnected_at
+                    .get()
+                    .is_none_or(|at| at.elapsed() >= RECONNECT_EVERY);
+                if !due {
+                    return Err(e);
+                }
+                self.reconnected_at.set(Some(Instant::now()));
+                let ns = WmiNamespace::connect(NAMESPACE)?;
+                log::info!("AWCC 接口调用失败（{e}），已重新连接");
+                *self.ns.borrow_mut() = ns;
+                call()?
+            }
+        };
         if r == BIOS_ERROR {
             Err(WmiError(format!("BIOS 不支持 {method}({argument:#x})")))
         } else {

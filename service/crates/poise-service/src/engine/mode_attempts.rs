@@ -7,20 +7,25 @@ use poise_hardware::Applied;
 
 /// 切换失败后第一次重试前等多久；之后每次加倍，最长 [`RETRY_MAX_MS`]。
 const RETRY_FIRST_MS: Millis = 10_000;
-const RETRY_MAX_MS: Millis = 5 * 60_000;
+const RETRY_MAX_MS: Millis = 60_000;
+
+/// 等预读时最多这么久按快的节奏采样；电源服务卡住、一直读不完时回到平常的节奏（读好了照样会写）。
+const WAITING_FAST_FOR_MS: Millis = 30_000;
 
 /// 切换模式的尝试：在等预读（下一轮要尽快来），或者失败了（隔一阵再试，不每轮重试、每轮记一条失败）。
 #[derive(Default)]
 pub(super) struct ModeAttempts {
-    waiting: bool,
+    /// 从什么时候开始等预读。
+    waiting_since: Option<Millis>,
     /// 连续失败的目标、次数与最近一次的时刻。
     failed: Option<((Mode, bool), u32, Millis)>,
 }
 
 impl ModeAttempts {
-    /// 在等预读：下一轮要尽快来。
-    pub(super) fn waiting(&self) -> bool {
-        self.waiting
+    /// 在等预读、刚开始等不久：下一轮要尽快来。
+    pub(super) fn waiting(&self, now: Millis) -> bool {
+        self.waiting_since
+            .is_some_and(|since| now.saturating_sub(since) < WAITING_FAST_FOR_MS)
     }
 
     /// 已经是这个模式了。
@@ -47,7 +52,10 @@ impl ModeAttempts {
         result: &Result<Applied, E>,
         now: Millis,
     ) {
-        self.waiting = matches!(result, Ok(Applied::Waiting));
+        self.waiting_since = match result {
+            Ok(Applied::Waiting) => self.waiting_since.or(Some(now)),
+            _ => None,
+        };
         self.failed = match (result, self.failed) {
             (Ok(_), _) => None,
             (Err(_), Some((target, count, _))) if target == wanted => {
@@ -81,7 +89,12 @@ mod tests {
         }
         assert!(a.due(full, RETRY_MAX_MS));
         a.record(full, &Ok::<_, ()>(Applied::Waiting), 0);
-        assert!(a.waiting());
+        assert!(a.waiting(0));
         assert!(a.due(full, 0));
+        // 一直读不完：过了开头一阵就不再按快的节奏，再记一次等待也不重新计时。
+        a.record(full, &Ok::<_, ()>(Applied::Waiting), WAITING_FAST_FOR_MS);
+        assert!(!a.waiting(WAITING_FAST_FOR_MS));
+        a.record(full, &Ok::<_, ()>(Applied::Written), WAITING_FAST_FOR_MS);
+        assert!(!a.waiting(WAITING_FAST_FOR_MS));
     }
 }

@@ -7,6 +7,9 @@ use poise_protocol::Event;
 
 use super::Engine;
 
+/// 暂停期间还有没撤销成的电源设置（撤销时电源服务出错，放回了变更日志）时，隔这么久再撤销一次。
+const RETRY_WITHDRAW_MS: Millis = 60_000;
+
 /// 为什么撤销。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Withdraw {
@@ -29,14 +32,30 @@ impl Engine {
             true
         } else {
             self.pause();
+            self.retry_withdraw(now);
             false
         }
     }
 
-    /// 某个客户端断开。是托盘代理时立即暂停，不等上报过期。
-    pub(super) fn on_client_gone(&mut self, pid: Pid) {
-        if self.session.forget_reporter(pid) {
+    /// 暂停着、却还有 Poise 的电源设置没撤销成：隔一阵再撤销一次（Poise 退出了就该像不存在一样）。
+    fn retry_withdraw(&mut self, now: Millis) {
+        let left = self.changes.journal().owns(poise_hardware::power::OWNER);
+        if !left || now.saturating_sub(self.withdraw_retried_at) < RETRY_WITHDRAW_MS {
+            return;
+        }
+        self.withdraw_retried_at = now;
+        log::info!("还有没撤销成的电源设置，再撤销一次");
+        self.restore_hardware();
+    }
+
+    /// 某个客户端断开。是托盘代理、而且它已经退出时立即暂停，不等上报过期；它还在（一次调用超时后
+    /// 断开重连）时按上报是否过期判断，重连后接着报就不暂停。
+    pub(super) fn on_client_gone(&mut self, pid: Pid, exited: bool) {
+        let reporter = self.session.is_reporter(pid);
+        if self.session.forget_reporter(pid, exited) {
             self.pause();
+        } else if reporter {
+            log::info!("托盘代理断开了连接（进程还在），等它重连");
         }
     }
 
@@ -48,27 +67,29 @@ impl Engine {
     }
 
     /// 撤销 Poise 的全部运行时影响：进程调整、散热与电源计划、风扇。系统优化项保留（它们是用户选择的）。
-    /// 暂停和服务停止共用；已经撤销过（暂停中）就不再重复——还原散热模式每次都要调用机型接口——
-    /// 服务停止时只等暂停时交给硬件执行线程的还原做完。
+    /// 暂停和服务停止共用。已经暂停着时，暂停不再重复；服务停止、关机时照样再撤销一次（和 0.7.0 一样）：
+    /// 暂停时那次可能没做成（散热接口一时不可用、采样失败），上次异常退出留下的电源设置也还在日志里，
+    /// 停止之后就没有下次了。撤销是按记录做的，已经撤销过的不会再动。
     pub(super) fn withdraw(&mut self, why: Withdraw) {
-        let wait = why != Withdraw::Pause;
-        if self.paused {
-            if wait {
-                self.settle_hardware();
-            }
+        let first = !self.paused;
+        if !first && why == Withdraw::Pause {
             return;
         }
         self.paused = true;
-        self.logbook.end_session();
+        // 暂停期间不切换模式：不再等预读、不再按失败退避（否则一直按等预读的节奏采样）。
+        self.mode_attempts.settled();
+        if first {
+            self.logbook.end_session();
+            self.scheduler.reset_tracking();
+        }
         if why == Withdraw::SystemShutdown {
             let now = self.now();
             self.adjusted.flush(Vec::new(), now);
         } else {
             self.release_processes();
         }
-        self.scheduler.reset_tracking();
         self.restore_hardware();
-        if wait {
+        if why != Withdraw::Pause {
             self.settle_hardware();
         }
     }

@@ -1,7 +1,8 @@
 //! 用户目录下的 INI 配置文件（例如 `.wslconfig`）。只改指定的键，文件里的其他内容原样保留。
 //!
-//! 服务以 SYSTEM 身份写用户目录：用户目录归用户自己管，文件或目录被换成指向别处的链接时不读不写，
-//! 否则就成了替用户以 SYSTEM 身份改别处的文件。
+//! 服务以 SYSTEM 身份写用户目录：用户目录归用户自己管，文件被换成指向用户目录以外的链接时不读不写，
+//! 否则就成了替用户以 SYSTEM 身份改别处的文件。指向用户目录里的（配置文件管理工具常这样做）照常读写；
+//! 用户目录本身是链接（挪到了别的盘）也照常——它的位置来自只有管理员能改的注册表。
 
 use std::os::windows::fs::MetadataExt;
 use std::path::{Path, PathBuf};
@@ -10,6 +11,7 @@ use windows::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
 
 use poise_core::setting::{StoreError, UserFile, Value};
 
+use crate::persist::atomic::write_atomic;
 use crate::settings::ini;
 use crate::settings::user::UserContext;
 
@@ -18,13 +20,18 @@ fn path_of(user: Option<&UserContext>, file: UserFile) -> Result<PathBuf, StoreE
     let path = match file {
         UserFile::WslConfig => user.profile_dir.join(".wslconfig"),
     };
-    if [path.as_path(), user.profile_dir.as_path()]
-        .into_iter()
-        .any(is_reparse_point)
-    {
+    if is_reparse_point(&path) && !points_inside(&path, &user.profile_dir) {
         return Err(StoreError::AccessDenied);
     }
     Ok(path)
+}
+
+/// 链接最终指向 `dir` 里面（两边都解析到最终的真实路径再比）。
+fn points_inside(link: &Path, dir: &Path) -> bool {
+    match (std::fs::canonicalize(link), std::fs::canonicalize(dir)) {
+        (Ok(target), Ok(dir)) => target.starts_with(dir),
+        _ => false,
+    }
 }
 
 fn is_reparse_point(path: &Path) -> bool {
@@ -71,7 +78,7 @@ pub(super) fn write(
     };
     let path = path_of(user, file)?;
     let text = read_text(&path)?;
-    std::fs::write(&path, ini::set(&text, section, key, v)).map_err(io_err)
+    write_atomic(&path, ini::set(&text, section, key, v).as_bytes()).map_err(io_err)
 }
 
 pub(super) fn delete(
@@ -85,5 +92,5 @@ pub(super) fn delete(
     if text.is_empty() {
         return Ok(());
     }
-    std::fs::write(&path, ini::remove(&text, section, key)).map_err(io_err)
+    write_atomic(&path, ini::remove(&text, section, key).as_bytes()).map_err(io_err)
 }

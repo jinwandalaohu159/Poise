@@ -77,7 +77,12 @@ public sealed partial class AppsViewModel(AppHost host) : ObservableObject
         if (!_wired)
         {
             _wired = true;
-            _poller.Error += message => Error?.Invoke(message);
+            _poller.Error += message =>
+            {
+                // 读不到也不再一直转圈（和 0.7.0 一样），顶部提示原因；服务恢复后照常显示。
+                IsLoading = false;
+                Error?.Invoke(message);
+            };
             _poller.Recovered += () => Recovered?.Invoke();
         }
         host.Status.Changed += SyncSmartSchedule;
@@ -214,17 +219,18 @@ public sealed partial class AppsViewModel(AppHost host) : ObservableObject
         await FetchAsync();
     });
 
-    /// <summary>设置一个程序（按路径）的类别。立即生效，顺便刷新列表；失败时调用 <paramref name="revert"/> 回到原来的选项。</summary>
+    /// <summary>
+    /// 设置一个程序（按路径）的类别。立即生效，顺便刷新列表；设置失败时调用 <paramref name="revert"/> 回到原来的选项。
+    /// 设置成功、只是之后的刷新失败时不回退（类别已经改了），下一次刷新会补上。
+    /// </summary>
     internal async Task SetPreferenceAsync(string path, AppPreference value, Action revert)
     {
-        if (!await TryAsync(async () =>
-            {
-                await _gate.ChangeAsync(() => host.Api.SetAppPreferenceAsync(path, value));
-                await FetchAsync();
-            }))
+        if (!await TryAsync(() => _gate.ChangeAsync(() => host.Api.SetAppPreferenceAsync(path, value))))
         {
             revert();
+            return;
         }
+        await TryAsync(FetchAsync);
     }
 
     /// <summary>执行一个服务请求；服务不可用或拒绝时在页面顶部提示，返回是否成功。</summary>

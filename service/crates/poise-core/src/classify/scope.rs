@@ -1,8 +1,7 @@
 //! 调度范围与类别：哪些进程参与调度，以及用户为它选的类别。
 
-use std::collections::HashMap;
-
 use super::{Role, ScheduleScope};
+use crate::fast_hash::HashMap;
 use crate::known;
 use crate::model::{Pid, ProcessSample};
 use crate::prefs::{AppPreference, Preferences};

@@ -10,8 +10,7 @@
 //!
 //! 这里只判断谁是重点程序；它占用多少核心见 `footprint`。
 
-use std::collections::{HashMap, HashSet};
-
+use crate::fast_hash::{HashMap, HashSet};
 use crate::model::{Millis, ProcessKey};
 
 /// 什么样的程序算重点程序。

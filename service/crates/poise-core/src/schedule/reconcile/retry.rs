@@ -2,7 +2,7 @@
 //! 等待从 [`FIRST_MS`] 起逐次加倍，最长 [`MAX_MS`]；成功一次就清零。没权限、进程退出不在这里处理
 //! （见 `Reconciler::report`）。
 
-use std::collections::{HashMap, HashSet};
+use crate::fast_hash::{HashMap, HashSet};
 use std::mem::Discriminant;
 
 use super::PlannedAction;

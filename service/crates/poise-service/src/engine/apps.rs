@@ -2,7 +2,8 @@
 //! 未运行的程序（设置过类别的，以及以前运行过的，见 [`super::remembered`]）。每个程序附带它当前的调度状态。
 //! 分组规则见 [`poise_core::app_groups`]。
 
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use poise_core::fast_hash::HashSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use poise_core::app_groups::{self, AppGroup, GroupKind};
 use poise_core::classify::Classification;
@@ -18,7 +19,7 @@ impl Engine {
     /// 程序偏好页的列表：正在运行的（含系统一栏）加上未运行的，按名称排序。界面按 `kind` 和 `running` 分栏。
     pub fn apps(&self) -> Vec<AppEntry> {
         let Some(view) = &self.view else {
-            return self.idle_entries(&HashSet::new());
+            return self.idle_entries(&HashSet::default());
         };
         let mut apps = self.running_entries(view);
         // 作为别的程序的一部分在运行（归到主程序名下）的程序，也不算"未运行"。

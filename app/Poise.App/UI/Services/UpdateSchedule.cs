@@ -23,7 +23,7 @@ public sealed class UpdateSchedule : IDisposable
         _timer.Tick += async (_, _) =>
         {
             _timer.Interval = Interval;
-            await _updater.CheckAsync(quiet: true);
+            await Guard.RunAsync(() => _updater.CheckAsync(quiet: true), "检查更新");
         };
         if (updater.State.Phase != UpdatePhase.Unavailable)
         {

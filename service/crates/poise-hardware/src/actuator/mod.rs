@@ -44,6 +44,16 @@ impl Actuator {
         self.bios.fan_boost(percent);
     }
 
+    /// 核对散热模式和风扇加速（睡眠醒来后）。
+    pub fn recheck_bios(&self) {
+        self.bios.recheck();
+    }
+
+    /// 取走"切换散热模式失败了"。
+    pub fn take_thermal_failure(&self) -> bool {
+        self.bios.take_failure()
+    }
+
     /// 回到 Poise 接管之前的散热模式，收回风扇加速（不等待）。
     pub fn restore_bios(&self) {
         self.bios.restore();

@@ -174,6 +174,15 @@ pub fn active_console_session() -> u32 {
     unsafe { windows::Win32::System::RemoteDesktop::WTSGetActiveConsoleSessionId() }
 }
 
+/// 进程所在的会话；进程已退出时为 None。
+pub fn session_of(pid: u32) -> Option<u32> {
+    let mut session = 0u32;
+    // SAFETY: 输出到本地变量。
+    unsafe { windows::Win32::System::RemoteDesktop::ProcessIdToSessionId(pid, &mut session) }
+        .ok()?;
+    Some(session)
+}
+
 #[cfg(test)]
 mod tests {
     #[test]

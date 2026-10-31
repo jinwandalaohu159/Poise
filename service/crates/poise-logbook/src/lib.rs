@@ -16,6 +16,7 @@ mod worker;
 
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Sender, SyncSender};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -58,6 +59,8 @@ pub struct Logbook {
     tx: SyncSender<Message>,
     shared: Arc<Mutex<Shared>>,
     dir: PathBuf,
+    /// 积压满了（日志线程卡在磁盘上）没交出去的条数：不让调度等它，但要留下痕迹。
+    dropped: Arc<AtomicU64>,
 }
 
 impl Logbook {
@@ -70,6 +73,7 @@ impl Logbook {
             tx,
             shared,
             dir: dir.to_path_buf(),
+            dropped: Arc::default(),
         }
     }
 
@@ -85,12 +89,12 @@ impl Logbook {
 
     /// 交来一轮调度的摘要（记录系统据此汇总）。
     pub fn round(&self, round: Round) {
-        let _ = self.tx.try_send(Message::Round(round));
+        self.send(Message::Round(round));
     }
 
     /// 结束正在记录的一段（Poise 暂停、服务停止时）。
     pub fn end_session(&self) {
-        let _ = self.tx.try_send(Message::EndSession);
+        self.send(Message::EndSession);
     }
 
     /// 等日志线程把之前交来的都写完（服务停止前），最多等 [`FLUSH_TIMEOUT`]。
@@ -115,11 +119,21 @@ impl Logbook {
     }
 
     fn send_event(&self, event: Event, detail: Option<String>) {
-        let _ = self.tx.try_send(Message::Event {
+        self.send(Message::Event {
             at_unix_ms: unix_now_ms(),
             event,
             detail,
         });
+    }
+
+    /// 交给日志线程，不等待；积压满了时丢掉这条，记在文本日志里（第 1、2、4、8……条时各记一次）。
+    fn send(&self, message: Message) {
+        if self.tx.try_send(message).is_err() {
+            let dropped = self.dropped.fetch_add(1, Ordering::Relaxed) + 1;
+            if dropped.is_power_of_two() {
+                log::warn!("日志线程跟不上，已丢掉 {dropped} 条日志与记录");
+            }
+        }
     }
 
     fn lock(&self) -> MutexGuard<'_, Shared> {

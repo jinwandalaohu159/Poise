@@ -48,7 +48,9 @@ impl PipeServer {
     /// 创建一个新实例并阻塞等待客户端连接。
     pub fn accept(&self) -> windows::core::Result<PipeConnection> {
         let name = WideString::new(&self.name);
-        let first = self.first.swap(false, Ordering::SeqCst);
+        // 第一个实例必须是自己建的（别的程序抢先建了同名管道时失败）。没建成时下次还要这样建，
+        // 不能退而加入别人的管道。
+        let first = self.first.load(Ordering::SeqCst);
         let mut open_mode: FILE_FLAGS_AND_ATTRIBUTES = PIPE_ACCESS_DUPLEX;
         if first {
             open_mode |= FILE_FLAG_FIRST_PIPE_INSTANCE;
@@ -70,6 +72,7 @@ impl PipeServer {
         if h.is_invalid() {
             return Err(windows::core::Error::from_thread());
         }
+        self.first.store(false, Ordering::SeqCst);
         let handle = OwnedHandle::from_raw(h);
         // SAFETY: 句柄有效，同步模式。
         if let Err(e) = unsafe { ConnectNamedPipe(handle.raw(), None) }

@@ -58,7 +58,7 @@ fn replay_gaming_with_an_idle_background() {
     let groups: HashSet<CoreSet> = (10..30).map(|p| sim.cores_of(p)).collect();
     assert_eq!(
         groups,
-        HashSet::from([CoreSet::Domains(0b010), CoreSet::Domains(0b100)])
+        HashSet::from_iter([CoreSet::Domains(0b010), CoreSet::Domains(0b100)])
     );
     assert_eq!(sim.state_of(GAME), Some(Desired::PLAYING));
     assert!(sim.never_lowered(GAME));

@@ -20,7 +20,17 @@ public static class CollectionSync
         where TKey : notnull
     {
         var comparer = EqualityComparer<TKey>.Default;
-        var wanted = desired.Select(key).ToHashSet();
+        // 目标里有重复的键时只留第一个：否则同一行会插进去两次，之后的对齐和整表重排都会出错。
+        var wanted = new HashSet<TKey>();
+        var unique = new List<T>(desired.Count);
+        foreach (var d in desired)
+        {
+            if (wanted.Add(key(d)))
+            {
+                unique.Add(d);
+            }
+        }
+        desired = unique;
         for (var i = target.Count - 1; i >= 0; i--)
         {
             if (!wanted.Contains(key(target[i])))
@@ -72,7 +82,7 @@ public static class CollectionSync
         {
             return null;
         }
-        var existing = current.ToDictionary(key);
+        var existing = current.FirstByKey(key);
         return desired.Select(d => existing.TryGetValue(key(d), out var e) ? e : d).ToList();
     }
 

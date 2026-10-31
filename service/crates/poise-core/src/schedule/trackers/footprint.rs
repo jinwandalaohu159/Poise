@@ -1,8 +1,7 @@
 //! 重点程序占用多少核心（谁是重点程序见 `focus`）。
 
-use std::collections::{HashMap, HashSet};
-
 use crate::action::CoreSet;
+use crate::fast_hash::{HashMap, HashSet};
 use crate::model::{Millis, ProcessKey};
 use crate::schedule::CoreLayout;
 

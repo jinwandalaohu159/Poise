@@ -2,6 +2,7 @@
 //! 只读的请求先看有没有留着的回复（见 [`super::answers`]）；会改变状态的请求让留着的回复作废。
 
 use poise_core::model::Pid;
+use poise_platform::observe::system;
 use poise_protocol::{ErrorCode, HelloResult, PROTOCOL_VERSION, Request, ResponseEnvelope};
 use serde::Serialize;
 
@@ -61,9 +62,11 @@ impl Engine {
                 )
             }
             Request::ReportSession(state) => {
-                // 会话变了（切换用户），或者还不知道登录用户（服务启动时还没人登录）：重新找。
+                // 会话变了（切换用户）、还不知道登录用户（服务启动时还没人登录）、换了一个托盘代理（注销后
+                // 换人登录，会话号常常沿用）：重新找。用户没变时很快返回。
                 if state.session_id != self.session.session_id()
                     || self.changes.store.user().is_none()
+                    || !self.session.is_reporter(client)
                 {
                     self.on_session_changed(state.session_id);
                 }
@@ -76,7 +79,8 @@ impl Engine {
             }
             Request::SetUiVisible { visible } => {
                 let now = self.now();
-                self.session.set_ui_visible(visible, now);
+                self.session
+                    .set_ui_visible(visible, system::session_of(client), now);
                 ok(id, &())
             }
             Request::GetStatus => self.answer(id, Query::Status),
