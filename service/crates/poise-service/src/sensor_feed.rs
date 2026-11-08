@@ -1,8 +1,13 @@
 //! 采集线程：定期读取硬件传感器，把最近一次的读数放在共享位置。
 //!
 //! 机型接口（WMI）一次读取可能要几十到几百毫秒。放在独立线程里，调度引擎和界面请求
-//! 只取"最近一次"的结果，永远不用等它。
+//! 只取"最近一次"的结果，永远不用等它。每次有新读数时计数加一（见 [`SensorFeed::generation`]），
+//! 界面要状态时据此换上最新的读数，不用等下一轮采样。
+//!
+//! 一次读两步：先读温度、显卡、风扇并立即放出来，再看硬盘信息要不要重读（慢，界面刚打开时要补读温度
+//! 和磨损），读完再放一次。
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -32,6 +37,8 @@ enum Signal {
 /// 采集线程的句柄。丢弃时线程结束。
 pub struct SensorFeed {
     latest: Arc<Mutex<HardwareReading>>,
+    /// 放出过几次读数。
+    generation: Arc<AtomicU64>,
     tx: Sender<Signal>,
     level: SensorLevel,
     idle: bool,
@@ -41,8 +48,10 @@ impl SensorFeed {
     /// 启动采集线程：界面显示时每隔 `every` 读取一次，否则见 [`QUIET_EVERY`]。
     pub fn start(mut sensors: Sensors, every: Duration) -> Self {
         let latest = Arc::new(Mutex::new(HardwareReading::default()));
+        let generation = Arc::new(AtomicU64::new(0));
         let (tx, rx) = mpsc::channel();
         let shared = latest.clone();
+        let published = generation.clone();
         let started = Instant::now();
         std::thread::Builder::new()
             .name("sensors".into())
@@ -52,13 +61,24 @@ impl SensorFeed {
                 let mut read_now = true;
                 loop {
                     if read_now {
+                        let publish = |reading: &HardwareReading| {
+                            if let Ok(mut l) = shared.lock() {
+                                *l = reading.clone();
+                            }
+                            published.fetch_add(1, Ordering::Release);
+                        };
                         let t = Instant::now();
-                        let reading = sensors.read(level, started.elapsed().as_millis() as Millis);
+                        let mut reading =
+                            sensors.read(level, started.elapsed().as_millis() as Millis);
+                        publish(&reading);
+                        if let Some(storage) =
+                            sensors.refresh_storage(level, started.elapsed().as_millis() as Millis)
+                        {
+                            reading.storage = storage;
+                            publish(&reading);
+                        }
                         if t.elapsed() > SLOW_READ {
                             log::info!("读取硬件传感器耗时 {} ms", t.elapsed().as_millis());
-                        }
-                        if let Ok(mut l) = shared.lock() {
-                            *l = reading;
                         }
                     }
                     let wait = if level.shown() {
@@ -85,6 +105,7 @@ impl SensorFeed {
             .expect("创建采集线程失败");
         Self {
             latest,
+            generation,
             tx,
             level: SensorLevel::Basic,
             idle: false,
@@ -94,6 +115,11 @@ impl SensorFeed {
     /// 最近一次的读数（不等待）。
     pub fn latest(&self) -> HardwareReading {
         self.latest.lock().map(|r| r.clone()).unwrap_or_default()
+    }
+
+    /// 放出过几次读数：和上次取读数时的比较，就知道有没有更新的（不用加锁、不用复制读数）。
+    pub fn generation(&self) -> u64 {
+        self.generation.load(Ordering::Acquire)
     }
 
     /// 需要的详细程度。变化时采集线程立即按新的要求读一次。

@@ -51,8 +51,10 @@ impl Engine {
                         });
                     }
                     Verdict::Aside | Verdict::Backseat => round.moved_aside += 1,
+                    // 在后台干活的程序给游戏让出大核时也算挪开了；和重点程序分享处理器的不算让路。
+                    Verdict::Working if state.cores.is_efficiency() => round.moved_aside += 1,
                     Verdict::Yielded | Verdict::Lowered => round.yielded.push(*key),
-                    Verdict::Normal => {}
+                    Verdict::Working | Verdict::Normal => {}
                 }
             }
         }

@@ -153,11 +153,20 @@ fn what_text(from: Verdict, to: Verdict, cores: CoreSpan, cause: Option<Cause>) 
         Verdict::Focused => format!("成为重点程序，{}", cores_text(cores)),
         Verdict::Yielded if cause == Some(Cause::MarkedLow) => "让路".into(),
         Verdict::Yielded => "后台忙，让路（移到小核、节能、降优先级）".into(),
-        Verdict::Lowered => "后台忙，降低优先级（空闲的核心照样用）".into(),
+        Verdict::Lowered => "后台忙，降低优先级（核心不限）".into(),
+        Verdict::Working if cores.all => {
+            "在后台干活，不当成后台让路（用所有核心、不让系统节能限速）".into()
+        }
+        Verdict::Working if cores.kept > 0 => format!(
+            "在后台干活，和重点程序分处理器（{}、不让系统节能限速）",
+            cores_text(cores)
+        ),
+        Verdict::Working => "在后台干活，移到小核（大核留给重点程序）".into(),
         Verdict::Backseat => "后台忙，移到小核（不降优先级）".into(),
         Verdict::Aside => "移到小核".into(),
         Verdict::Normal if from == Verdict::Playing => "不再按游戏调度".into(),
         Verdict::Normal if from == Verdict::Focused => "不再是重点程序".into(),
+        Verdict::Normal if from == Verdict::Working => "后台的工作结束".into(),
         Verdict::Normal => "恢复".into(),
     };
     match cause {
@@ -170,6 +179,9 @@ fn what_text(from: Verdict, to: Verdict, cores: CoreSpan, cause: Option<Cause>) 
 fn cores_text(cores: CoreSpan) -> String {
     match cores {
         CoreSpan { all: true, .. } => "用所有核心".into(),
+        CoreSpan { kept, .. } if kept > 0 => {
+            format!("优选的 {kept} 个大核留给重点程序，用其余核心")
+        }
         CoreSpan {
             main: true,
             others: 0,

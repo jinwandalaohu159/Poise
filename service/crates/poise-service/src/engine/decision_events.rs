@@ -55,12 +55,21 @@ pub(super) fn program_ref<'a>(
 
 /// 核心范围的说法：第 0 个核心域是主域（大核），其余是按缓存分的组。
 pub(super) fn core_span(cores: CoreSet, domains: usize) -> CoreSpan {
+    if let CoreSet::Rest(kept) = cores {
+        return CoreSpan {
+            all: false,
+            main: true,
+            others: domains.saturating_sub(1) as u32,
+            kept: u32::from(kept),
+        };
+    }
     let mask = cores.domain_mask(domains);
     let all = CoreSet::All.domain_mask(domains);
     CoreSpan {
         all: mask == all,
         main: mask & 1 != 0,
         others: (mask & !1).count_ones(),
+        kept: 0,
     }
 }
 
@@ -106,10 +115,21 @@ mod tests {
             CoreSpan {
                 all: false,
                 main: true,
-                others: 1
+                others: 1,
+                kept: 0
             }
         );
         assert!(!span(CoreSet::Efficiency).main);
+        // 主域按物理核心切开：留出几个、其余都用。
+        assert_eq!(
+            span(CoreSet::Rest(4)),
+            CoreSpan {
+                all: false,
+                main: true,
+                others: 2,
+                kept: 4
+            }
+        );
         // 只有一个域的处理器：怎样都是所有核心。
         assert!(core_span(CoreSet::Performance, 1).all);
     }

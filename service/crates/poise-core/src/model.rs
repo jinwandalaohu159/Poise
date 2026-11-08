@@ -197,6 +197,16 @@ pub struct Snapshot {
     /// 同样按组内序号，各逻辑处理器运行时的实际频率（MHz，最近一次读到的，几秒一读）：这段时间没运行过的
     /// 是 0；读不到时为空。
     pub core_mhz: Vec<u32>,
+    /// 本机程序之间的网络连接（最近一次读到的，十来秒一读）：谁在等谁，见 [`LocalLink`]。
+    pub links: Vec<LocalLink>,
+}
+
+/// 本机两个程序之间的一条网络连接：客户端进程连着服务端进程监听的端口（浏览器连本地的大模型服务、
+/// 前端连开发服务器、程序连本地数据库、访问容器发布到本机的端口）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct LocalLink {
+    pub client: Pid,
+    pub server: Pid,
 }
 
 impl Snapshot {

@@ -3,7 +3,8 @@
 //! - [`cycle`]：每个采样周期（采集 → 分类 → 调度 → 健康评估与处理器余量），并串起下面各部分；
 //!   [`sampler`] 在引擎锁外采集进程快照，[`cadence`] 决定多久采一轮，[`phases`] 给每轮分段计时
 //! - [`schedule`]：按调度计划调整进程、临时全速、停止时撤销，[`decision_events`] 把调度决定写成日志事件；
-//!   [`adjusted_record`]：记下调整过的进程，异常退出后下次启动时恢复
+//!   [`adjusted_record`]：记下调整过的进程，异常退出后下次启动时恢复；[`engaged_record`]：记下被用户直接
+//!   用过的程序，重启后照样认得出后台在跑的工作
 //! - [`cores`]：核心与缓存面板（核心域、缓存、负载、程序放在哪里）；[`game_watch`]：玩游戏时每分钟写一行
 //!   大核、小核的实际频率和显卡，看出帧数上不去时是被功耗、温度压着还是显卡跑满
 //! - 日志与使用记录交给独立的日志系统（`poise_logbook::Logbook`）：[`decision_events`] 把调度决定写成事件，
@@ -22,6 +23,7 @@
 //! - [`changes`]：持久修改的唯一出口（设置存储 + 变更日志）
 //! - [`session`]：用户会话、界面是否显示；[`current_user`]：按会话找登录的用户；[`user_settings`]：用户在界面上改的设置（模式、风扇、开关）
 //! - [`status`]：给界面的状态、诊断；[`apps`]：程序列表；[`remembered`]：运行过的程序（保存在本机）
+//! - [`wake`]：界面刚打开时立即采一轮，传感器在两轮之间的新读数界面立即看到；
 //! - [`requests`]：把 IPC 请求分派到上面各部分，[`answers`] 留着只读请求的回复（两轮采样之间不变），
 //!   [`error`] 是请求失败的原因
 
@@ -40,6 +42,7 @@ mod cores;
 mod current_user;
 mod cycle;
 mod decision_events;
+mod engaged_record;
 mod error;
 mod game_prefs;
 mod game_watch;
@@ -61,6 +64,7 @@ mod status;
 #[cfg(test)]
 mod tick_cost;
 mod user_settings;
+mod wake;
 
 pub use agent_relaunch::relaunch_agents;
 pub use cadence::TICK;
@@ -148,11 +152,17 @@ pub struct Engine {
     history: MetricHistory,
     /// 处理器的大小核组成与核心域（设置页、核心与缓存面板显示，调度按它分配核心）。
     topology: CpuTopology,
+    /// 主域各物理核心（系统优先使用的在前）的逻辑处理器序号（见 `CpuTopology::preferred_core_threads`）。
+    main_core_threads: Vec<Vec<usize>>,
     /// 执行进程调整与清理（清理在引擎锁外执行，共用同一个）。
     executor: Arc<GuardedExecutor>,
     hardware: Hardware,
     /// 硬件读数在采集线程里进行，这里只取最近一次的结果。
     sensors: SensorFeed,
+    /// 手里的读数（`View::reading`）是传感器放出的第几次（见 `SensorFeed::generation`）。
+    reading_generation: u64,
+    /// 叫运行循环立即采一轮（界面刚打开时，见 `requests`）；控制台测试里没有。
+    waker: Option<Box<dyn Fn() + Send>>,
     changes: Changes,
     /// 系统优化项的目录（在请求线程里刷新，见 `catalog`）。
     catalog: Arc<Catalog>,
@@ -175,6 +185,7 @@ pub struct Engine {
     observed: mode::Observed,
     view: Option<View>,
     adjusted: adjusted_record::AdjustedRecord,
+    engaged: engaged_record::EngagedRecord,
     /// 最近一次调整了程序、决定变了或前台切换的时间（决定采样快慢，见 `cycle`）。
     last_change_at: Millis,
     /// 上一轮采样的时刻（发现睡眠唤醒用，见 `cycle`）。
@@ -255,7 +266,8 @@ impl Engine {
             activity: ActivityTracker::new(ActivityConfig::default()),
             classifier: Classifier::new(ClassifyConfig::default()),
             scheduler: Scheduler::new(ScheduleConfig {
-                cores: CoreLayout::with_cores(&topology.domain_sizes()),
+                cores: CoreLayout::with_cores(&topology.domain_sizes())
+                    .with_equal_away(topology.away_equal()),
                 ..Default::default()
             }),
             leaks: LeakDetector::new(LeakConfig::default()),
@@ -272,6 +284,8 @@ impl Engine {
                 cfg.dry_run,
             )),
             sensors: SensorFeed::start(hardware.take_sensors(), TICK),
+            reading_generation: 0,
+            waker: None,
             hardware,
             changes,
             catalog: Arc::default(),
@@ -286,6 +300,7 @@ impl Engine {
             observed: mode::Observed::default(),
             view: None,
             adjusted: adjusted_record::AdjustedRecord::open(&cfg.data_dir, files.clone()),
+            engaged: engaged_record::EngagedRecord::open(&cfg.data_dir, files.clone()),
             files,
             last_change_at: 0,
             last_tick_at: None,
@@ -295,6 +310,7 @@ impl Engine {
             logbook,
             cost_log: phases::CostLog::default(),
             answers: answers::Answers::default(),
+            main_core_threads: topology.preferred_core_threads(),
             topology,
             cfg,
         };

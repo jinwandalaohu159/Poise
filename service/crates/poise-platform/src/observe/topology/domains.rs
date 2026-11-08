@@ -134,5 +134,20 @@ fn describe(
         l2_threads: l2.map_or(0, |c| c.mask.count_ones()),
         llc_bytes: d.llc_size,
         llc_block,
+        preferred_cores: preferred_cores(&members),
     }
+}
+
+/// 物理核心按系统优先使用的程度排序（调度优先级高的在前，同等的按编号）。
+fn preferred_cores(members: &[&CpuSetEntry]) -> Vec<(u16, u8)> {
+    let mut cores: Vec<(u8, (u16, u8))> = Vec::new();
+    for s in members {
+        let core = (s.group, s.core_index);
+        match cores.iter_mut().find(|(_, c)| *c == core) {
+            Some(entry) => entry.0 = entry.0.max(s.scheduling_class),
+            None => cores.push((s.scheduling_class, core)),
+        }
+    }
+    cores.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
+    cores.into_iter().map(|(_, c)| c).collect()
 }

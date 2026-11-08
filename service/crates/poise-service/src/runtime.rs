@@ -1,6 +1,6 @@
 //! 控制台模式和服务模式共用的运行循环。
 
-use std::sync::mpsc::{Receiver, RecvTimeoutError};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use poise_logbook::Logbook;
@@ -16,6 +16,8 @@ pub enum Signal {
     Stop(StopReason),
     /// 熄屏、待机、醒来（见 `engine::standby`）。
     Power(PowerChange),
+    /// 引擎要立即采一轮（界面刚打开，见 `engine::wake`）。运行循环自己用，宿主不发。
+    Wake,
 }
 
 /// 为什么停止。
@@ -25,6 +27,25 @@ pub enum StopReason {
     Requested,
     /// 系统要关机或重启。
     SystemShutdown,
+}
+
+/// 宿主的信号和引擎自己的（[`Signal::Wake`]）合到一处：运行循环只等一个地方。宿主的发送端丢弃时
+/// 当成停止（引擎手里的发送端不算）。
+fn merged(host: Receiver<Signal>) -> (Receiver<Signal>, Sender<Signal>) {
+    let (tx, rx) = mpsc::channel();
+    let forward = tx.clone();
+    std::thread::Builder::new()
+        .name("signals".into())
+        .spawn(move || {
+            for signal in host.iter() {
+                if forward.send(signal).is_err() {
+                    return;
+                }
+            }
+            let _ = forward.send(Signal::Stop(StopReason::Requested));
+        })
+        .expect("创建信号转发线程失败");
+    (rx, tx)
 }
 
 /// 运行直到 `signals` 收到停止（或发送端被丢弃）。停下调度之后调用 `stopping`（服务据此报告"正在停止"）。
@@ -37,7 +58,13 @@ pub fn run(
     let data_dir = cfg.data_dir.clone();
     // 日志系统与记录系统在自己的线程里，引擎和命名管道服务端各拿一份接口。
     let logbook = Logbook::open(&cfg.data_dir);
-    let engine = Engine::new(cfg, logbook.clone())?;
+    let mut engine = Engine::new(cfg, logbook.clone())?;
+    let signals = merged(signals);
+    let waker = signals.1.clone();
+    engine.set_waker(move || {
+        let _ = waker.send(Signal::Wake);
+    });
+    let signals = signals.0;
     let sampler = engine.sampler();
     let engine = Arc::new(Mutex::new(engine));
     let ipc = IpcServer::start(engine.clone(), logbook.clone(), mode)?;
@@ -72,6 +99,7 @@ pub fn run(
                     e.on_power(change);
                 }
             }
+            Ok(Signal::Wake) => {}
             Ok(Signal::Stop(reason)) => break reason,
             Err(RecvTimeoutError::Disconnected) => break StopReason::Requested,
         }

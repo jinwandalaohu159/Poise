@@ -4,9 +4,11 @@
 
 mod audio;
 mod background;
+mod combos;
 mod focus;
 mod games;
 mod restore;
+mod work;
 
 use super::*;
 use crate::action::{Action, CoreSet, EcoQos, ResourcePriority};
@@ -78,6 +80,11 @@ struct Sim {
     decisions: Vec<Decision>,
     last_plan: Option<SchedulePlan>,
     on_battery: bool,
+    /// 大核正被功耗或温度压着。
+    cpu_held: bool,
+    /// 本机程序之间的连接。
+    links: Vec<crate::model::LocalLink>,
+
     /// 用户多久没操作。
     idle_ms: Millis,
     /// 整机累计的忙碌时间、总时间（100 纳秒）。
@@ -102,6 +109,8 @@ impl Sim {
             decisions: Vec::new(),
             last_plan: None,
             on_battery: false,
+            cpu_held: false,
+            links: Vec::new(),
             idle_ms: 0,
             system_times: (0, 0),
         }
@@ -166,6 +175,7 @@ impl Sim {
             },
             processors: Vec::new(),
             core_mhz: Vec::new(),
+            links: self.links.clone(),
         }
     }
 
@@ -214,6 +224,8 @@ impl Sim {
             game_mode: Some(Mode::Full),
             on_battery: self.on_battery,
             hot: false,
+            cpu_held: self.cpu_held,
+            main_core_busy: &[],
             user_idle_ms: self.idle_ms,
         });
         for a in &plan.actions {

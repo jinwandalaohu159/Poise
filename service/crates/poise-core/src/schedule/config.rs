@@ -1,7 +1,9 @@
 //! 调度参数。处理器的核心域见 `layout`。
 
 use super::CoreLayout;
-use super::trackers::{BusyRule, DemandRule, FocusRule, ForegroundHold, LoadSmoothing};
+use super::trackers::{
+    BusyRule, DemandRule, FocusRule, ForegroundHold, LoadSmoothing, ShareRule, WorkRule,
+};
 use crate::model::Millis;
 
 const MB: f64 = 1024.0 * 1024.0;
@@ -21,6 +23,10 @@ pub struct ScheduleConfig {
     pub busy_with_audio: BusyRule,
     /// 什么样的程序算重点程序（大核留给它，其余没在用的程序让到小核，见 `trackers::focus`）。
     pub focus: FocusRule,
+    /// 用户的程序在干活，什么时候不再算（见 `trackers::work`；开始算用后台"在忙"的门槛）。
+    pub work: WorkRule,
+    /// 有重点程序时，后台的工作和它怎样分大核（见 `trackers::share`）。
+    pub share: ShareRule,
     /// 最后一个游戏退出后，游戏模式再保持多久（一局结束到下一局开始之间不切回日常模式）。
     pub game_session_hold_ms: Millis,
     /// 停声后多久内仍算"在发声"。
@@ -75,6 +81,18 @@ impl Default for ScheduleConfig {
                 away_grace_ms: 15_000,
                 hold_ms: 20_000,
                 work_settle_ms: 60_000,
+            },
+            work: WorkRule {
+                leave_ratio: 0.5,
+                leave_after_ms: 30_000,
+            },
+            share: ShareRule {
+                // 游戏的负载是几秒内的平均，一帧之内的突发高得多：留出的核心只按七成算，再多留一个。
+                target_util: 0.7,
+                spare_cores: 1,
+                min_cores: 2,
+                narrow_after_ms: 60_000,
+                crowded_pct: 80.0,
             },
             game_session_hold_ms: 3 * 60_000,
             audio_hold_ms: 30_000,

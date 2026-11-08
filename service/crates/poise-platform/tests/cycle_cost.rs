@@ -25,7 +25,8 @@ fn measure_one_cycle() {
     let mut activity = ActivityTracker::new(ActivityConfig::default());
     let mut classifier = Classifier::new(ClassifyConfig::default());
     let mut scheduler = Scheduler::new(ScheduleConfig {
-        cores: CoreLayout::with_cores(&topology.domain_sizes()),
+        cores: CoreLayout::with_cores(&topology.domain_sizes())
+            .with_equal_away(topology.away_equal()),
         ..Default::default()
     });
     let prefs = Preferences::default();
@@ -68,6 +69,8 @@ fn measure_one_cycle() {
             game_mode: None,
             on_battery: false,
             hot: false,
+            cpu_held: false,
+            main_core_busy: &[],
             user_idle_ms: 0,
         });
         let schedule = t.elapsed();

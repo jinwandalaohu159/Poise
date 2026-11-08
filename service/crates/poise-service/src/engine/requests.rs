@@ -79,8 +79,13 @@ impl Engine {
             }
             Request::SetUiVisible { visible } => {
                 let now = self.now();
+                let was = self.session.ui_visible(now);
                 self.session
                     .set_ui_visible(visible, system::session_of(client), now);
+                // 界面刚打开：显卡、风扇、走势、核心面板不等下一轮（见 `wake`）。
+                if !was && self.session.ui_visible(now) {
+                    self.on_ui_shown(now);
+                }
                 ok(id, &())
             }
             Request::GetStatus => self.answer(id, Query::Status),
@@ -135,6 +140,10 @@ impl Engine {
 
     /// 只读的请求：有留着的回复就直接给，没有时整理一份并留下。
     fn answer(&mut self, id: u64, query: Query) -> ResponseEnvelope {
+        // 传感器在两轮之间有了新读数：状态里换上它（见 `take_fresh_reading`）。
+        if query == Query::Status && self.take_fresh_reading() {
+            self.answers.invalidate();
+        }
         if let Some(cached) = self.answers.get(query, id) {
             return cached;
         }

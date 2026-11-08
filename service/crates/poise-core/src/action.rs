@@ -45,6 +45,10 @@ pub enum CoreSet {
     Efficiency,
     /// 具体的几个核心域（第 n 位对应第 n 个域）：调度按负载和缓存分配的结果。
     Domains(u16),
+    /// 除了主域里系统优先使用的前 n 个物理核心（连同超线程，睿频最高的"优选核心"在前）之外的全部核心：
+    /// 主域按物理核心切开，前面的留给重点程序，后台的工作用剩下的。两边不共用物理核心——
+    /// 超线程的两个线程挤在同一个物理核心上时优先级帮不上忙，两边都变慢。
+    Rest(u8),
 }
 
 impl CoreSet {
@@ -67,6 +71,7 @@ impl CoreSet {
     }
 
     /// 在有 `domains` 个核心域的处理器上用到哪些域（第 n 位对应第 n 个域）；不限制时是全部。
+    /// [`CoreSet::Rest`] 用到主域的一部分和全部副域，按全部算。
     pub fn domain_mask(self, domains: usize) -> u16 {
         let all = if domains >= 16 {
             u16::MAX
@@ -74,7 +79,7 @@ impl CoreSet {
             (1u16 << domains) - 1
         };
         let mask = match self {
-            Self::All => all,
+            Self::All | Self::Rest(_) => all,
             Self::Performance => 1,
             Self::Efficiency => all & !1,
             Self::Domains(m) => m,
@@ -158,7 +163,8 @@ impl Action {
             Self::SetCoreSet { set, .. } => {
                 if set.is_performance() {
                     ActionKind::Boost
-                } else if set.is_efficiency() {
+                } else if set.is_efficiency() || matches!(set, CoreSet::Rest(_)) {
+                    // 留出优选的大核、只用其余核心也是让出一部分：正在用的程序不会被这样限制。
                     ActionKind::Demote
                 } else {
                     ActionKind::Restore

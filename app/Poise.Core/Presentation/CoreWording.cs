@@ -24,6 +24,7 @@ public static class CoreWording
         Verdict.Focused => "verdict.focused",
         Verdict.Yielded => "verdict.yielded",
         Verdict.Lowered => "verdict.lowered",
+        Verdict.Working => "verdict.working",
         Verdict.Backseat => "verdict.backseat",
         Verdict.Aside => "verdict.aside",
         _ => "verdict.normal",
@@ -42,6 +43,10 @@ public static class CoreWording
         if (s.All)
         {
             return Loc.Get("span.all");
+        }
+        if (s.Kept > 0)
+        {
+            return Loc.Format("span.rest", s.Kept);
         }
         var prefix = m.Hybrid ? "span.hybrid" : "span.groups";
         if (!s.Main)

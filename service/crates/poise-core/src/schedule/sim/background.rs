@@ -23,8 +23,19 @@ fn replay_switching_between_busy_programs() {
         sim.foreground = Some([1, 2, 3][round % 3]);
         sim.run_for(10_000);
     }
-    // 最近用过的程序都算"正在用"，切来切去一次都没被降级。
-    assert!(sim.log.is_empty(), "{:?}", sim.log);
+    // 最近用过的程序都算"正在用"，切来切去一次都没被降级；它们是用户的、在干活，各自只调整一次：
+    // 不让系统节能限速（在前台时也保持，切来切去不跟着来回调整）。
+    for pid in [1, 2, 3] {
+        assert!(
+            sim.never_lowered(pid) && sim.only_protected(pid),
+            "{:?}",
+            sim.log
+        );
+    }
+    assert_eq!(
+        sim.adjustments_per_process(),
+        HashMap::from_iter([(1, 1), (2, 1), (3, 1)])
+    );
 }
 
 /// 复盘"后台有个程序在持续干活"：
@@ -60,19 +71,17 @@ fn replay_background_work_yields_only_when_someone_needs_the_processor() {
         sim.run_for(10_000);
     }
     assert!(sim.is_lowered(UPDATER));
-    assert_eq!(
-        sim.adjustments_per_process(),
-        HashMap::from_iter([(UPDATER, 1)])
-    );
+    // 它只调整一次；用户的程序在忙时只是不让系统节能限速，从不降级。
+    assert_eq!(sim.adjustments_per_process().get(&UPDATER), Some(&1));
+    assert!(sim.never_lowered(USER_APP));
 
     // 用户离开电脑：持续没有需求。它还在忙：不来回调整（"低于正常"在没人抢处理器时不影响它的速度）。
     sim.proc_mut(USER_APP).cpu_pct = 0.0;
     sim.run_for(2 * 60_000);
     assert!(sim.is_lowered(UPDATER));
-    assert_eq!(
-        sim.adjustments_per_process(),
-        HashMap::from_iter([(UPDATER, 1)])
-    );
+    // 它只调整一次；用户的程序在忙时只是不让系统节能限速，从不降级。
+    assert_eq!(sim.adjustments_per_process().get(&UPDATER), Some(&1));
+    assert!(sim.never_lowered(USER_APP));
     // 它的活干完了：恢复。
     sim.proc_mut(UPDATER).cpu_pct = 0.0;
     sim.run_for(2 * 60_000);
@@ -82,10 +91,10 @@ fn replay_background_work_yields_only_when_someone_needs_the_processor() {
     sim.proc_mut(USER_APP).cpu_pct = 50.0;
     sim.run_for(60_000);
     assert!(sim.is_lowered(UPDATER));
-    // 用户点开它：立即恢复。
+    // 用户点开它：立即恢复。从此它是用户的程序：在忙就不让系统节能限速，不再按后台让路。
     sim.foreground = Some(UPDATER);
     sim.run_for(TICK_MS);
-    assert_eq!(sim.state_of(UPDATER), None);
+    assert_eq!(sim.state_of(UPDATER), Some(Desired::WORK));
 
     assert!(sim.never_lowered(USER_APP));
     for pid in 10..20 {

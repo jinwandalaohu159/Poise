@@ -117,16 +117,17 @@ fn place_programs(
     unrestricted
 }
 
-/// 列表里的先后：重点程序，让路的，挪开的。
+/// 列表里的先后：重点程序，在后台干活的，让路的，挪开的。
 fn rank(v: Verdict) -> u8 {
     match v {
         Verdict::Playing => 0,
         Verdict::Focused => 1,
-        Verdict::Yielded => 2,
-        Verdict::Lowered => 3,
-        Verdict::Backseat => 4,
-        Verdict::Aside => 5,
-        Verdict::Normal => 6,
+        Verdict::Working => 2,
+        Verdict::Yielded => 3,
+        Verdict::Lowered => 4,
+        Verdict::Backseat => 5,
+        Verdict::Aside => 6,
+        Verdict::Normal => 7,
     }
 }
 
@@ -149,6 +150,7 @@ mod tests {
             l2_threads: 4,
             llc_bytes: 24 << 20,
             llc_block: Some(0),
+            preferred_cores: Vec::new(),
         }
     }
 

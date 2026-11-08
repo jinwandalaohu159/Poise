@@ -212,6 +212,8 @@ impl Engine {
             || self.standby.active()
             || self.session.current(now).idle_ms >= USER_AWAY_MS;
         self.sensors.set_idle(away && !ui && outcome.game.is_none());
+        // 先记下第几次再取：取的时候正好又有新读数的话，下次再换一次，不会漏掉。
+        self.reading_generation = self.sensors.generation();
         self.sensors.latest()
     }
 

@@ -95,7 +95,9 @@ impl Sensors {
         }
     }
 
-    /// 按详细程度读取温度、显卡、风扇、硬盘（见 [`SensorLevel`]）。
+    /// 按详细程度读取温度、显卡、风扇（见 [`SensorLevel`]）；硬盘给上次读到的，到时间再由
+    /// [`Sensors::refresh_storage`] 另读——读硬盘信息慢（界面刚打开时要补读温度和磨损），不让它拖住
+    /// 温度、显卡、风扇。
     /// 不玩游戏时，机型接口能从主板读显卡温度就优先用它，不会唤醒独显；独显在休眠时也不读 NVML。
     pub fn read(&mut self, level: SensorLevel, now: Millis) -> HardwareReading {
         // 每轮都看一眼独显：只在需要时才看的话，比较的是很久以前的读数，早就睡了的独显也会被当成醒着。
@@ -129,11 +131,6 @@ impl Sensors {
         } else {
             machine.cpu_temp
         };
-        let storage = if matches!(level, SensorLevel::Basic | SensorLevel::Full) {
-            self.storage.read(now, level == SensorLevel::Full)
-        } else {
-            self.storage.latest()
-        };
         HardwareReading {
             thermals: Thermals {
                 cpu_temp,
@@ -141,8 +138,18 @@ impl Sensors {
             },
             gpu_pct: gpu.utilization,
             fans: self.fans.clone(),
-            storage: storage.clone(),
+            storage: self.storage.latest().clone(),
         }
+    }
+
+    /// 到时间就重新读硬盘信息（玩游戏、有重点程序时不读），读了返回新的结果。
+    pub fn refresh_storage(&mut self, level: SensorLevel, now: Millis) -> Option<StorageReading> {
+        if !matches!(level, SensorLevel::Basic | SensorLevel::Full) {
+            return None;
+        }
+        let before = self.storage.latest().clone();
+        let after = self.storage.read(now, level == SensorLevel::Full);
+        (*after != before).then(|| after.clone())
     }
 
     /// 这一次要从机型接口读的项（见 [`SensorLevel`]）。

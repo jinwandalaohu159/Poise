@@ -1,6 +1,6 @@
 //! 一个程序（进程树）此刻的情况：由调度器跨周期判断（见 `judge`），树里的每个进程都按它决定。
 
-use super::policy::ProcessView;
+use super::policy::{ProcessView, WorkRoom};
 use super::trackers::FocusEnd;
 use crate::action::CoreSet;
 use crate::classify::Classification;
@@ -39,6 +39,13 @@ pub(super) struct Program {
     pub(super) settling: bool,
     /// 让路时完整让路（见 `Desired::YIELDED`），否则只降优先级。
     pub(super) yield_fully: bool,
+    /// 用户交给电脑去做的工作在后台跑着（见 `trackers::work`）。
+    pub(super) working: bool,
+    /// 正在为用户的程序干活：经本机网络连着（见 `working::serving_roots`），没被用户碰过也算用户的。
+    pub(super) serves: bool,
+    /// 在后台干活时能用多少处理器（见 `working`）。
+    pub(super) work_room: WorkRoom,
+    pub(super) on_battery: bool,
 }
 
 impl Program {
@@ -60,6 +67,9 @@ impl Program {
             busy_with_audio: self.busy_with_audio,
             settling: self.settling,
             yield_fully: self.yield_fully,
+            working: self.working,
+            work_room: self.work_room,
+            on_battery: self.on_battery,
         }
     }
 }

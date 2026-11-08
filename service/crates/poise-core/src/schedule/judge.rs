@@ -1,12 +1,12 @@
 //! 对每个程序（进程树）的判断：此刻是不是正在玩的游戏、刚用过、在发声、在忙……
 //! 同一棵树里的进程按同一份判断决定（各自只多一项：自己是否在输出声音）。
 //!
-//! 每轮按顺序：每个程序自己的情况、谁是重点程序 → 正在用的程序需要多少处理器（需求）→
-//! 后台谁在忙、该让路 → 让到副域的程序分到哪个核心域。最后由 [`Scheduler::desired`] 得出每个进程应有的状态。
+//! 每轮按顺序：每个程序自己的情况、谁是重点程序、谁在后台干活（见 `working`）→ 正在用的程序和后台的
+//! 工作需要多少处理器（需求）→ 后台谁在忙、该让路 → 让到副域的程序分到哪个核心域。最后由 [`Scheduler::desired`] 得出每个进程应有的状态。
 
 use super::decisions::Verdict;
 use super::desired::Desired;
-use super::policy;
+use super::policy::{self, WorkRoom};
 use super::program::Program;
 use super::trackers::{Demand, DemandSignals, FocusEnd, FocusLoad, FocusState, Pressure};
 use super::{ScheduleInput, Scheduler};
@@ -42,6 +42,7 @@ impl Scheduler {
             .map(|c| c.root_pid)
             .collect();
         let representatives = representatives(classes);
+        let serving = self.serving_roots(input);
         let mut programs = HashMap::with_capacity_and_hasher(roots.len(), Default::default());
         // 第一遍：每个程序自己的情况，以及谁是重点程序。
         for root_pid in roots {
@@ -70,11 +71,20 @@ impl Scheduler {
                 busy_with_audio: false,
                 settling: false,
                 yield_fully: false,
+                working: false,
+                serves: false,
+                work_room: WorkRoom::Free,
+                on_battery: input.on_battery,
             };
+            let schedulable = schedulable.contains(&root_pid);
             (program.focus, program.focus_end) =
-                self.focus_of(root_class, &program, schedulable.contains(&root_pid), now);
+                self.focus_of(root_class, &program, schedulable, now);
+            self.note_engagement(root_class, &program, schedulable, input);
+            program.serves = serving.contains(&root_pid);
+            program.working = self.working(root_class, &program, schedulable, input);
             programs.insert(root_pid, program);
         }
+        self.sum_working_load(&programs);
         self.pending_held = programs
             .iter()
             .filter(|(_, p)| p.pending_game)
@@ -86,6 +96,7 @@ impl Scheduler {
         let focusing = self.focus.holding(now, self.cfg.focus.hold_ms)
             || self.games.in_session(now, self.cfg.game_session_hold_ms);
         self.assess_demand(input, &programs, focusing);
+        let rooms = self.work_rooms(input, &programs);
         // 第二遍：在不在忙（有重点程序时规则不同）。
         // 让路的程度：需求高（有重点程序、发热）或用电池时完整让路（让开主域、节能）；
         // 只是正在用的程序在忙时只降优先级，空闲的核心照样给它用。
@@ -107,6 +118,8 @@ impl Scheduler {
                 ..*program
             };
             let in_use_besides_audio = policy::in_use(&silent.view(root_class, false));
+            // 正在用的（前台、刚用过——玩游戏时刚用过不算）全用；在发声的照样按竞争分（只让核心不让优先级）。
+            program.work_room = rooms.of(program.root, in_use_besides_audio);
             // 有重点程序时，发声只决定怎么让路（只让到小核），不决定要不要让路：声音停了直接按在忙让路，
             // 不会先恢复、过一会儿再让路。
             let in_use = if focusing {
@@ -114,9 +127,14 @@ impl Scheduler {
             } else {
                 policy::in_use(&program.view(root_class, false))
             };
-            program.busy = self
-                .busy
-                .observe(program.root, load, in_use, demand, self.cfg.busy);
+            // 在干活的程序不按后台让路（见 `policy`），也不记成让过路。
+            program.busy = self.busy.observe(
+                program.root,
+                load,
+                in_use || program.working,
+                demand,
+                self.cfg.busy,
+            );
             program.light = program.busy && !self.busy.heavy(program.root, load, self.cfg.busy);
             program.settling = self.busy.settling(&program.root, now, self.cfg.busy);
             // 发声的程序：只在有重点程序、除了发声之外没在用时，才让到小核。
@@ -129,6 +147,7 @@ impl Scheduler {
             );
         }
         self.place(classes, &mut programs);
+        self.remember_wanted(classes, &programs);
         programs
     }
 
@@ -192,7 +211,8 @@ impl Scheduler {
             && self.load.instant(root).max(self.load.recent(root)) >= threshold
     }
 
-    /// 此刻的需求（见 `trackers::demand`）：只看正在用的程序需要多少处理器，后台自己把整机跑满不算。
+    /// 此刻的需求（见 `trackers::demand`）：只看正在用的程序和用户交给电脑的工作需要多少处理器，
+    /// 后台自己把整机跑满不算。
     fn assess_demand(
         &mut self,
         input: &ScheduleInput,
@@ -201,13 +221,15 @@ impl Scheduler {
     ) {
         let now = input.snapshot.at;
         // 和别处一样按代表进程的分类判断（主进程不参与调度的程序，例如命令提示符里的编译）。
+        // 在后台干活的程序也算：别的后台程序为它让出处理器。
         let in_use_core_pct = programs
             .values()
             .filter(|p| {
-                input
-                    .classes
-                    .get(&p.class_pid)
-                    .is_some_and(|c| policy::in_use(&p.view(c, false)))
+                p.working
+                    || input
+                        .classes
+                        .get(&p.class_pid)
+                        .is_some_and(|c| policy::in_use(&p.view(c, false)))
             })
             .map(|p| self.load.sustained(&p.root))
             .sum();

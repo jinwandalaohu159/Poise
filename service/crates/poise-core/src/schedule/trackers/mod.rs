@@ -1,5 +1,5 @@
 //! 调度需要跨时间记住的事，各在一个文件里：前台保持、正在玩的游戏、发声保持、程序负载、资源需求、
-//! 后台忙碌、重点程序与它占用的核心、临时全速。
+//! 后台忙碌、重点程序与它占用的核心、程序归谁与在不在干活、和重点程序怎样分大核、临时全速。
 
 mod audio;
 mod boosts;
@@ -10,6 +10,8 @@ mod footprint;
 mod foreground;
 mod games;
 mod load;
+mod share;
+mod work;
 
 pub use audio::AudioTracker;
 pub use boosts::TempBoosts;
@@ -20,6 +22,8 @@ pub use footprint::{FocusLoad, Footprint};
 pub use foreground::{ForegroundHold, ForegroundTracker};
 pub use games::GameTracker;
 pub use load::{LoadSmoothing, TreeLoad};
+pub use share::{CoreShare, ShareRule};
+pub use work::{Sighting, WorkRule, WorkSignals, WorkTracker};
 
 /// 进程的创建时间（快照里找不到时为 None）。按进程号记的保持状态用它核对：进程号被别的程序用上时不继承。
 pub(crate) fn created_of(snap: &crate::model::Snapshot, pid: crate::model::Pid) -> Option<u64> {

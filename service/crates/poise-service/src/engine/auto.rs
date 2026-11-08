@@ -24,7 +24,9 @@ impl Engine {
                     on_battery: snapshot.system.on_battery,
                     user_idle_ms: self.session.current(now).idle_ms,
                     system_cpu_pct: self.activity.system_cpu_pct(),
-                    foreground_cores: self.foreground_cores(snapshot, classes),
+                    // 用户交给电脑、在后台跑着的工作（上一轮的判断）和前台一起算。
+                    foreground_cores: self.foreground_cores(snapshot, classes)
+                        + self.scheduler.working_cores(),
                 };
                 self.auto_mode.decide(&input)
             }

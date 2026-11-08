@@ -11,6 +11,8 @@ pub struct CoreLayout {
     threads: [u16; MAX_DOMAINS],
     cores: [u16; MAX_DOMAINS],
     count: u8,
+    /// 副域比主域慢（大小核处理器的小核）；为 false 时副域和主域一样快、只是另有一块缓存（多 CCD 的锐龙）。
+    away_slower: bool,
 }
 
 impl CoreLayout {
@@ -42,10 +44,22 @@ impl CoreLayout {
             cores[slot] = cores[slot].saturating_add(narrow(c.min(t)));
         }
         Self {
+            away_slower: true,
             threads,
             cores,
             count: domains.len().min(MAX_DOMAINS) as u8,
         }
+    }
+
+    /// 副域和主域一样快（多 CCD 的锐龙：每个 CCD 一个域，效率等级相同）。默认副域比主域慢（大小核）。
+    pub fn with_equal_away(mut self, equal: bool) -> Self {
+        self.away_slower = !equal;
+        self
+    }
+
+    /// 副域和主域一样快、只是不共用缓存（见 [`Self::with_equal_away`]）。
+    pub fn away_equal(&self) -> bool {
+        self.partitioned() && !self.away_slower
     }
 
     /// 只有一块缓存、效率等级相同的处理器：一个域。
@@ -116,6 +130,17 @@ impl CoreLayout {
         self.partitioned() && self.away_threads() >= Self::MIN_AWAY_THREADS
     }
 
+    /// 能不能把主域按物理核心切开、前 `kept` 个留给重点程序（见 [`CoreSet::Rest`]）：剩下的线程也要够多。
+    /// 只有一个域的处理器也可以（8 核的锐龙同样能分给游戏和后台的工作）。
+    pub fn can_split(&self, kept: u32) -> bool {
+        let (threads, cores) = (self.threads(0), self.cores(0));
+        if kept == 0 || kept >= cores {
+            return false;
+        }
+        let kept_threads = kept * threads / cores;
+        self.total_threads() - kept_threads >= Self::MIN_AWAY_THREADS
+    }
+
     /// 能不能把核心范围限制到 `set`。
     pub(super) fn allows(&self, set: CoreSet) -> bool {
         let valid = |m: u16| m != 0 && m & !self.all_mask() == 0;
@@ -125,6 +150,7 @@ impl CoreLayout {
             CoreSet::Efficiency => self.can_move_away(),
             CoreSet::Domains(m) if set.is_performance() => self.partitioned() && valid(m),
             CoreSet::Domains(m) => self.can_move_away() && valid(m),
+            CoreSet::Rest(kept) => self.can_split(u32::from(kept)),
         }
     }
 

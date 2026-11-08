@@ -10,6 +10,7 @@ use super::facts::FactsCache;
 use super::names::NameResolver;
 use super::steps::Steps;
 use crate::observe::cpu_performance::CpuPerformanceMeter;
+use crate::observe::local_links::LocalLinks;
 use crate::observe::processors;
 use crate::observe::services::ServiceMap;
 use crate::observe::system;
@@ -21,6 +22,7 @@ pub struct Snapshotter {
     names: NameResolver,
     services: ServiceMap,
     cpu: CpuPerformanceMeter,
+    links: LocalLinks,
 }
 
 impl Snapshotter {
@@ -32,6 +34,7 @@ impl Snapshotter {
             names: NameResolver::default(),
             services: ServiceMap::default(),
             cpu: CpuPerformanceMeter::start(),
+            links: LocalLinks::default(),
         }
     }
 
@@ -92,6 +95,8 @@ impl Snapshotter {
             }
         }
         steps.done("处理器性能");
+        let links = self.links.sample_at(at);
+        steps.done("本机连接");
         steps.log_if_slow();
         Ok(Snapshot {
             at,
@@ -99,6 +104,7 @@ impl Snapshotter {
             system,
             processors,
             core_mhz,
+            links,
         })
     }
 }

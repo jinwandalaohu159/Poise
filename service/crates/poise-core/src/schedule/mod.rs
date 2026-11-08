@@ -1,15 +1,15 @@
 //! 智能调度：重点程序（正在玩的游戏、正在用又在持续干重活的程序）按需要的线程占用核心，其余没在用的
 //! 程序让到副域（Windows 自己的维护程序——更新安装、搜索索引等——也挪开，并让出磁盘）；后台持续占用
-//! 处理器或磁盘的程序按需求分档让路；正在用、正在发声的程序不动；标记的游戏提高一级；游戏模式；临时全速。
-//! 规则见 [`policy`]。
+//! 处理器或磁盘的程序按需求分档让路；用户的程序在干活时不当后台、只在有竞争时分处理器；正在用、正在发声的
+//! 程序不动；标记的游戏提高一级；游戏模式；临时全速。规则见 [`policy`]。
 //!
 //! 对外只有 [`Scheduler`]：每个采样周期调用一次 [`Scheduler::plan`]，
 //! 把动作交给安全执行器后用 [`Scheduler::report`] 回报结果。
 //!
 //! 每一轮：`trackers` 跨周期观察（前台、游戏、发声、负载、需求、忙碌、重点程序）→ `judge` 判断每个程序
-//! （进程树，见 `program`）、算出需求、给让到副域的程序分配核心域（`placement`）→ `policy` 决定每个进程
-//! 应有的状态（各种状态见 `desired`）→ `reconcile` 与已应用的比较，得到动作 → `explain` 解释决定，
-//! `decisions` 记下变化供日志。参数与处理器的核心域在 `config`。
+//! （进程树，见 `program`；归属与在干活见 `working`）、算出需求、给让到副域的程序分配核心域（`placement`）
+//! → `policy` 决定每个进程应有的状态（各种状态见 `desired`）→ `reconcile` 与已应用的比较，得到动作
+//! → `explain` 解释决定，`decisions` 记下变化供日志。参数与处理器的核心域在 `config`。
 
 mod config;
 mod decisions;
@@ -23,6 +23,7 @@ mod policy;
 mod program;
 mod reconcile;
 mod trackers;
+mod working;
 
 use crate::action::{ActionKind, ExecError, ExecOutcome};
 use crate::activity::ActivityTracker;
@@ -48,7 +49,9 @@ use trackers::{
 };
 pub use trackers::{
     BusyRule, DemandReason, DemandRule, FocusRule, ForegroundHold, LoadSmoothing, Pressure,
+    ShareRule, WorkRule,
 };
+use working::WorkState;
 
 pub struct ScheduleInput<'a> {
     pub snapshot: &'a Snapshot,
@@ -64,6 +67,12 @@ pub struct ScheduleInput<'a> {
     pub on_battery: bool,
     /// 处理器接近温度上限（上一轮的判断）。
     pub hot: bool,
+    /// 大核在忙、频率却远低于同样多的大核在忙时跑到过的频率：正被功耗或温度压着（上一轮的判断，见
+    /// `diagnose::ClockWatch`）。有重点程序时据此把后台的工作移到小核（见 `working::rooms`）。
+    pub cpu_held: bool,
+    /// 主域各物理核心此刻有多忙（0～100，一个线程跑满算 100），按系统优先使用的顺序（见 `CoreSet::Rest`）；
+    /// 读不到时为空。看留给重点程序的核心是不是挤着（见 `trackers::share`）。
+    pub main_core_busy: &'a [f32],
     /// 用户多久没操作（毫秒）。离开很久时，挂在菜单里的游戏不再让需求保持在"高"（见 `judge`）。
     pub user_idle_ms: Millis,
 }
@@ -111,6 +120,8 @@ pub struct Scheduler {
     busy: BusyTracker,
     /// 有重点程序时，发声又在忙的程序（只让到小核）。
     busy_with_audio: BusyTracker,
+    /// 用户的程序在干活（见 `working`）。
+    work: WorkState,
     boosts: TempBoosts,
     decisions: DecisionLog,
     /// 这一轮每个程序（按主进程）的决定、核心范围与负载（见 `explain`）。
@@ -163,13 +174,30 @@ impl Scheduler {
     }
 
     /// 忘掉前台、游戏、忙碌、临时全速等跟踪状态，从头开始（Poise 暂停时，撤销调整之后调用）。
-    /// 已应用调整的记录保留：没能撤销的调整之后还会再撤销。
+    /// 已应用调整的记录保留：没能撤销的调整之后还会再撤销。哪些程序被用户直接用过也保留（见 `trackers::work`）。
     pub fn reset_tracking(&mut self) {
         let reconciler = std::mem::take(&mut self.reconciler);
+        let work = std::mem::take(&mut self.work).restarted();
         *self = Self {
             reconciler,
+            work,
             ..Self::new(self.cfg)
         };
+    }
+
+    /// 被用户直接用过的程序（服务把它存下来，重启后接上，见 [`Scheduler::restore_engaged`]）。
+    pub fn engaged(&self) -> Vec<ProcessKey> {
+        self.work.engaged_keys()
+    }
+
+    /// [`Scheduler::engaged`] 变过几次：没变时服务不必再取一遍、比较一遍。
+    pub fn engaged_revision(&self) -> u64 {
+        self.work.engaged_revision()
+    }
+
+    /// 接上上次运行记下的、被用户直接用过的程序：之前从终端、编辑器里启动、还在跑的工作照样认得出来。
+    pub fn restore_engaged(&mut self, keys: &[ProcessKey]) {
+        self.work.restore(keys);
     }
 
     /// 正在玩的游戏。它们各自是独立的程序（不归到启动它的客户端名下）。
@@ -210,6 +238,12 @@ impl Scheduler {
         self.pressure
     }
 
+    /// 这一轮用户的程序在后台干活（编译、训练、容器……见 `trackers::work`）一共占用几个核心。
+    /// "自动"模式把它和前台程序一起算：用户在等的工作，不因为切走了窗口就换到安静模式。
+    pub fn working_cores(&self) -> f32 {
+        self.work.cores()
+    }
+
     /// 一个进程当前的调度状态（程序偏好页显示）。
     pub fn state(&self, key: &ProcessKey) -> ProcessSchedule {
         self.reconciler.state(key)
@@ -237,6 +271,7 @@ impl Scheduler {
         self.focus.retain_alive(&alive);
         self.footprint.retain_alive(&alive);
         self.placer.retain_alive(&alive);
+        self.work.retain_alive(&alive);
         if input.enabled {
             self.busy.retain_alive(&alive);
             self.busy_with_audio.retain_alive(&alive);

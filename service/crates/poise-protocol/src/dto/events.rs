@@ -59,6 +59,13 @@ pub struct CoreSpan {
     pub main: bool,
     /// 用了几个其余的核心域（按缓存分的小核组、其他 CCD）。
     pub others: u32,
+    /// 主域里留给重点程序、它不用的物理核心数（系统优先使用的那几个，见 `CoreSet::Rest`）；0 表示没有切开。
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub kept: u32,
+}
+
+fn is_zero(n: &u32) -> bool {
+    *n == 0
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

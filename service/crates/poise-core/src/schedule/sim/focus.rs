@@ -301,11 +301,13 @@ fn replay_a_busy_program_keeps_its_cores_while_the_foreground_flickers() {
         .filter(|a| matches!(a, Action::SetCoreSet { .. }))
         .count();
     assert_eq!(core_changes, 1);
-    // 真的离开了（切到别的程序干别的事）：过一会儿不再是重点程序，核心范围放开。
+    // 真的离开了（切到别的程序干别的事）：过一会儿不再是重点程序，核心范围放开；它还在干活，
+    // 不让系统节能限速（Windows 不会因为它没有前台窗口就把它放到小核）。刚用过、还算正在用，不报告。
     sim.foreground = Some(CHAT);
     sim.run_for(60_000);
     assert_eq!(sim.cores_of(RENDER), CoreSet::All);
     assert_eq!(sim.verdicts_of(RENDER).last(), Some(&Verdict::Normal));
+    assert_eq!(sim.state_of(RENDER), Some(Desired::WORK));
 }
 
 /// 日志复盘（0.7.0）：一个在发声、持续干重活的程序（本地语音识别之类），用户在它和别的窗口之间

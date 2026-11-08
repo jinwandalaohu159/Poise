@@ -24,7 +24,7 @@ pub struct BusyRule {
 
 impl BusyRule {
     /// 当前需求下的门槛（处理器、磁盘）；没有需求时为 None（不让路）。
-    fn thresholds(&self, pressure: Pressure) -> Option<(f32, f64)> {
+    pub(crate) fn thresholds(&self, pressure: Pressure) -> Option<(f32, f64)> {
         match pressure {
             Pressure::None => None,
             Pressure::Normal => Some((self.core_pct, self.disk_bytes_per_s)),

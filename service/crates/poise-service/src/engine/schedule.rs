@@ -61,6 +61,8 @@ impl Engine {
             game_mode: self.game_target(),
             on_battery: snapshot.system.on_battery,
             hot: self.headroom.exhausted(),
+            cpu_held: self.clocks.held(),
+            main_core_busy: &self.main_core_busy(),
             user_idle_ms: self.session.current(now).idle_ms,
         });
         self.execute_plan(&plan.actions, snapshot, classes);
@@ -68,6 +70,9 @@ impl Engine {
             self.last_change_at = now;
         }
         self.adjusted.update(self.scheduler.adjusted(), now);
+        let scheduler = &self.scheduler;
+        self.engaged
+            .update(scheduler.engaged_revision(), || scheduler.engaged(), now);
         let domains = self.topology.domains.len();
         for event in decision_events::events(&plan.decisions, snapshot, previous, domains) {
             self.logbook.event(event);
@@ -109,6 +114,21 @@ impl Engine {
         }
     }
 
+    /// 主域各物理核心此刻有多忙（0～100，取它的几个线程里最忙的），按系统优先使用的顺序：调度看留给
+    /// 重点程序的核心是不是挤着（见 `poise_core::schedule::ScheduleInput::main_core_busy`）。
+    fn main_core_busy(&self) -> Vec<f32> {
+        let loads = self.activity.processor_loads();
+        self.main_core_threads
+            .iter()
+            .map(|threads| {
+                threads
+                    .iter()
+                    .filter_map(|&i| loads.get(i).copied())
+                    .fold(0.0f32, f32::max)
+            })
+            .collect()
+    }
+
     /// 上次运行异常退出、没能撤销的调整：把还在运行的那些进程恢复原样（启动后第一轮做一次，
     /// 不管调度是否起作用）。随后的调度会按当前情况重新决定它们该怎样。
     pub(super) fn restore_leftovers(
@@ -116,6 +136,9 @@ impl Engine {
         snapshot: &Snapshot,
         classes: &HashMap<Pid, Classification>,
     ) {
+        if let Some(engaged) = self.engaged.take_loaded() {
+            self.scheduler.restore_engaged(&engaged);
+        }
         let Some(leftovers) = self.adjusted.take_leftovers() else {
             return;
         };
@@ -150,6 +173,8 @@ impl Engine {
                 game_mode: None,
                 on_battery: false,
                 hot: false,
+                cpu_held: false,
+                main_core_busy: &[],
                 user_idle_ms: 0,
             });
             self.execute_plan(&plan.actions, &snapshot, &classes);

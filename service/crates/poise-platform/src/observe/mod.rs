@@ -3,6 +3,7 @@
 
 pub mod cpu_performance;
 pub mod gpu;
+pub mod local_links;
 pub mod process;
 pub mod processors;
 pub mod services;

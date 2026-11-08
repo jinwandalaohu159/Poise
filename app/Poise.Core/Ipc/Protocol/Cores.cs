@@ -35,6 +35,7 @@ public enum Pressure { None, Normal, High }
 
 /// <summary>
 /// 对一个程序的决定：normal 不调整；playing 按游戏调度；focused 重点程序；yielded 完整让路；lowered 只降优先级；
+/// working 用户交给电脑的工作在后台跑着（不当成后台让路，游戏需要大核时才移到小核）；
 /// backseat 移到小核（不降优先级）；aside 有重点程序时没在用、移到小核。
 /// </summary>
-public enum Verdict { Normal, Playing, Focused, Yielded, Lowered, Backseat, Aside }
+public enum Verdict { Normal, Playing, Focused, Yielded, Lowered, Working, Backseat, Aside }

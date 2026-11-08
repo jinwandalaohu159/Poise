@@ -92,9 +92,13 @@ public static class EventText
         Verdict.Yielded when p.Cause == Ipc.Cause.MarkedLow => Loc.Get("log.what.yielded_marked"),
         Verdict.Yielded => Loc.Get("log.what.yielded"),
         Verdict.Lowered => Loc.Get("log.what.lowered"),
+        Verdict.Working when p.Cores.All => Loc.Get("log.what.working"),
+        Verdict.Working when p.Cores.Kept > 0 => Loc.Format("log.what.working_shared", CoreWording.Span(p.Cores, m)),
+        Verdict.Working => Loc.Get("log.what.working_aside"),
         Verdict.Backseat or Verdict.Aside => Loc.Get(m.Hybrid ? "log.what.aside" : "log.what.aside.groups"),
         _ when p.From == Verdict.Playing => Loc.Get("log.what.not_playing"),
         _ when p.From == Verdict.Focused => Loc.Get("log.what.not_focused"),
+        _ when p.From == Verdict.Working => Loc.Get("log.what.not_working"),
         _ => Loc.Get("log.what.restored"),
     };
 

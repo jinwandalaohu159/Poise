@@ -15,6 +15,8 @@ pub(super) struct CpuSetEntry {
     pub logical_index: u8,
     pub core_index: u8,
     pub efficiency_class: u8,
+    /// 调度优先级：同一效率等级里，系统优先使用数值高的核心（睿频最高的"优选核心"）。
+    pub scheduling_class: u8,
 }
 
 /// 系统报告的一块缓存：级别、容量，以及由哪些逻辑处理器共用（处理器组和组内的位掩码）。
@@ -112,14 +114,17 @@ pub(super) fn read_cpu_sets() -> Vec<CpuSetEntry> {
         // SAFETY: 每个条目以 Size 字段给出自身长度，始终在 len 范围内。
         let entry = unsafe { &*(base.add(offset) as *const SYSTEM_CPU_SET_INFORMATION) };
         if entry.Type == CpuSetInformation {
-            // SAFETY: Type 为 CpuSetInformation 时联合体的 CpuSet 成员有效。
+            // SAFETY: Type 为 CpuSetInformation 时联合体的 CpuSet 成员有效；SchedulingClass 与 Reserved
+            // 共用同一个字段，旧系统上为 0。
             let cs = unsafe { entry.Anonymous.CpuSet };
+            let scheduling_class = unsafe { cs.Anonymous2.SchedulingClass };
             out.push(CpuSetEntry {
                 id: cs.Id,
                 group: cs.Group,
                 logical_index: cs.LogicalProcessorIndex,
                 core_index: cs.CoreIndex,
                 efficiency_class: cs.EfficiencyClass,
+                scheduling_class,
             });
         }
         if entry.Size == 0 {

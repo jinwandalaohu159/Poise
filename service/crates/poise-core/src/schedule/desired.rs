@@ -21,8 +21,8 @@ impl Desired {
         resources: ResourcePriority::Default,
     };
 
-    /// 在后台让出一部分性能：低于正常，内存紧张时先回收它的内存、磁盘忙时先满足别人。核心不限、不节能——
-    /// 正在用的程序需要时优先拿到处理器，其余时间空闲的核心照样给它用，后台的工作不白白变慢。
+    /// 在后台让出一部分性能：低于正常，内存紧张时先回收它的内存、磁盘忙时先满足别人。核心不限，节能交给
+    /// Windows（没有前台窗口的程序 Windows 会自动节能，在大小核处理器上因此多半跑在小核）。
     pub const LOWERED: Self = Self {
         priority: Some(PriorityClass::BelowNormal),
         eco: EcoQos::Default,
@@ -48,6 +48,35 @@ impl Desired {
         eco: EcoQos::Default,
         cores: CoreSet::Efficiency,
         resources: ResourcePriority::Default,
+    };
+
+    /// 用户交给电脑去做、在后台跑着的工作（编译、训练、准备数据，见 `trackers::work`），没有重点程序时：
+    /// 不降优先级、不限核心，并且明确不让系统自动节能——Windows 会把没有前台窗口的程序当成后台、放到小核
+    /// 压低频率，明确关掉以后它照样用大核。
+    pub const WORK: Self = Self {
+        priority: None,
+        eco: EcoQos::Off,
+        cores: CoreSet::All,
+        resources: ResourcePriority::Default,
+    };
+
+    /// 同上，有重点程序（前台在干重活、在玩游戏）时：不节能，优先级低于正常、内存与磁盘优先级降低，
+    /// 核心由调度换成重点程序没留下的那些（见 `trackers::share`）——重点程序要处理器时立刻拿到，
+    /// 剩下的算力全给这份工作。
+    pub const WORK_SHARED: Self = Self {
+        priority: Some(PriorityClass::BelowNormal),
+        eco: EcoQos::Off,
+        cores: CoreSet::All,
+        resources: ResourcePriority::Low,
+    };
+
+    /// 同上，游戏需要大核时（游戏本身很忙，或处理器被功耗、温度压着）：移到小核，大核和功耗留给游戏。
+    /// 节能交给 Windows，工作在小核上照样往前跑。
+    pub const WORK_ASIDE: Self = Self {
+        priority: Some(PriorityClass::BelowNormal),
+        eco: EcoQos::Default,
+        cores: CoreSet::Efficiency,
+        resources: ResourcePriority::Low,
     };
 
     /// 用户标记的游戏：在大核上运行，优先级提高一级（高于正常，见 `reconcile::effective_priority`），

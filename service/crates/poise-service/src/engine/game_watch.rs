@@ -106,7 +106,7 @@ impl Engine {
         parts.push(gpu(reading));
         parts.push(format!("模式 {mode:?}"));
         let verdict = if held {
-            "：大核在忙、频率却不到最高的八成，正被功耗或温度压着"
+            "：大核在忙、频率却不到同样多的大核在忙时跑到过的八成，正被功耗或温度压着"
         } else {
             ""
         };
