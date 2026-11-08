@@ -3,6 +3,12 @@
 use super::*;
 
 /// 复盘"玩游戏时前台卡、声音卡"的场景：后台什么都没干，只有游戏、放着歌的浏览器和一堆托盘程序。
+/// 正在玩的游戏原来就是"正常"优先级时调整到的状态：优先级不用动（见 `Desired::PLAYING`）。
+const PLAYING_AS_IS: Desired = Desired {
+    priority: None,
+    ..Desired::PLAYING
+};
+
 #[test]
 fn replay_gaming_with_an_idle_background() {
     const GAME: Pid = 1;
@@ -60,7 +66,7 @@ fn replay_gaming_with_an_idle_background() {
         groups,
         HashSet::from_iter([CoreSet::Domains(0b010), CoreSet::Domains(0b100)])
     );
-    assert_eq!(sim.state_of(GAME), Some(Desired::PLAYING));
+    assert_eq!(sim.state_of(GAME), Some(PLAYING_AS_IS));
     assert!(sim.never_lowered(GAME));
     assert!(sim.only_protected(4) && sim.is_protected(4));
     // 一开始先按重点程序放到大核，确认后按游戏调度；切出去看一眼不算结束游戏，不再有别的记录。
@@ -95,7 +101,7 @@ fn games_switch_the_mode_and_stay_active_when_alt_tabbed() {
     sim.run_for(10 * 60_000);
     assert_eq!(sim.mode(), Mode::Full);
     // 游戏在大核上运行，不提优先级、不被降级；切到后台也保持，不来回调整。
-    assert_eq!(sim.state_of(1), Some(Desired::PLAYING));
+    assert_eq!(sim.state_of(1), Some(PLAYING_AS_IS));
     assert!(sim.never_lowered(1));
     assert!(sim.actions_on(1).contains(&&Action::SetCoreSet {
         pid: 1,

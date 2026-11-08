@@ -75,6 +75,13 @@ impl Engine {
             outcome.effective_mode
         };
         phases.done("硬件模式");
+        self.watch_game(
+            &snapshot,
+            &reading,
+            outcome.game.as_ref(),
+            effective_mode,
+            now,
+        );
         self.view = Some(View {
             snapshot,
             classes,

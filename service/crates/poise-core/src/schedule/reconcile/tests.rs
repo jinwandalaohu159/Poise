@@ -243,3 +243,13 @@ fn yielding_never_raises_a_program_that_was_already_lower() {
             .all(|a| !matches!(a.action, Action::SetPriority { .. }))
     );
 }
+
+#[test]
+fn a_game_that_inherited_a_low_priority_is_raised_to_normal_only() {
+    use PriorityClass::*;
+    // 启动器在后台被降成"低于正常"时拉起的游戏继承了它；原来就正常或更高的不动。
+    assert_eq!(effective_priority(Some(Normal), BelowNormal), Normal);
+    assert_eq!(effective_priority(Some(Normal), Idle), Normal);
+    assert_eq!(effective_priority(Some(Normal), Normal), Normal);
+    assert_eq!(effective_priority(Some(Normal), High), High);
+}

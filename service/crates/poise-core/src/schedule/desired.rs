@@ -59,9 +59,11 @@ impl Desired {
         resources: ResourcePriority::Default,
     };
 
-    /// 自动识别的、正在玩的游戏：在大核上运行，不让系统自动节能限速。
+    /// 自动识别的、正在玩的游戏：在大核上运行，不让系统自动节能限速；优先级至少"正常"——游戏由启动器
+    /// 拉起，启动器当时在后台被降成"低于正常"的话，游戏会继承这个优先级（Windows 的规则），在大小核处理器
+    /// 上还会因此被系统优先放到小核。原来更高的保持不变。
     pub const PLAYING: Self = Self {
-        priority: None,
+        priority: Some(PriorityClass::Normal),
         eco: EcoQos::Off,
         cores: CoreSet::Performance,
         resources: ResourcePriority::Default,

@@ -4,7 +4,8 @@
 //!   [`sampler`] 在引擎锁外采集进程快照，[`cadence`] 决定多久采一轮，[`phases`] 给每轮分段计时
 //! - [`schedule`]：按调度计划调整进程、临时全速、停止时撤销，[`decision_events`] 把调度决定写成日志事件；
 //!   [`adjusted_record`]：记下调整过的进程，异常退出后下次启动时恢复
-//! - [`cores`]：核心与缓存面板（核心域、缓存、负载、程序放在哪里）
+//! - [`cores`]：核心与缓存面板（核心域、缓存、负载、程序放在哪里）；[`game_watch`]：玩游戏时每分钟写一行
+//!   大核、小核的实际频率和显卡，看出帧数上不去时是被功耗、温度压着还是显卡跑满
 //! - 日志与使用记录交给独立的日志系统（`poise_logbook::Logbook`）：[`decision_events`] 把调度决定写成事件，
 //!   [`round_summary`] 把每轮调度的结果整理成记录系统的输入。引擎只管交过去，不等、不写盘
 //! - [`presence`]：托盘代理在线时才起作用，退出时撤销全部影响；[`clients`]：连着的界面和托盘；
@@ -41,6 +42,7 @@ mod cycle;
 mod decision_events;
 mod error;
 mod game_prefs;
+mod game_watch;
 mod growth;
 mod mode;
 mod mode_attempts;
@@ -76,7 +78,7 @@ use poise_core::cleanup::{
     BootBaseline, GrowthConfig, GrowthWatch, KernelPoolConfig, KernelPoolWatch, LeakConfig,
     LeakDetector,
 };
-use poise_core::diagnose::{HeadroomWatch, Health, MetricHistory};
+use poise_core::diagnose::{ClockWatch, HeadroomWatch, Health, MetricHistory};
 use poise_core::model::{Millis, Pid, Snapshot};
 use poise_core::prefs::{Mode, Settings};
 use poise_core::safety::GuardedExecutor;
@@ -137,6 +139,10 @@ pub struct Engine {
     baseline_file: JsonFile<BootBaseline>,
     /// 处理器还有没有散热与功耗的余量（最近一次健康评估的结果）：没有时调度让后台更早让路。
     headroom: HeadroomWatch,
+    /// 大核最高跑到过的频率（看它此刻是不是被压着，见 `game_watch`）。
+    clocks: ClockWatch,
+    /// 正在玩的一局（见 `game_watch`）。
+    game_watch: game_watch::GameWatch,
     auto_mode: AutoMode,
     /// 最近几分钟的整机指标（主页与卡顿诊断的走势图）。
     history: MetricHistory,
@@ -257,6 +263,8 @@ impl Engine {
             growth,
             baseline_file,
             headroom: HeadroomWatch::default(),
+            clocks: ClockWatch::default(),
+            game_watch: game_watch::GameWatch::default(),
             auto_mode: AutoMode::default(),
             history: MetricHistory::default(),
             executor: Arc::new(GuardedExecutor::new(

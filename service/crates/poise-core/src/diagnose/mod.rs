@@ -1,11 +1,13 @@
-//! 诊断：把指标归结成结论：当前状态（health）和卡顿原因（stutter）。
+//! 诊断：把指标归结成结论：当前状态（health）和卡顿原因（stutter）；大核、小核的实际频率（clocks）。
 
+mod clocks;
 mod headroom;
 mod health;
 mod heat;
 mod history;
 mod stutter;
 
+pub use clocks::{ClassClocks, ClockWatch, class_clocks};
 pub use headroom::{Headroom, HeadroomWatch};
 pub use health::{Health, HealthCode, HealthInput, Level, assess};
 pub use heat::{Heat, HeatWatch};

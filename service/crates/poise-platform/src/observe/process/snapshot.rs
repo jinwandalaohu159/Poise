@@ -82,10 +82,14 @@ impl Snapshotter {
         let processors = processors::read_processor_times();
         let mut system = system::read_metrics(&processors);
         steps.done("整机指标");
+        let mut core_mhz = Vec::new();
         if let Some(p) = self.cpu.sample_at(at) {
             system.cpu_mhz_current =
                 (system.cpu_mhz_base as f32 * p.performance_pct / 100.0).round() as u32;
             system.cpu_perf_limit_pct = Some(p.limit_pct);
+            if p.core_mhz.len() == processors.len() {
+                core_mhz = p.core_mhz;
+            }
         }
         steps.done("处理器性能");
         steps.log_if_slow();
@@ -94,6 +98,7 @@ impl Snapshotter {
             processes,
             system,
             processors,
+            core_mhz,
         })
     }
 }

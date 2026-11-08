@@ -165,6 +165,7 @@ impl Sim {
                 ..Default::default()
             },
             processors: Vec::new(),
+            core_mhz: Vec::new(),
         }
     }
 

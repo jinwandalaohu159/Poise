@@ -249,7 +249,8 @@ mod tests {
             Desired::GAME
         );
         assert_eq!(Desired::GAME.priority, Some(PriorityClass::AboveNormal));
-        assert_eq!(Desired::PLAYING.priority, None);
+        // 自动识别的游戏不提优先级，只保证不低于正常（见 `Desired::PLAYING`）。
+        assert_eq!(Desired::PLAYING.priority, Some(PriorityClass::Normal));
         for pref in [Auto, AlwaysFast, Background] {
             for fg in [false, true] {
                 for busy in [false, true] {

@@ -324,11 +324,13 @@ const RAISE_CAP: PriorityClass = PriorityClass::AboveNormal;
 
 /// 实际要设置的优先级：
 /// - 让路：目标比原来低时才降（例如用户自己设为"低"的程序，不会因为"让路"反而被调到"低于正常"）；
-/// - 提速：最多到"高于正常"；原来已经更高（程序或用户自己设的）就保持原样，不会反而被降下来。
+/// - 提速：最多到"高于正常"；原来已经更高（程序或用户自己设的）就保持原样，不会反而被降下来；
+/// - "正常"：原来更低时提到正常（继承来的低优先级），否则保持原样。
 fn effective_priority(desired: Option<PriorityClass>, original: PriorityClass) -> PriorityClass {
     let normal = PriorityClass::Normal.rank();
     match desired {
         Some(p) if p.rank() < normal && p.rank() < original.rank() => p,
+        Some(p) if p.rank() == normal && original.rank() < normal => p,
         Some(p)
             if p.rank() > normal && p.rank() <= RAISE_CAP.rank() && p.rank() > original.rank() =>
         {

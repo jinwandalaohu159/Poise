@@ -194,6 +194,9 @@ pub struct Snapshot {
     pub system: SystemMetrics,
     /// 第 0 个处理器组各逻辑处理器的累计时间（按组内序号）；读不到时为空。
     pub processors: Vec<ProcessorTime>,
+    /// 同样按组内序号，各逻辑处理器运行时的实际频率（MHz，最近一次读到的，几秒一读）：这段时间没运行过的
+    /// 是 0；读不到时为空。
+    pub core_mhz: Vec<u32>,
 }
 
 impl Snapshot {
