@@ -172,6 +172,9 @@ public sealed class CoresAndLogTests
         Assert.Equal("最小处理器状态（等级 1）被其他程序改成 100，已改回 5", rows.Single(r => r.Title.StartsWith("最小")).Title);
         Assert.Equal("关闭快速启动、资源管理器默认打开“此电脑”", rows.Single(r => r.Title == "应用了 2 项系统优化").Detail);
         Assert.Equal(TagTone.Notice, rows.Single(r => r.Title.StartsWith("处理器开始被限速")).Tone);
+        Assert.Single(rows, r => r.Title == "League of Legends：按游戏调度，使用优选的 4 个核心（其余核心分给后台的工作）");
+        var yielding = rows.Single(r => r.Title.StartsWith("Docker Desktop"));
+        Assert.Equal(("Docker Desktop：在后台干活，为游戏让路（用小核、节能、降优先级，功耗留给游戏）", "负载 1.4 核 · 在玩游戏"), (yielding.Title, yielding.Detail));
     }
 
     [Fact]
@@ -181,6 +184,7 @@ public sealed class CoresAndLogTests
         Assert.Equal("主核心组", CoreWording.Span(new CoreSpan(false, true, 0), TwoCcds));
         Assert.Equal("其他核心组", CoreWording.Span(new CoreSpan(false, false, 1), TwoCcds));
         Assert.Equal("所有核心", CoreWording.Span(new CoreSpan(true, true, 1), Hybrid));
+        Assert.Equal("优选的 4 个核心（其余核心分给后台的工作）", CoreWording.Span(new CoreSpan(false, true, 0, Preferred: 4), Hybrid));
         Assert.Equal("小核", CoreWording.SpanOfMask(0b110, Hybrid));
         Assert.Null(CoreWording.SpanOfMask(0, Hybrid));
         Assert.Equal(("512 KB", "1.25 MB", "24 MB"), (CoreWording.CacheSize(512 * 1024), CoreWording.CacheSize(1280 * 1024), CoreWording.CacheSize(24u << 20)));

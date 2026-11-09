@@ -153,6 +153,9 @@ pub struct SystemMetrics {
     pub cpu_mhz_base: u32,
     /// 固件允许的性能上限（百分比）：温度墙、功耗墙限速时低于 100。读不到时为空。
     pub cpu_perf_limit_pct: Option<f32>,
+    /// 整个处理器的平均功耗（瓦，几秒一读）。所有核心共用一份功耗上限：只靠一两个主线程的游戏，帧数取决于
+    /// 主线程的频率，频率取决于这份功耗还剩多少。机器不提供时为空。
+    pub cpu_package_watts: Option<f32>,
     pub uptime_ms: u64,
     /// 用电池供电（一轮里各处都按采样时的这一个值）。
     pub on_battery: bool,

@@ -3,8 +3,10 @@
 
 use super::Scheduler;
 use super::decisions::{Cause, Decision, ProgramState, Verdict};
+use super::policy::WorkRoom;
 use super::program::Program;
 use super::trackers::{FocusEnd, Pressure};
+use crate::action::EcoQos;
 use crate::classify::Classification;
 use crate::fast_hash::HashMap;
 use crate::model::{Millis, Pid};
@@ -34,6 +36,12 @@ impl Scheduler {
                     Verdict::Focused => Some(focus_cause(class, program)),
                     Verdict::Yielded if class.preference == AppPreference::Background => {
                         Some(Cause::MarkedLow)
+                    }
+                    Verdict::Working
+                        if matches!(program.work_room, WorkRoom::Yielded(_))
+                            && desired.eco == EcoQos::On =>
+                    {
+                        Some(Cause::Gaming)
                     }
                     _ => None,
                 };

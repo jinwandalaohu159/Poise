@@ -49,6 +49,9 @@ pub enum CoreSet {
     /// 主域按物理核心切开，前面的留给重点程序，后台的工作用剩下的。两边不共用物理核心——
     /// 超线程的两个线程挤在同一个物理核心上时优先级帮不上忙，两边都变慢。
     Rest(u8),
+    /// 主域里系统优先使用的前 n 个物理核心（连同超线程）：[`CoreSet::Rest`] 的另一半，主域切开时
+    /// 重点程序（包括游戏）用它们，和用其余核心的程序不共用物理核心。
+    Preferred(u8),
 }
 
 impl CoreSet {
@@ -61,17 +64,17 @@ impl CoreSet {
         }
     }
 
-    /// 用主域、并且有限制（重点程序放在大核上，需要时加上几个副域）。
+    /// 用主域、并且有限制（重点程序放在大核上，需要时加上几个副域；主域切开时用优选的那几个）。
     pub fn is_performance(self) -> bool {
         match self {
-            Self::Performance => true,
+            Self::Performance | Self::Preferred(_) => true,
             Self::Domains(m) => m & 1 != 0,
             _ => false,
         }
     }
 
     /// 在有 `domains` 个核心域的处理器上用到哪些域（第 n 位对应第 n 个域）；不限制时是全部。
-    /// [`CoreSet::Rest`] 用到主域的一部分和全部副域，按全部算。
+    /// [`CoreSet::Rest`] 用到主域的一部分和全部副域，按全部算；[`CoreSet::Preferred`] 按主域算。
     pub fn domain_mask(self, domains: usize) -> u16 {
         let all = if domains >= 16 {
             u16::MAX
@@ -80,7 +83,7 @@ impl CoreSet {
         };
         let mask = match self {
             Self::All | Self::Rest(_) => all,
-            Self::Performance => 1,
+            Self::Performance | Self::Preferred(_) => 1,
             Self::Efficiency => all & !1,
             Self::Domains(m) => m,
         } & all;

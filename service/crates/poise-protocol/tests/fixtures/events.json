@@ -250,6 +250,53 @@
       "event": {
         "type": "program",
         "program": {
+          "pid": 7,
+          "name": "League of Legends",
+          "path": "c:\\riot games\\league of legends.exe"
+        },
+        "from": "playing",
+        "to": "playing",
+        "cores": {
+          "all": false,
+          "main": true,
+          "others": 0,
+          "preferred": 4
+        },
+        "load_pct": 150,
+        "disk_mb_s": 0,
+        "cause": null
+      }
+    },
+    {
+      "id": 24,
+      "at_unix_ms": 1800000023000,
+      "category": "schedule",
+      "event": {
+        "type": "program",
+        "program": {
+          "pid": 21,
+          "name": "Docker Desktop",
+          "path": ""
+        },
+        "from": "working",
+        "to": "working",
+        "cores": {
+          "all": false,
+          "main": false,
+          "others": 2
+        },
+        "load_pct": 140,
+        "disk_mb_s": 0,
+        "cause": "gaming"
+      }
+    },
+    {
+      "id": 25,
+      "at_unix_ms": 1800000024000,
+      "category": "schedule",
+      "event": {
+        "type": "program",
+        "program": {
           "pid": 9,
           "name": "Game",
           "path": ""

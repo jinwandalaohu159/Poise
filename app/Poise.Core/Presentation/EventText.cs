@@ -92,6 +92,7 @@ public static class EventText
         Verdict.Yielded when p.Cause == Ipc.Cause.MarkedLow => Loc.Get("log.what.yielded_marked"),
         Verdict.Yielded => Loc.Get("log.what.yielded"),
         Verdict.Lowered => Loc.Get("log.what.lowered"),
+        Verdict.Working when p.Cause == Ipc.Cause.Gaming => Loc.Format("log.what.working_gaming", CoreWording.Span(p.Cores, m)),
         Verdict.Working when p.Cores.All => Loc.Get("log.what.working"),
         Verdict.Working when p.Cores.Kept > 0 => Loc.Format("log.what.working_shared", CoreWording.Span(p.Cores, m)),
         Verdict.Working => Loc.Get("log.what.working_aside"),
@@ -135,6 +136,7 @@ public static class EventText
         Ipc.Cause.LooksLikeGame => "log.cause.looks_like_game",
         Ipc.Cause.LoadDropped => "log.cause.load_dropped",
         Ipc.Cause.LeftForeground => "log.cause.left_foreground",
+        Ipc.Cause.Gaming => "log.cause.gaming",
         _ => "log.cause.exited",
     };
 

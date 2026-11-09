@@ -62,6 +62,9 @@ pub struct CoreSpan {
     /// 主域里留给重点程序、它不用的物理核心数（系统优先使用的那几个，见 `CoreSet::Rest`）；0 表示没有切开。
     #[serde(default, skip_serializing_if = "is_zero")]
     pub kept: u32,
+    /// 主域切开时只用系统优先使用的前几个物理核心（重点程序、游戏，见 `CoreSet::Preferred`）；0 表示没有切开。
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub preferred: u32,
 }
 
 fn is_zero(n: &u32) -> bool {

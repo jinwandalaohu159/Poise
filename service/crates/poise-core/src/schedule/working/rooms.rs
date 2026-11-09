@@ -4,13 +4,17 @@
 //! - 用户此刻直接在用的别的程序在忙：大小核照用，优先级让一步（刚用过的、在后台干活的不算——
 //!   工作和工作之间不分先后）；
 //! - 有重点程序：大核按物理核心切开，重点程序实际要几个就留几个（看结果调整，见 `trackers::share`），
-//!   它用其余核心；副域一样快（多 CCD）时整个主域留给重点程序，它用别的域；重点程序要整个大核时只用小核；
-//! - 有重点程序时处理器发热、或正被功耗或温度压着：余量都给重点程序，它只用小核。
+//!   它用其余核心，重点程序（包括游戏）也只用留给它的那几个——两边都限制才真的不共用物理核心，
+//!   只限制一边时重点程序的线程照样会被系统放到它那边（见 [`confine_focus`]）；副域一样快（多 CCD）时整个主域留给重点程序，它用别的域；重点程序要整个大核时只用小核；
+//! - 有重点程序时处理器发热、或正被功耗或温度压着：余量都给重点程序，它只用小核；
+//! - 重点程序里有正在玩的游戏：只用小核并节能（游戏要的是频率，频率取决于共用的功耗，见
+//!   `policy::WorkRoom::Yielded`）。
 
-use super::super::policy::WorkRoom;
+use super::super::policy::{self, WorkRoom};
 use super::super::program::Program;
 use super::super::{ScheduleInput, Scheduler};
 use crate::action::CoreSet;
+use crate::classify::Classification;
 use crate::fast_hash::HashMap;
 use crate::model::{Millis, Pid, ProcessKey};
 
@@ -27,6 +31,10 @@ pub(in super::super) struct WorkRooms {
     away_equal: bool,
     /// 余量都给重点程序（见 [`Scheduler::squeezed`]）。
     squeezed: bool,
+    /// 重点程序里有已确认正在玩的游戏（还在等待确认的不算：让别的程序让路要等确认）。
+    gaming: bool,
+    /// 有副域（大小核的小核、多 CCD 的别的 CCD）。
+    has_away: bool,
     /// 这一轮的重点程序（和自己分享不算）。
     focused: Vec<ProcessKey>,
     /// 用户此刻直接在用、又在忙的程序（和自己抢不算）。
@@ -36,12 +44,19 @@ pub(in super::super) struct WorkRooms {
 impl WorkRooms {
     /// `in_use`：用户正在用它（前台、刚用过，见 `policy::in_use`，发声不算）——它就是被等着的那个，全用。
     /// 在发声的照样按竞争分（只让核心不让优先级）；玩游戏时刚用过不算正在用，不该占着游戏的大核。
+    /// （用户设过类别、临时全速的程序不会被判断为在干活，照它们自己的规则，见 `working`。）
     pub(in super::super) fn of(&self, root: ProcessKey, in_use: bool) -> WorkRoom {
         if in_use {
             return WorkRoom::Free;
         }
         let others = |list: &[ProcessKey]| list.iter().any(|r| *r != root);
+        // 自己也是重点程序时不为游戏让开：用户此刻要它和游戏一起快。
+        let yields_to_game = self.gaming && !self.focused.contains(&root);
         match self.kept {
+            Some(_) if yields_to_game && self.has_away => WorkRoom::Yielded(CoreSet::Efficiency),
+            Some(kept) if yields_to_game => {
+                WorkRoom::Yielded(CoreSet::Rest(kept.min(u32::from(u8::MAX)) as u8))
+            }
             Some(_) if self.squeezed => WorkRoom::Aside,
             Some(kept) if others(&self.focused) && kept >= self.main_cores => WorkRoom::Aside,
             Some(_) if others(&self.focused) && self.away_equal => {
@@ -93,6 +108,8 @@ impl Scheduler {
             main_cores,
             away_equal: self.cfg.cores.away_equal(),
             squeezed: self.squeezed(input, kept.is_some()),
+            gaming: leading.iter().any(|p| p.active_game),
+            has_away: self.cfg.cores.domains() > 1,
             focused: leading.iter().map(|p| p.root).collect(),
             busy_in_use,
         }
@@ -137,5 +154,39 @@ impl Scheduler {
             self.work.squeezed_until = now + SQUEEZE_HOLD_MS;
         }
         now < self.work.squeezed_until
+    }
+
+    /// 主域切开了（有在干活的程序用着 `CoreSet::Rest`）：重点程序只用留给它的优选核心（`CoreSet::Preferred`），
+    /// 和那些程序不共用物理核心。只限制干活的一边不够——重点程序能用整个主域时，系统照样把它的线程放到
+    /// 那几个核心上，和干活的程序挤在同一个物理核心的两个超线程上，优先级帮不上忙。留几个由
+    /// `trackers::share` 按重点程序实际用了多少、留出的核心挤不挤来定（挤了立即多留），不会把它关在不够的核心里。
+    /// 没有切开时（包括处理器切不开、那些程序实际没被限制时）重点程序照旧用整个主域（或按需要加上副域）。
+    ///
+    /// 看那些程序最后实际用的核心，不只看分到的位置：用电池时干活的程序不限核心，切开就不成立。
+    pub(in super::super) fn confine_focus(
+        &self,
+        classes: &HashMap<Pid, Classification>,
+        programs: &mut HashMap<Pid, Program>,
+    ) {
+        let layout = self.cfg.cores;
+        let split = programs.values().find_map(|p| {
+            let class = classes.get(&p.class_pid)?;
+            match policy::decide(&p.view(class, false)).0.cores {
+                CoreSet::Rest(kept) if p.working && layout.allows(CoreSet::Rest(kept)) => {
+                    Some(kept)
+                }
+                _ => None,
+            }
+        });
+        let Some(kept) = split else {
+            return;
+        };
+        // 只限制只用主域的重点程序（只有一个域时就是不限制的那些）；已经加上副域的要的比主域多，不切。
+        let domains = usize::from(layout.domains());
+        for p in programs.values_mut() {
+            if p.focus.is_some_and(|c| c.domain_mask(domains) == 1) {
+                p.focus = Some(CoreSet::Preferred(kept));
+            }
+        }
     }
 }

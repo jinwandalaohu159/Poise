@@ -146,6 +146,7 @@ impl Scheduler {
                 self.cfg.busy_with_audio,
             );
         }
+        self.confine_focus(classes, &mut programs);
         self.place(classes, &mut programs);
         self.remember_wanted(classes, &programs);
         programs

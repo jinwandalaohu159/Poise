@@ -148,6 +148,12 @@ fn load_text(load_pct: u32, disk_mb_s: u32) -> String {
 }
 
 fn what_text(from: Verdict, to: Verdict, cores: CoreSpan, cause: Option<Cause>) -> String {
+    if to == Verdict::Working && cause == Some(Cause::Gaming) {
+        return format!(
+            "在后台干活，为游戏让路（{}、节能、降优先级，功耗留给游戏）",
+            cores_text(cores)
+        );
+    }
     let what = match to {
         Verdict::Playing => format!("按游戏调度，{}", cores_text(cores)),
         Verdict::Focused => format!("成为重点程序，{}", cores_text(cores)),
@@ -182,6 +188,9 @@ fn cores_text(cores: CoreSpan) -> String {
         CoreSpan { kept, .. } if kept > 0 => {
             format!("优选的 {kept} 个大核留给重点程序，用其余核心")
         }
+        CoreSpan { preferred, .. } if preferred > 0 => {
+            format!("用优选的 {preferred} 个大核（其余核心分给后台的工作）")
+        }
         CoreSpan {
             main: true,
             others: 0,
@@ -209,6 +218,7 @@ fn cause_text(cause: Cause) -> &'static str {
         Cause::LooksLikeGame => "像游戏，等待确认",
         Cause::LoadDropped => "负载降下来了",
         Cause::LeftForeground => "离开前台",
+        Cause::Gaming => "在玩游戏",
     }
 }
 
@@ -229,4 +239,58 @@ fn setting_text(setting: Option<PowerSettingKind>, class: Option<u8>) -> String 
 
 fn value_text(v: Option<u32>) -> String {
     v.map_or_else(|| "（不存在）".into(), |n| n.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn span(all: bool, main: bool, others: u32, kept: u32) -> CoreSpan {
+        CoreSpan {
+            all,
+            main,
+            others,
+            kept,
+            preferred: 0,
+        }
+    }
+
+    #[test]
+    fn work_yielding_to_a_game_says_it_saves_power_for_the_game() {
+        let aside = span(false, false, 2, 0);
+        assert_eq!(
+            what_text(
+                Verdict::Working,
+                Verdict::Working,
+                aside,
+                Some(Cause::Gaming)
+            ),
+            "在后台干活，为游戏让路（用小核、节能、降优先级，功耗留给游戏）"
+        );
+        // 处理器切不开、没有小核：核心不限，只节能、降优先级。
+        assert_eq!(
+            what_text(
+                Verdict::Working,
+                Verdict::Working,
+                span(true, true, 0, 0),
+                Some(Cause::Gaming)
+            ),
+            "在后台干活，为游戏让路（用所有核心、节能、降优先级，功耗留给游戏）"
+        );
+        let split = span(false, true, 0, 4);
+        assert_eq!(
+            what_text(
+                Verdict::Normal,
+                Verdict::Working,
+                split,
+                Some(Cause::Gaming)
+            ),
+            "在后台干活，为游戏让路（优选的 4 个大核留给重点程序，用其余核心、节能、降优先级，功耗留给游戏）"
+        );
+        // 没在玩游戏时照旧：分处理器不节能。
+        assert_eq!(
+            what_text(Verdict::Normal, Verdict::Working, split, None),
+            "在后台干活，和重点程序分处理器（优选的 4 个大核留给重点程序，用其余核心、不让系统节能限速）"
+        );
+    }
 }

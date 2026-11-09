@@ -94,6 +94,11 @@ impl<T: Clone + PartialEq> Originals<T> {
         }
     }
 
+    /// 调整过这个进程（有记录）。
+    pub fn knows(&self, key: ProcessKey) -> bool {
+        self.lock().by_key.contains_key(&key)
+    }
+
     /// 进程已经退出：丢掉记录。
     pub fn forget(&self, key: ProcessKey) {
         self.lock().by_key.remove(&key);

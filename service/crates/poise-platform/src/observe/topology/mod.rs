@@ -175,8 +175,10 @@ impl CpuTopology {
 
     /// 某个核心集合对应的 CPU Set ID；None 表示不限制（包括覆盖了全部核心域）。
     pub fn ids_for(&self, set: CoreSet) -> Option<Vec<u32>> {
-        if let CoreSet::Rest(kept) = set {
-            return self.ids_except_preferred(kept);
+        match set {
+            CoreSet::Rest(kept) => return self.ids_except_preferred(kept),
+            CoreSet::Preferred(kept) => return self.ids_of_preferred(kept),
+            _ => {}
         }
         if !self.partitioned() {
             return None;
@@ -198,6 +200,24 @@ impl CpuTopology {
 
     /// 除了主域里系统优先使用的前 `kept` 个物理核心（两个超线程一起）之外的全部核心（见 [`CoreSet::Rest`]）。
     fn ids_except_preferred(&self, kept: u8) -> Option<Vec<u32>> {
+        let (_, main_rest) = self.split_main(kept)?;
+        let others = self.domains[1..].iter().flat_map(|d| d.ids.iter().copied());
+        // 什么都不剩时不限制（空的核心集合在系统里表示"不限制"，这里明确写出来）。
+        let rest: Vec<u32> = main_rest.into_iter().chain(others).collect();
+        (!rest.is_empty()).then_some(rest)
+    }
+
+    /// 主域里系统优先使用的前 `kept` 个物理核心（两个超线程一起，见 [`CoreSet::Preferred`]）。切不开
+    /// （留的不少于主域的全部核心）时按整个主域：只有一个域时不限制。
+    fn ids_of_preferred(&self, kept: u8) -> Option<Vec<u32>> {
+        match self.split_main(kept) {
+            Some((preferred, rest)) if !preferred.is_empty() && !rest.is_empty() => Some(preferred),
+            _ => self.ids_for(CoreSet::Performance),
+        }
+    }
+
+    /// 主域按物理核心切开：（系统优先使用的前 `kept` 个物理核心，其余）的 CPU Set ID。
+    fn split_main(&self, kept: u8) -> Option<(Vec<u32>, Vec<u32>)> {
         let main = self.domains.first()?;
         if kept == 0 {
             return None;
@@ -208,16 +228,13 @@ impl CpuTopology {
             .take(usize::from(kept))
             .copied()
             .collect();
-        let main_ids = main
+        let (preferred, rest): (Vec<_>, Vec<_>) = main
             .ids
             .iter()
             .zip(&main.processors)
-            .filter(|(_, p)| !kept.contains(&(p.group, p.core)))
-            .map(|(id, _)| *id);
-        let others = self.domains[1..].iter().flat_map(|d| d.ids.iter().copied());
-        // 什么都不剩时不限制（空的核心集合在系统里表示"不限制"，这里明确写出来）。
-        let rest: Vec<u32> = main_ids.chain(others).collect();
-        (!rest.is_empty()).then_some(rest)
+            .partition(|(_, p)| kept.contains(&(p.group, p.core)));
+        let ids = |v: Vec<(&u32, _)>| v.into_iter().map(|(id, _)| *id).collect();
+        Some((ids(preferred), ids(rest)))
     }
 }
 

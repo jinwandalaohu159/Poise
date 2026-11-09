@@ -150,7 +150,7 @@ impl CoreLayout {
             CoreSet::Efficiency => self.can_move_away(),
             CoreSet::Domains(m) if set.is_performance() => self.partitioned() && valid(m),
             CoreSet::Domains(m) => self.can_move_away() && valid(m),
-            CoreSet::Rest(kept) => self.can_split(u32::from(kept)),
+            CoreSet::Rest(kept) | CoreSet::Preferred(kept) => self.can_split(u32::from(kept)),
         }
     }
 

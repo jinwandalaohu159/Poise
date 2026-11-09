@@ -16,10 +16,10 @@ public sealed record ProgramRef(uint Pid, string Name, string Path);
 
 /// <summary>程序用到的核心范围：All 不限制；Main 用主域（大核）；Others 用了几个其余的核心域。</summary>
 /// <remarks>Kept：主域里留给重点程序、它不用的物理核心数（系统优先使用的那几个）；0 表示没有切开。</remarks>
-public sealed record CoreSpan(bool All, bool Main, uint Others, uint Kept = 0);
+public sealed record CoreSpan(bool All, bool Main, uint Others, uint Kept = 0, uint Preferred = 0);
 
 /// <summary>程序不（再）让路、或者恢复的原因。</summary>
-public enum Cause { Foreground, RecentlyUsed, SelfElevated, MarkedLow, Audio, Boosted, Marked, NoDemand, LessDemand, Exited, LooksLikeGame, LoadDropped, LeftForeground }
+public enum Cause { Foreground, RecentlyUsed, SelfElevated, MarkedLow, Audio, Boosted, Marked, NoDemand, LessDemand, Exited, LooksLikeGame, LoadDropped, LeftForeground, Gaming }
 
 /// <summary>对处理器的需求从哪来：有重点程序、处理器没有余量、正在用的程序在忙、用电池。</summary>
 public enum DemandReason { Focus, Heat, InUse, Battery }

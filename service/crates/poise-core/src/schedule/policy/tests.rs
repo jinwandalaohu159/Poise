@@ -71,13 +71,32 @@ fn work_left_running_in_the_background_is_not_treated_as_background() {
         }
     );
     assert_eq!(Desired::WORK_SHARED.eco, EcoQos::Off);
-    // 游戏需要大核：移到小核。
+    // 重点程序要整个大核：移到小核。
     let squeezed = ProcessView {
-        gaming: true,
         work_room: WorkRoom::Aside,
         ..shared
     };
     assert_eq!(decide_state(&squeezed), Desired::WORK_ASIDE);
+    // 在玩游戏：移到小核并节能，功耗留给游戏；在发声、自己提了优先级的只让核心。
+    let gaming = ProcessView {
+        gaming: true,
+        work_room: WorkRoom::Yielded(CoreSet::Efficiency),
+        ..shared
+    };
+    assert_eq!(decide(&gaming), (Desired::WORK_YIELDED, Verdict::Working));
+    assert_eq!(Desired::WORK_YIELDED.eco, EcoQos::On);
+    let streaming = ProcessView {
+        self_elevated: true,
+        ..gaming
+    };
+    assert_eq!(
+        decide_state(&streaming),
+        Desired {
+            priority: None,
+            eco: EcoQos::Off,
+            ..Desired::WORK_YIELDED
+        }
+    );
     let battery = ProcessView {
         on_battery: true,
         ..work

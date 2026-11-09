@@ -87,6 +87,11 @@ fn the_rest_leaves_out_the_preferred_big_cores_with_both_threads() {
     );
     assert_eq!(t.ids_for(CoreSet::Rest(2)), Some((4..12).collect()));
     assert_eq!(t.ids_for(CoreSet::Rest(0)), None);
+    // 另一半：重点程序用优选的那个物理核心，两个超线程一起，和其余核心不重叠。
+    assert_eq!(t.ids_for(CoreSet::Preferred(1)), Some(vec![2, 3]));
+    // 切不开（留下整个主域）：按整个主域。
+    assert_eq!(t.ids_for(CoreSet::Preferred(2)), Some(vec![0, 1, 2, 3]));
+    assert_eq!(t.ids_for(CoreSet::Preferred(0)), Some(vec![0, 1, 2, 3]));
 }
 
 #[test]

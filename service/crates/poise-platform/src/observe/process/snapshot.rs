@@ -90,6 +90,7 @@ impl Snapshotter {
             system.cpu_mhz_current =
                 (system.cpu_mhz_base as f32 * p.performance_pct / 100.0).round() as u32;
             system.cpu_perf_limit_pct = Some(p.limit_pct);
+            system.cpu_package_watts = p.package_watts;
             if p.core_mhz.len() == processors.len() {
                 core_mhz = p.core_mhz;
             }

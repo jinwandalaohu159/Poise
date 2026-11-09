@@ -2,7 +2,7 @@
 //! 只在有重点程序时才交（以及重点程序刚结束的那一轮，让记录系统收尾）：平时不去叫醒日志线程。
 
 use poise_core::prefs::Mode;
-use poise_core::schedule::Verdict;
+use poise_core::schedule::{Cause, Verdict};
 use poise_logbook::{FocusProgram, Round};
 
 use super::{Engine, unix_now_ms};
@@ -51,7 +51,11 @@ impl Engine {
                         });
                     }
                     Verdict::Aside | Verdict::Backseat => round.moved_aside += 1,
-                    // 在后台干活的程序给游戏让出大核时也算挪开了；和重点程序分享处理器的不算让路。
+                    // 在后台干活的程序为游戏让路（移开并节能、降优先级）算让路；只给重点程序让出大核算挪开了；
+                    // 和重点程序分享处理器的不算让路。
+                    Verdict::Working if state.cause == Some(Cause::Gaming) => {
+                        round.yielded.push(*key)
+                    }
                     Verdict::Working if state.cores.is_efficiency() => round.moved_aside += 1,
                     Verdict::Yielded | Verdict::Lowered => round.yielded.push(*key),
                     Verdict::Working | Verdict::Normal => {}

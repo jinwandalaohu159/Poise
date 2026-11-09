@@ -1,6 +1,7 @@
 //! 几种程序一起用（游戏、编译、容器、浏览器、通话、录像），在几种处理器上（大小核、多 CCD、只有一块缓存、
 //! 大核很少的低压处理器）：规则对每个程序都一样，检查结果在每种处理器上都合理——
-//! 游戏和正在用的从不降级；用户的工作从不节能、从不被挤到小核以外它不需要去的地方，也不占着游戏的大核；
+//! 游戏和正在用的从不降级；用户的工作在没有游戏时从不节能、从不被挤到小核以外它不需要去的地方，也不占着
+//! 重点程序的大核；玩游戏时它让开游戏的核心并节能（功耗留给游戏）；
 //! 在发声、自己调高优先级的从不降优先级；闲着的不被反复调整。
 //!
 //! 程序先由用户打开（在前台待过），之后才忙起来——和真实使用一样；一直没被用户碰过、自己在后台忙的
@@ -61,7 +62,8 @@ fn off_the_games_cores(cores: CoreSet) -> bool {
     !matches!(cores, CoreSet::All | CoreSet::Performance) && !cores.is_performance()
 }
 
-/// 玩游戏，后台开着容器（用户打开过 Docker）、编辑器和浏览器闲着。
+/// 玩游戏，后台开着容器（用户打开过 Docker）、编辑器和浏览器闲着：容器在干活，让开游戏的核心并节能——
+/// 游戏要的是频率，频率取决于共用的功耗。
 #[test]
 fn a_game_with_containers_and_idle_apps_on_every_kind_of_processor() {
     const GAME: Pid = 1;
@@ -97,8 +99,9 @@ fn a_game_with_containers_and_idle_apps_on_every_kind_of_processor() {
             "{name}：{:?}",
             sim.actions_on(GAME)
         );
-        assert!(
-            never_throttled(&sim, BACKEND),
+        assert_eq!(
+            sim.state_of(BACKEND).map(|d| d.eco),
+            Some(EcoQos::On),
             "{name}：{:?}",
             sim.actions_on(BACKEND)
         );
@@ -107,13 +110,15 @@ fn a_game_with_containers_and_idle_apps_on_every_kind_of_processor() {
             assert!(off_the_games_cores(backend), "{name}：容器用着 {backend:?}");
         }
         match name {
-            // 大小核、单缓存：大核按物理核心切开。
-            "大小核" | "单缓存" => {
-                assert!(matches!(backend, CoreSet::Rest(_)), "{name}：{backend:?}")
+            // 只有一个域：按物理核心切开，游戏留着优选的那些。
+            "单缓存" => {
+                let CoreSet::Rest(kept) = backend else {
+                    panic!("{name}：{backend:?}");
+                };
+                // 游戏只用留给它的那几个物理核心，和容器不重叠。
+                assert_eq!(sim.cores_of(GAME), CoreSet::Preferred(kept), "{name}");
             }
-            // 双 CCD：游戏留着整个 CCD，容器用另一个，不抢缓存。
-            "双 CCD" => assert!(backend.is_efficiency(), "{name}：{backend:?}"),
-            // 大核只有两个：都给游戏，容器用小核。
+            // 大小核、大核很少：容器用小核；双 CCD：游戏留着整个 CCD，容器用另一个，不抢缓存。
             _ => assert!(backend.is_efficiency(), "{name}：{backend:?}"),
         }
         // 闲着的程序：能让到副域就让，只调整一次。

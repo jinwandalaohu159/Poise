@@ -60,7 +60,7 @@ impl Desired {
         resources: ResourcePriority::Default,
     };
 
-    /// 同上，有重点程序（前台在干重活、在玩游戏）时：不节能，优先级低于正常、内存与磁盘优先级降低，
+    /// 同上，有重点程序（前台在干重活）时：不节能，优先级低于正常、内存与磁盘优先级降低，
     /// 核心由调度换成重点程序没留下的那些（见 `trackers::share`）——重点程序要处理器时立刻拿到，
     /// 剩下的算力全给这份工作。
     pub const WORK_SHARED: Self = Self {
@@ -70,11 +70,20 @@ impl Desired {
         resources: ResourcePriority::Low,
     };
 
-    /// 同上，游戏需要大核时（游戏本身很忙，或处理器被功耗、温度压着）：移到小核，大核和功耗留给游戏。
-    /// 节能交给 Windows，工作在小核上照样往前跑。
+    /// 同上，重点程序要整个大核时（它本身很忙，或处理器发热、被功耗或温度压着）：移到小核，大核和功耗
+    /// 留给重点程序。节能交给 Windows，工作在小核上照样往前跑。
     pub const WORK_ASIDE: Self = Self {
         priority: Some(PriorityClass::BelowNormal),
         eco: EcoQos::Default,
+        cores: CoreSet::Efficiency,
+        resources: ResourcePriority::Low,
+    };
+
+    /// 同上，玩游戏时（见 `policy::WorkRoom::Yielded`）：移到小核并节能，功耗留给游戏。工作在小核上
+    /// 以能效优先的方式照样往前跑，游戏结束后回到上面几种状态。
+    pub const WORK_YIELDED: Self = Self {
+        priority: Some(PriorityClass::BelowNormal),
+        eco: EcoQos::On,
         cores: CoreSet::Efficiency,
         resources: ResourcePriority::Low,
     };

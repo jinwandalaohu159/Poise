@@ -55,13 +55,26 @@ pub(super) fn program_ref<'a>(
 
 /// 核心范围的说法：第 0 个核心域是主域（大核），其余是按缓存分的组。
 pub(super) fn core_span(cores: CoreSet, domains: usize) -> CoreSpan {
-    if let CoreSet::Rest(kept) = cores {
-        return CoreSpan {
-            all: false,
-            main: true,
-            others: domains.saturating_sub(1) as u32,
-            kept: u32::from(kept),
-        };
+    match cores {
+        CoreSet::Rest(kept) => {
+            return CoreSpan {
+                all: false,
+                main: true,
+                others: domains.saturating_sub(1) as u32,
+                kept: u32::from(kept),
+                preferred: 0,
+            };
+        }
+        CoreSet::Preferred(kept) => {
+            return CoreSpan {
+                all: false,
+                main: true,
+                others: 0,
+                kept: 0,
+                preferred: u32::from(kept),
+            };
+        }
+        _ => {}
     }
     let mask = cores.domain_mask(domains);
     let all = CoreSet::All.domain_mask(domains);
@@ -70,6 +83,7 @@ pub(super) fn core_span(cores: CoreSet, domains: usize) -> CoreSpan {
         main: mask & 1 != 0,
         others: (mask & !1).count_ones(),
         kept: 0,
+        preferred: 0,
     }
 }
 
@@ -116,7 +130,8 @@ mod tests {
                 all: false,
                 main: true,
                 others: 1,
-                kept: 0
+                kept: 0,
+                preferred: 0,
             }
         );
         assert!(!span(CoreSet::Efficiency).main);
@@ -127,7 +142,19 @@ mod tests {
                 all: false,
                 main: true,
                 others: 2,
-                kept: 4
+                kept: 4,
+                preferred: 0,
+            }
+        );
+        // 另一半：重点程序只用优选的 4 个大核。
+        assert_eq!(
+            span(CoreSet::Preferred(4)),
+            CoreSpan {
+                all: false,
+                main: true,
+                others: 0,
+                kept: 0,
+                preferred: 4,
             }
         );
         // 只有一个域的处理器：怎样都是所有核心。

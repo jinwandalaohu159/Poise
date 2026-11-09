@@ -61,6 +61,8 @@ pub enum Cause {
     LoadDropped,
     /// 重点程序离开前台太久。
     LeftForeground,
+    /// 在玩游戏：后台的工作让开游戏的核心并节能，功耗留给游戏（见 `policy::WorkRoom::Yielded`）。
+    Gaming,
 }
 
 /// 一个程序此刻的决定、核心范围与负载（单核百分比、磁盘读写 MB/s），以及不让路时的原因。
@@ -96,10 +98,34 @@ pub enum Decision {
 #[derive(Debug, Default)]
 pub struct DecisionLog {
     pressure: Pressure,
-    programs: HashMap<ProcessKey, (Verdict, CoreSet)>,
+    programs: HashMap<ProcessKey, Seen>,
     /// 这一轮之前不在了的程序：最后的决定，以及从什么时候起不在。
-    gone: HashMap<ProcessKey, (Verdict, CoreSet, Millis)>,
+    gone: HashMap<ProcessKey, (Seen, Millis)>,
     aside: usize,
+}
+
+/// 上一轮报告时一个程序的决定（和这一轮比较）。
+#[derive(Debug, Clone, Copy)]
+struct Seen {
+    verdict: Verdict,
+    cores: CoreSet,
+    cause: Option<Cause>,
+}
+
+impl Seen {
+    const NORMAL: Self = Self {
+        verdict: Verdict::Normal,
+        cores: CoreSet::All,
+        cause: None,
+    };
+
+    fn of(state: &ProgramState) -> Self {
+        Self {
+            verdict: state.verdict,
+            cores: state.cores,
+            cause: state.cause,
+        }
+    }
 }
 
 impl DecisionLog {
@@ -119,24 +145,33 @@ impl DecisionLog {
             changes.push(Decision::Pressure(pressure, reason));
         }
         self.gone
-            .retain(|_, (_, _, since)| now.saturating_sub(*since) < Self::FORGET_AFTER_MS);
+            .retain(|_, (_, since)| now.saturating_sub(*since) < Self::FORGET_AFTER_MS);
         let mut current =
             HashMap::with_capacity_and_hasher(self.programs.len(), Default::default());
         let mut aside = 0;
         for (root, state) in programs {
-            let (from, cores) = self
+            let seen = self
                 .programs
                 .remove(&root)
-                .or_else(|| self.gone.remove(&root).map(|(v, c, _)| (v, c)))
-                .unwrap_or((Verdict::Normal, CoreSet::All));
+                .or_else(|| self.gone.remove(&root).map(|(seen, _)| seen))
+                .unwrap_or(Seen::NORMAL);
             aside += usize::from(state.verdict == Verdict::Aside);
-            if reportable(from, cores, &state) {
-                changes.push(Decision::Program { root, from, state });
+            if reportable(seen, &state) {
+                changes.push(Decision::Program {
+                    root,
+                    from: seen.verdict,
+                    state,
+                });
             }
-            current.insert(root, (state.verdict, state.cores));
+            current.insert(root, Seen::of(&state));
         }
         // 剩下的是这一轮不在了的程序。
-        for (root, (from, cores)) in std::mem::replace(&mut self.programs, current) {
+        for (root, seen) in std::mem::replace(&mut self.programs, current) {
+            let Seen {
+                verdict: from,
+                cores,
+                ..
+            } = seen;
             if from == Verdict::Playing {
                 changes.push(Decision::Program {
                     root,
@@ -150,7 +185,7 @@ impl DecisionLog {
                     },
                 });
             } else {
-                self.gone.insert(root, (from, cores, now));
+                self.gone.insert(root, (seen, now));
             }
         }
         if (aside == 0) != (self.aside == 0) {
@@ -161,13 +196,33 @@ impl DecisionLog {
     }
 }
 
-/// 要不要记录这次变化：决定变了（移到小核、从小核移回不逐个记录），或者重点程序占用的核心变了。
-fn reportable(from: Verdict, cores: CoreSet, state: &ProgramState) -> bool {
+/// 要不要记录这次变化：决定变了（移到小核、从小核移回不逐个记录），重点程序占用的核心变了，或者在干活的
+/// 程序换了一种用法（不限、和重点程序切开、移开，是否为游戏让路）——留几个核心的增减不逐次记录。
+fn reportable(seen: Seen, state: &ProgramState) -> bool {
     let quiet = |v| matches!(v, Verdict::Normal | Verdict::Aside);
+    let from = seen.verdict;
     if from != state.verdict {
         return !(quiet(from) && quiet(state.verdict));
     }
-    matches!(from, Verdict::Playing | Verdict::Focused) && cores != state.cores
+    match from {
+        Verdict::Playing | Verdict::Focused => seen.cores != state.cores,
+        Verdict::Working => {
+            let gaming = |c: Option<Cause>| c == Some(Cause::Gaming);
+            work_kind(seen.cores) != work_kind(state.cores)
+                || gaming(seen.cause) != gaming(state.cause)
+        }
+        _ => false,
+    }
+}
+
+/// 在干活的程序用核心的方式：不限、和重点程序切开、移开（分到哪组小核不算变化）。
+fn work_kind(cores: CoreSet) -> u8 {
+    match cores {
+        CoreSet::All => 0,
+        CoreSet::Rest(_) => 1,
+        c if c.is_efficiency() => 2,
+        _ => 3,
+    }
 }
 
 #[cfg(test)]
@@ -275,6 +330,38 @@ mod tests {
             0,
         );
         assert_eq!(changes, vec![Decision::Aside(0)]);
+    }
+
+    #[test]
+    fn work_changing_how_it_uses_the_cores_is_reported_but_not_every_share_step() {
+        let mut log = DecisionLog::default();
+        let work = |cores, cause| ProgramState {
+            cores,
+            cause,
+            ..state(Verdict::Working, 800)
+        };
+        let reported = |log: &mut DecisionLog, s: ProgramState, now| {
+            !log.update(Pressure::Normal, None, [(KEY, s)], now)
+                .is_empty()
+        };
+        assert!(reported(&mut log, work(CoreSet::All, None), 0));
+        // 和重点程序切开：记一次；留几个核心的增减不逐次记。
+        assert!(reported(&mut log, work(CoreSet::Rest(4), None), 2_000));
+        assert!(!reported(&mut log, work(CoreSet::Rest(5), None), 4_000));
+        // 开了一局游戏：判定还是"在干活"，换成为游戏让路要记下来；分到哪组小核不算变化。
+        let gaming = Some(Cause::Gaming);
+        assert!(reported(
+            &mut log,
+            work(CoreSet::Domains(0b010), gaming),
+            6_000
+        ));
+        assert!(!reported(
+            &mut log,
+            work(CoreSet::Domains(0b100), gaming),
+            8_000
+        ));
+        // 游戏结束，回到不限核心：记一次。
+        assert!(reported(&mut log, work(CoreSet::All, None), 10_000));
     }
 
     #[test]

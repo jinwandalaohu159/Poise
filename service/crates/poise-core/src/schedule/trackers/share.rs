@@ -7,9 +7,13 @@
 //! 不跟着负载的起伏来回搬。重点程序需要整个主域时，后台的工作只用小核。
 //!
 //! 再看结果：留出的那几个核心本身已经很忙（[`ShareRule::crowded_pct`]），说明重点程序在里面挤着——
-//! 不论按负载算出来要几个，都再多留一个，直到不挤为止。
+//! 不论按负载算出来要几个，都再多留一个，直到不挤为止。挤过之后记住"这么重的时候这几个不够"：负载明显
+//! 降下来（见 [`RELIEF_RATIO`]）之前不再收回到挤的那个数——否则一分钟后按负载收回、又挤、又多留，来回改。
 
 use crate::model::Millis;
+
+/// 挤过之后，负载降到挤的时候的这个比例以下才可以收回到挤的那个数以下。
+const RELIEF_RATIO: f32 = 0.75;
 
 /// 怎样决定留几个物理核心。
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -32,6 +36,8 @@ pub struct CoreShare {
     kept: u32,
     /// 需要的比留着的少，从什么时候开始。
     fewer_since: Option<Millis>,
+    /// 挤过：至少留几个，以及挤的时候的负载（负载明显降下来之前不收回到这以下）。
+    crowded_floor: Option<(u32, f32)>,
 }
 
 impl CoreShare {
@@ -50,6 +56,16 @@ impl CoreShare {
         let mut need = (load.max(0.0) / per_core).ceil() as u32 + rule.spare_cores;
         if self.crowded(core_busy, rule) {
             need = need.max(self.kept + 1);
+            let floor = self.crowded_floor.map_or(need, |(f, _)| f.max(need));
+            self.crowded_floor = Some((floor, load));
+        } else if self
+            .crowded_floor
+            .is_some_and(|(_, at)| load < at * RELIEF_RATIO)
+        {
+            self.crowded_floor = None;
+        }
+        if let Some((floor, _)) = self.crowded_floor {
+            need = need.max(floor);
         }
         let need = need.max(rule.min_cores).min(main_cores);
         if need >= self.kept {
@@ -100,10 +116,14 @@ mod tests {
             s.update(150.0, 6, &[90.0, 90.0, 90.0, 90.0, 90.0, 5.0], RULE, 4_000),
             6
         );
-        // 不挤了：持续一分钟后按负载收回。
+        // 不挤了，可负载没变：挤的那个数不够，不收回（收回去又会挤）。
         let calm = [40.0; 6];
         assert_eq!(s.update(150.0, 6, &calm, RULE, 6_000), 6);
-        assert_eq!(s.update(150.0, 6, &calm, RULE, 66_000), 4);
+        assert_eq!(s.update(150.0, 6, &calm, RULE, 66_000), 6);
+        assert_eq!(s.update(150.0, 6, &calm, RULE, 300_000), 6);
+        // 负载明显降下来：持续一分钟后按负载收回。
+        assert_eq!(s.update(100.0, 6, &calm, RULE, 302_000), 6);
+        assert_eq!(s.update(100.0, 6, &calm, RULE, 362_000), 3);
     }
 
     #[test]

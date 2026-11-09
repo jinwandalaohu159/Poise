@@ -130,7 +130,10 @@ impl WinExecutor {
     }
 
     fn set_cores(&self, target: ProcessKey, set: CoreSet) -> Result<ExecOutcome, ExecError> {
-        if !self.topology.partitioned() {
+        // 只有一个核心域的处理器上只有按物理核心切开（`Rest`、`Preferred`）有意义；别的核心范围都等于
+        // 不限制，没调整过的进程不去碰（没有记录时撤销会写"系统默认"，会抹掉程序自己设的核心范围）。
+        let splits = matches!(set, CoreSet::Rest(_) | CoreSet::Preferred(_));
+        if !self.topology.partitioned() && !splits && !self.cores.knows(target) {
             return Ok(ExecOutcome::default());
         }
         let h = Target::open(target, PROCESS_SET_LIMITED_INFORMATION)?;

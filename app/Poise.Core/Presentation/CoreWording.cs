@@ -48,6 +48,10 @@ public static class CoreWording
         {
             return Loc.Format("span.rest", s.Kept);
         }
+        if (s.Preferred > 0)
+        {
+            return Loc.Format("span.preferred", s.Preferred);
+        }
         var prefix = m.Hybrid ? "span.hybrid" : "span.groups";
         if (!s.Main)
         {
